@@ -16,6 +16,12 @@ from typing import Any, Iterable
 
 _FETCH_TOOLS = {"fetch", "fetch_many"}
 
+# Phase fields the summarizer turns into per-tool percentiles. `duration_ms`
+# is kept at the top level (back-compat with v1 of the rollup); the others
+# go under `phase_percentiles`. Only present on envelopes that came from a
+# live fetch — cache hits and short-circuit paths emit only `duration_ms`.
+_PHASE_FIELDS = ("network_ms", "parse_ms", "cache_write_ms")
+
 
 def _log_dir(cfg: Any | None) -> Path:
     if cfg is not None:
@@ -92,6 +98,9 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
     cache_hits = 0
     cache_total = 0
     durations: dict[str, list[int]] = {}
+    phase_values: dict[str, dict[str, list[int]]] = {}
+    escalations: dict[str, int] = {}
+    fetch_ok_total: dict[str, int] = {}
     total = 0
 
     for rec in _iter_records(files):
@@ -115,16 +124,43 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                 cache_total += 1
                 if rec.get("from_cache"):
                     cache_hits += 1
+                fetch_ok_total[tool] = fetch_ok_total.get(tool, 0) + 1
+                if rec.get("escalated_from") is not None:
+                    escalations[tool] = escalations.get(tool, 0) + 1
 
         ms = rec.get("duration_ms")
         if isinstance(ms, (int, float)) and outcome in ("ok", "empty"):
             durations.setdefault(tool, []).append(int(ms))
+
+        if outcome == "ok":
+            for field_name in _PHASE_FIELDS:
+                val = rec.get(field_name)
+                if isinstance(val, (int, float)):
+                    phase_values.setdefault(tool, {}).setdefault(
+                        field_name, []
+                    ).append(int(val))
 
     duration_stats: dict[str, dict[str, int]] = {}
     for tool, vals in durations.items():
         pct = _percentiles(vals, (0.5, 0.95, 0.99))
         pct["count"] = len(vals)
         duration_stats[tool] = pct
+
+    phase_percentiles: dict[str, dict[str, dict[str, int]]] = {}
+    for tool, fields_map in phase_values.items():
+        per_phase: dict[str, dict[str, int]] = {}
+        for field_name, vals in fields_map.items():
+            pct = _percentiles(vals, (0.5, 0.95, 0.99))
+            pct["count"] = len(vals)
+            per_phase[field_name] = pct
+        if per_phase:
+            phase_percentiles[tool] = per_phase
+
+    escalation_rate: dict[str, float] = {}
+    for tool, escalated_count in escalations.items():
+        denom = fetch_ok_total.get(tool, 0)
+        if denom:
+            escalation_rate[tool] = round(escalated_count / denom, 4)
 
     today = datetime.now(timezone.utc).date()
     since = (today - timedelta(days=days - 1)).isoformat()
@@ -139,6 +175,8 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
         "modes_used": dict(modes.most_common()),
         "cache_hit_ratio": round(cache_hits / cache_total, 4) if cache_total else 0.0,
         "cache_observations": cache_total,
+        "escalation_rate": escalation_rate,
         "failures": dict(failures.most_common()),
         "duration_ms": duration_stats,
+        "phase_percentiles": phase_percentiles,
     }

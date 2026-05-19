@@ -130,6 +130,104 @@ def test_summarize_infers_outcome_for_legacy_records(tmp_path: Path) -> None:
     assert summary["by_tool"]["search"] == {"ok": 1}
 
 
+def test_summarize_phase_percentiles(tmp_path: Path) -> None:
+    """Per-tool p50/p95/p99 for network_ms, parse_ms, cache_write_ms."""
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / f"{_today()}.jsonl",
+        [
+            {
+                "tool": "fetch",
+                "outcome": "ok",
+                "duration_ms": 100 + i,
+                "network_ms": 50 + i,
+                "parse_ms": 30 + i,
+                "cache_write_ms": 5,
+            }
+            for i in range(10)
+        ],
+    )
+    cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
+    summary = logstats.summarize(cfg)
+
+    pp = summary["phase_percentiles"]["fetch"]
+    assert pp["network_ms"]["count"] == 10
+    assert pp["parse_ms"]["count"] == 10
+    assert pp["cache_write_ms"]["count"] == 10
+    # Nearest-rank with banker's rounding on 10 sorted [50..59]: p50→idx 4 → 54.
+    assert pp["network_ms"]["p50"] == 54
+    assert pp["network_ms"]["p95"] == 59
+    assert pp["parse_ms"]["p50"] == 34
+    # cache_write_ms is constant at 5.
+    assert pp["cache_write_ms"]["p50"] == 5
+    assert pp["cache_write_ms"]["p95"] == 5
+
+
+def test_summarize_escalation_rate(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / f"{_today()}.jsonl",
+        [
+            {"tool": "fetch", "outcome": "ok", "mode_used": "http"},
+            {"tool": "fetch", "outcome": "ok", "mode_used": "http"},
+            {
+                "tool": "fetch",
+                "outcome": "ok",
+                "mode_used": "browser",
+                "escalated_from": "http",
+            },
+            {
+                "tool": "fetch",
+                "outcome": "ok",
+                "mode_used": "browser",
+                "escalated_from": "http",
+            },
+            # Failures and cache hits without escalation shouldn't be counted
+            # as "no escalation" either — escalation_rate uses successful
+            # fetches as the denominator.
+            {"tool": "fetch", "outcome": "fail", "failure_reason": "blocked_bot"},
+        ],
+    )
+    cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
+    summary = logstats.summarize(cfg)
+    # 2 escalations out of 4 successful fetches = 0.5.
+    assert summary["escalation_rate"]["fetch"] == 0.5
+
+
+def test_summarize_no_escalation_no_key(tmp_path: Path) -> None:
+    """When no fetch event was escalated, the tool isn't in escalation_rate."""
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / f"{_today()}.jsonl",
+        [{"tool": "fetch", "outcome": "ok", "mode_used": "http"}],
+    )
+    cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
+    summary = logstats.summarize(cfg)
+    assert summary["escalation_rate"] == {}
+
+
+def test_summarize_phase_percentiles_skips_cache_hits(tmp_path: Path) -> None:
+    """Cache hits have no phase fields, so they should not pull the p50 toward 0."""
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / f"{_today()}.jsonl",
+        [
+            # Two fresh fetches with real timings…
+            {"tool": "fetch", "outcome": "ok", "network_ms": 100, "parse_ms": 50},
+            {"tool": "fetch", "outcome": "ok", "network_ms": 200, "parse_ms": 80},
+            # …and two cache hits with no phase fields.
+            {"tool": "fetch", "outcome": "ok", "from_cache": True, "duration_ms": 0},
+            {"tool": "fetch", "outcome": "ok", "from_cache": True, "duration_ms": 0},
+        ],
+    )
+    cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
+    summary = logstats.summarize(cfg)
+    pp = summary["phase_percentiles"]["fetch"]
+    # Counts only include records that actually carried the phase field.
+    assert pp["network_ms"]["count"] == 2
+    assert pp["parse_ms"]["count"] == 2
+
+
 def test_summarize_tolerates_malformed_lines(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)

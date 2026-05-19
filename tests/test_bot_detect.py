@@ -46,6 +46,11 @@ def test_empty_html_at_404_is_not_found() -> None:
     assert classify(404, None, None) == FailureReason.NOT_FOUND
 
 
+def test_410_gone_is_not_found() -> None:
+    assert classify(410, "", {}) == FailureReason.NOT_FOUND
+    assert classify(410, None, None) == FailureReason.NOT_FOUND
+
+
 def test_empty_html_at_503_is_server_error() -> None:
     assert classify(503, "", {}) == FailureReason.SERVER_ERROR
 

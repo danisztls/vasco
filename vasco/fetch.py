@@ -371,6 +371,12 @@ async def _do_fetch_html(
                 pass
         return html, status, headers, reason, "http", browser_started
 
+    # The server gave a definitive "this URL doesn't exist" answer; the browser
+    # tier can't conjure the resource back. Skip escalation and don't bump —
+    # http worked fine, the resource just isn't there.
+    if reason == FailureReason.NOT_FOUND:
+        return html, status, headers, reason, "http", browser_started
+
     time_remaining = deadline_monotonic - time.monotonic()
     if time_remaining < BROWSER_MIN_BUDGET:
         if cache is not None and hasattr(cache, "bump"):

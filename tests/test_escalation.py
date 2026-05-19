@@ -295,6 +295,38 @@ def test_browser_unknown_exception_propagates_to_server_error(
     assert env["failure"]["reason"] == FailureReason.SERVER_ERROR.value
 
 
+def test_http_not_found_does_not_escalate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """410/404 from http tier → NOT_FOUND, no browser call, no domain bump."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http("", 410))
+
+    browser_called: list[str] = []
+
+    async def _browser_should_not_be_called(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        browser_called.append(url)
+        return "", 0, {}
+
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _browser_should_not_be_called)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://hiteck.example.com/produtos/versa-evo/",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert env["failure"]["reason"] == FailureReason.NOT_FOUND.value
+    assert env["mode_used"] == "http"
+    assert env["http_status"] == 410
+    assert browser_called == []
+    # Domain strategy should not be moved by a per-URL 404/410.
+    assert cache.bumps == []
+
+
 def test_both_tiers_fail_returns_browser_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

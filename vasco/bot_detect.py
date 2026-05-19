@@ -129,7 +129,10 @@ def classify(
         return FailureReason.DNS_FAIL
 
     # --- Hard HTTP statuses ---------------------------------------------------
-    if status == 404:
+    # 410 Gone is RFC 9110's "intentional 404": treat the same way so that
+    # auto-mode escalation can short-circuit instead of pointlessly retrying
+    # in the browser tier.
+    if status in (404, 410):
         return FailureReason.NOT_FOUND
 
     if status in (401, 403):

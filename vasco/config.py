@@ -44,12 +44,19 @@ class TavilyCfg:
 
 
 @dataclass(frozen=True)
+class LoggingCfg:
+    enabled: bool = True
+    path: str = ""  # empty → $XDG_DATA_HOME/vasco/logs
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
     browser: BrowserCfg = field(default_factory=BrowserCfg)
     cache: CacheCfg = field(default_factory=CacheCfg)
     tavily: TavilyCfg = field(default_factory=TavilyCfg)
+    logging: LoggingCfg = field(default_factory=LoggingCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -58,6 +65,7 @@ _SECTIONS: dict[str, type] = {
     "browser": BrowserCfg,
     "cache": CacheCfg,
     "tavily": TavilyCfg,
+    "logging": LoggingCfg,
 }
 
 
@@ -89,7 +97,9 @@ def _apply_dict(section: Any, data: dict[str, Any]) -> Any:
         if key in field_types:
             ftype = field_types[key]
             if isinstance(ftype, str):
-                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(ftype, str)
+                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
+                    ftype, str
+                )
             overrides[key] = _coerce(val, ftype)
     return replace(section, **overrides) if overrides else section
 
@@ -105,7 +115,9 @@ def _apply_env(section: Any, section_name: str) -> Any:
         if field_name in field_types:
             ftype = field_types[field_name]
             if isinstance(ftype, str):
-                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(ftype, str)
+                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
+                    ftype, str
+                )
             overrides[field_name] = _coerce(env_val, ftype)
     return replace(section, **overrides) if overrides else section
 

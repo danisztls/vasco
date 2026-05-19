@@ -125,11 +125,32 @@ user_agent           = "Mozilla/5.0 (...)"
 [browser]
 headless = true
 locale   = "en-US"
+
+[logging]
+enabled = true
+path    = ""        # empty → $XDG_DATA_HOME/vasco/logs
 ```
 
 Precedence: CLI flag > `VASCO_*` env var > config file > default. Example: `VASCO_FETCH_WORKERS=8` overrides `fetch.workers`.
 
 Cache lives at `$XDG_CACHE_HOME/vasco/cache.db` (default `~/.cache/vasco/cache.db`).
+
+## Telemetry
+
+The MCP server writes structured JSONL events to `$XDG_DATA_HOME/vasco/logs/YYYY-MM-DD.jsonl` (default `~/.local/share/vasco/logs/`) — one file per day, append-only. Events are emitted on:
+
+- typed fetch failures (per call for `fetch`, per URL for `fetch_many`)
+- `extract` returning zero passages (lets you separate "query was off" from "fetch silently broke")
+- uncaught tool-level exceptions
+
+Each record is a single JSON object — `tool`, `url`, `failure_reason`, `message`, `mode_used`, `http_status`, `ts` (UTC ISO 8601). Successful calls are not logged. Disable with `[logging] enabled = false` or `VASCO_LOGGING_ENABLED=false`. Writes never block tool calls — any I/O error is swallowed silently.
+
+Quick tour:
+
+```bash
+tail -f ~/.local/share/vasco/logs/$(date -u +%F).jsonl | jq .
+jq -r '.failure_reason // empty' ~/.local/share/vasco/logs/*.jsonl | sort | uniq -c | sort -rn
+```
 
 ## Known limitations
 

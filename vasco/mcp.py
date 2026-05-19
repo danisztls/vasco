@@ -22,6 +22,7 @@ from vasco import extract as _extract_mod
 from vasco import fetch as _fetch
 from vasco import map as _map_mod
 from vasco import search as _search
+from vasco import telemetry as _telemetry
 
 log = logging.getLogger("vasco.mcp")
 
@@ -85,18 +86,54 @@ async def search(
     backend: str | None = None,
 ) -> list[dict[str, str]]:
     assert _cfg is not None  # populated by lifespan before tools run
-    searcher = _search.get_searcher(backend or _cfg.search.default_backend, cfg=_cfg)
-    return [
-        {"title": r.title, "url": r.url, "snippet": r.snippet}
-        for r in searcher.search(
-            query, max_results=max_results, region=region, time=time, site=site
+    try:
+        searcher = _search.get_searcher(
+            backend or _cfg.search.default_backend, cfg=_cfg
         )
-    ]
+        return [
+            {"title": r.title, "url": r.url, "snippet": r.snippet}
+            for r in searcher.search(
+                query, max_results=max_results, region=region, time=time, site=site
+            )
+        ]
+    except Exception as exc:
+        _record_exception("search", exc, query=query, site=site, backend=backend)
+        raise
 
 
 def _strip_markdown(envelope: dict[str, Any]) -> dict[str, Any]:
     """Drop the large `markdown` field for triage-only callers."""
     return {k: v for k, v in envelope.items() if k != "markdown"}
+
+
+def _record_failure(tool: str, envelope: dict[str, Any]) -> None:
+    """Emit a telemetry event if the envelope carries a typed failure."""
+    failure = envelope.get("failure") if isinstance(envelope, dict) else None
+    if not failure:
+        return
+    _telemetry.log_event(
+        _cfg,
+        {
+            "tool": tool,
+            "url": envelope.get("url_requested"),
+            "failure_reason": failure.get("reason"),
+            "message": failure.get("message"),
+            "mode_used": envelope.get("mode_used"),
+            "http_status": envelope.get("http_status"),
+        },
+    )
+
+
+def _record_exception(tool: str, exc: BaseException, **fields: Any) -> None:
+    """Emit a telemetry event for an uncaught tool-level exception."""
+    _telemetry.log_event(
+        _cfg,
+        {
+            "tool": tool,
+            "exception": f"{type(exc).__name__}: {exc}",
+            **fields,
+        },
+    )
 
 
 @server.tool(
@@ -126,6 +163,7 @@ async def fetch(
         cache=_cache,
         cfg=_cfg,
     )
+    _record_failure("fetch", envelope)
     if metadata_only:
         return _strip_markdown(envelope)
     return envelope
@@ -158,6 +196,7 @@ async def fetch_many(
         cache=_cache,
         cfg=_cfg,
     ):
+        _record_failure("fetch_many", env)
         results.append(_strip_markdown(env) if metadata_only else env)
     return results
 
@@ -179,17 +218,35 @@ async def extract(
     rank: str = "bm25",
     deadline: float = 15.0,
 ) -> dict[str, Any]:
-    return await _extract_mod.extract(
-        url,
-        query=query,
-        top=top,
-        context_chars=context_chars,
-        mode=mode,
-        rank=rank,
-        deadline=deadline,
-        cache=_cache,
-        cfg=_cfg,
-    )
+    try:
+        result = await _extract_mod.extract(
+            url,
+            query=query,
+            top=top,
+            context_chars=context_chars,
+            mode=mode,
+            rank=rank,
+            deadline=deadline,
+            cache=_cache,
+            cfg=_cfg,
+        )
+    except Exception as exc:
+        _record_exception("extract", exc, url=url, query=query)
+        raise
+    # No typed-failure envelope here; an empty `passages` list is a legitimate
+    # outcome (no BM25 match), not a failure. Log it so we can distinguish
+    # "query was off" from "fetch silently broke" later.
+    if isinstance(result, dict) and not result.get("passages"):
+        _telemetry.log_event(
+            _cfg,
+            {
+                "tool": "extract",
+                "url": url,
+                "query": query,
+                "empty_passages": True,
+            },
+        )
+    return result
 
 
 @server.tool(
@@ -209,11 +266,15 @@ async def map_site(
 ) -> list[dict[str, Any]]:
     # trafilatura does synchronous HTTP; offload to a thread so a slow
     # sitemap fetch doesn't block other in-flight MCP tool calls.
-    return await asyncio.to_thread(
-        lambda: list(
-            _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
+    try:
+        return await asyncio.to_thread(
+            lambda: list(
+                _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
+            )
         )
-    )
+    except Exception as exc:
+        _record_exception("map", exc, url=url, source=source)
+        raise
 
 
 # ---------------------------------------------------------------------------

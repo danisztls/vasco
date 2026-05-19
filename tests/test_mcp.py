@@ -225,6 +225,86 @@ async def test_fetch_many_metadata_only_strips_markdown(
     assert "BODY_https://b" not in text
 
 
+@pytest.mark.asyncio
+async def test_fetch_failure_logs_telemetry(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import fetch as _fetch
+    from vasco import telemetry as _telemetry
+
+    async def fake_fetch_one(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "url_requested": url,
+            "mode_used": "browser",
+            "http_status": 0,
+            "failure": {
+                "reason": "blocked_bot",
+                "message": "blocked_bot after browser tier",
+            },
+        }
+
+    monkeypatch.setattr(_fetch, "fetch_one", fake_fetch_one)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("fetch", {"url": "https://blocked.test"})
+
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["tool"] == "fetch"
+    assert event["url"] == "https://blocked.test"
+    assert event["failure_reason"] == "blocked_bot"
+    assert event["mode_used"] == "browser"
+
+
+@pytest.mark.asyncio
+async def test_fetch_success_does_not_log(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import fetch as _fetch
+    from vasco import telemetry as _telemetry
+
+    async def fake_fetch_one(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {"url_requested": url, "mode_used": "http", "markdown": "ok"}
+
+    monkeypatch.setattr(_fetch, "fetch_one", fake_fetch_one)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("fetch", {"url": "https://ok.test"})
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_extract_empty_passages_logs_telemetry(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import extract as _extract
+    from vasco import telemetry as _telemetry
+
+    async def fake_extract(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {"url": url, "passages": []}
+
+    monkeypatch.setattr(_extract, "extract", fake_extract)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("extract", {"url": "https://x", "query": "nope"})
+
+    assert len(captured) == 1
+    assert captured[0]["tool"] == "extract"
+    assert captured[0]["empty_passages"] is True
+
+
 def _text(result: Any) -> str:
     """Extract a flat string from a FastMCP call_tool result for assertions."""
     # FastMCP returns either Sequence[ContentBlock] or dict[str, Any].

@@ -106,6 +106,30 @@ def _segment(markdown: str) -> list[tuple[str, int]]:
     return [(t, o) for t, o in passages if len(t) >= _MIN_PASSAGE_CHARS]
 
 
+def _rank_bm25(passages: list[str], query: str, *, top: int) -> list[tuple[int, float]]:
+    corpus_tokens = [_tokenize(p) for p in passages]
+    query_tokens = _tokenize(query)
+    if not query_tokens or not any(corpus_tokens):
+        return []
+    bm25 = BM25Okapi(corpus_tokens)
+    scores = bm25.get_scores(query_tokens)
+    ranked = sorted(
+        ((i, float(scores[i])) for i in range(len(passages))),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    return [(i, s) for i, s in ranked if s > 0][:top]
+
+
+def _rank_semantic(
+    passages: list[str], query: str, *, top: int
+) -> list[tuple[int, float]]:
+    from vasco import semantic
+
+    ranker = semantic.get_ranker()
+    return ranker.rank(passages, query, top=top)
+
+
 async def extract(
     url: str,
     *,
@@ -113,22 +137,21 @@ async def extract(
     top: int = 5,
     context_chars: int = 400,
     mode: str = "auto",
+    rank: str = "bm25",
     deadline: float = 15.0,
     use_cache: bool = True,
     refresh: bool = False,
     cache: Any = None,
     cfg: Any = None,
 ) -> dict:
-    """Fetch ``url`` and return the top BM25-ranked passages matching ``query``.
+    """Fetch ``url`` and return the top-K passages matching ``query``.
 
-    Shape on success::
-
-        {"url": str, "title": ..., "byline": ..., "published": ...,
-         "mode_used": ..., "query": ..., "passages": [{...}, ...]}
-
-    On fetch failure: ``{"failure": {...}, "passages": []}`` plus the same
-    metadata fields the envelope provided.
+    ``rank`` selects the ranker: ``"bm25"`` (default, pure-Python, fast) or
+    ``"semantic"`` (sentence-transformers, requires the ``semantic`` extra).
     """
+    if rank not in ("bm25", "semantic"):
+        raise ValueError(f"unknown rank backend: {rank!r}")
+
     env = await _fetch.fetch_one(
         url,
         mode=mode,
@@ -146,6 +169,7 @@ async def extract(
         "byline": env.get("byline"),
         "published": env.get("published"),
         "mode_used": env.get("mode_used"),
+        "ranker": rank,
         "query": query,
     }
 
@@ -160,23 +184,11 @@ async def extract(
         base["passages"] = []
         return base
 
-    corpus_tokens = [_tokenize(text) for text, _ in segments]
-    query_tokens = _tokenize(query)
-
-    if not query_tokens or not any(corpus_tokens):
-        base["passages"] = []
-        return base
-
-    bm25 = BM25Okapi(corpus_tokens)
-    scores = bm25.get_scores(query_tokens)
-
-    # Rank indices by score desc; only keep positive scores.
-    ranked = sorted(
-        ((i, float(scores[i])) for i in range(len(segments))),
-        key=lambda x: x[1],
-        reverse=True,
-    )
-    ranked = [(i, s) for i, s in ranked if s > 0][:top]
+    passage_texts = [text for text, _ in segments]
+    if rank == "semantic":
+        ranked = _rank_semantic(passage_texts, query, top=top)
+    else:
+        ranked = _rank_bm25(passage_texts, query, top=top)
 
     passages: list[dict[str, Any]] = []
     md_len = len(markdown)

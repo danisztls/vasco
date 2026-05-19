@@ -23,7 +23,7 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from . import bot_detect, browser, convert, io as io_mod, pdf
+from . import bot_detect, browser, convert, io as io_mod, pdf, youtube
 from .errors import FailureReason
 
 
@@ -489,6 +489,22 @@ async def _fetch_one_inner(
             return _hydrate_cache_hit(hit, url_requested=url), False
 
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+
+    # --- YouTube shortcut ---------------------------------------------------
+    # YouTube transcripts have their own envelope shape (mode_used="youtube",
+    # content_type="text/youtube"); skip HTTP/browser tier entirely.
+    if youtube.is_youtube_url(url):
+        envelope = await youtube.fetch_youtube(url, deadline=deadline, cfg=cfg)
+        envelope["url_requested"] = url
+        envelope["url_canonical"] = normalized
+        if raw:
+            envelope.setdefault("warnings", []).append("raw_unsupported_for_youtube")
+        if use_cache and cache is not None:
+            try:
+                cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
+            except Exception:
+                pass
+        return envelope, False
 
     base = _base_envelope(
         url_requested=url,

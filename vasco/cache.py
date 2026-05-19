@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -13,11 +14,68 @@ _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 
 _KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne"}
 
+# Matches any YouTube URL that points to a specific video, capturing the
+# video ID. One of three named groups will be set per match:
+#   - id_short: youtu.be/<id>
+#   - id_query: <yt-host>/watch?[...&]v=<id>
+#   - id_path:  <yt-host>/(embed|shorts|v|live)/<id>
+# Used both for cache normalization (collapse every variant to /watch?v=<id>)
+# and for extract_video_id in vasco.youtube.
+YT_VIDEO_ID_RE = re.compile(
+    r"^https?://"
+    r"(?:"
+    r"(?:www\.)?youtu\.be/(?P<id_short>[A-Za-z0-9_-]+)"
+    r"|"
+    r"(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com)(?:\.[a-z]{2,})?"
+    r"/(?:"
+    r"watch\?(?:[^#]*?&)?v=(?P<id_query>[A-Za-z0-9_-]+)"
+    r"|"
+    r"(?:embed|shorts|v|live)/(?P<id_path>[A-Za-z0-9_-]+)"
+    r")"
+    r")",
+    re.IGNORECASE,
+)
+
+# Matches any YouTube host that isn't a video URL (channel pages, playlists,
+# homepage). Used as a fallback after YT_VIDEO_ID_RE so non-video YouTube URLs
+# still get host canonicalization.
+_YT_HOST_RE = re.compile(
+    r"^(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com)(?:\.[a-z]{2,})?$",
+    re.IGNORECASE,
+)
+
 
 def _is_tracking_param(key: str) -> bool:
     if key in _TRACKING_EXACT:
         return True
     return any(key.startswith(p) for p in _TRACKING_PREFIXES)
+
+
+def _canonicalize_youtube_host(raw: str) -> str:
+    """Collapse every YouTube URL form for one video to a single canonical
+    ``https://youtube.com/watch?v=<id>`` so they share a cache row.
+
+    Covers: youtu.be short links, www./m./music. subdomains, country-local
+    TLDs (youtube.com.br), the privacy embed domain youtube-nocookie.com, and
+    the alternate video paths (/embed/, /shorts/, /v/, /live/). Non-video
+    YouTube URLs (playlists, channels, homepage) get only host canonicalization.
+    """
+    m = YT_VIDEO_ID_RE.match(raw)
+    if m:
+        video_id = m.group("id_short") or m.group("id_query") or m.group("id_path")
+        parts = urlsplit(raw)
+        other = "&".join(
+            p for p in parts.query.split("&") if p and not p.startswith("v=")
+        )
+        new_query = f"v={video_id}" + (f"&{other}" if other else "")
+        return urlunsplit(("https", "youtube.com", "/watch", new_query, ""))
+
+    parts = urlsplit(raw)
+    host = (parts.hostname or "").lower()
+    if host and _YT_HOST_RE.match(host):
+        return urlunsplit(("https", "youtube.com", parts.path, parts.query, ""))
+
+    return raw
 
 
 def normalize_url(url: str) -> str:
@@ -31,6 +89,8 @@ def normalize_url(url: str) -> str:
       - Sort query params alphabetically (preserving order of repeated keys)
       - Drop tracking params: utm_*, fbclid, gclid, mc_eid
       - Leave percent-encoded characters alone
+      - Collapse YouTube variants (``youtu.be``, ``m./music./www.youtube.com``,
+        local TLDs like ``youtube.com.br``) to bare ``youtube.com``
     """
     if not url:
         return url
@@ -38,6 +98,7 @@ def normalize_url(url: str) -> str:
     if "://" not in raw:
         raw = "http://" + raw
 
+    raw = _canonicalize_youtube_host(raw)
     parts = urlsplit(raw)
     scheme = parts.scheme.lower()
     host = parts.hostname or ""

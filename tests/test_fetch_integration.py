@@ -12,8 +12,15 @@ from typing import Any
 
 import pytest
 
+
+# A year-2100 epoch second — used as fetched_at in faked envelopes so the
+# cache's TTL (current_time + 86400) is always far in the future, making
+# tests independent of the wall clock at run time.
+_FAR_FUTURE_FETCHED_AT = 4_102_444_800
+
 from vasco import browser as browser_mod
 from vasco import fetch as fetch_mod
+from vasco import youtube as youtube_mod
 from vasco.cache import Cache
 
 
@@ -132,6 +139,124 @@ def test_no_cache_flag_bypasses_reads_and_writes(
             )
         )
         assert cache.stats()["entries"] == 0
+    finally:
+        cache.close()
+
+
+def test_youtube_url_routes_to_youtube_fetcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A youtube.com URL bypasses HTTP/browser tier and yields a transcript envelope.
+    Both youtu.be and youtube.com forms should hit the same cache row.
+    """
+    calls: list[str] = []
+
+    async def fake_fetch_youtube(url: str, *, deadline: float, cfg: Any = None) -> dict:
+        calls.append(url)
+        return {
+            "url_requested": url,
+            "url_final": url,
+            "url_canonical": "https://youtube.com/watch?v=abc123",
+            "http_status": 200,
+            "mode_used": "youtube",
+            "fetched_at": _FAR_FUTURE_FETCHED_AT,
+            "from_cache": False,
+            "cache_age_seconds": 0,
+            "content_type": "text/youtube",
+            "title": "T",
+            "byline": "B",
+            "published": None,
+            "modified": None,
+            "language": "en",
+            "site_name": "YouTube",
+            "word_count": 2,
+            "token_count_estimate": 2,
+            "quality": {},
+            "links": [],
+            "markdown": "hello world",
+            "warnings": [],
+        }
+
+    # HTTP tier must NOT be hit for YouTube URLs.
+    def explode(*a: Any, **kw: Any) -> Any:
+        raise AssertionError("HTTP tier should not run for YouTube URLs")
+
+    monkeypatch.setattr(youtube_mod, "fetch_youtube", fake_fetch_youtube)
+    monkeypatch.setattr(fetch_mod, "_http_fetch", explode)
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        first = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://youtu.be/abc123", cache=cache, deadline=10.0
+            )
+        )
+        assert first["mode_used"] == "youtube"
+        assert first["markdown"] == "hello world"
+        assert first["from_cache"] is False
+        assert len(calls) == 1
+
+        # Canonical youtube.com form should hit the same cache row (youtu.be
+        # was upgraded to this exact shape by normalize_url).
+        second = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://youtube.com/watch?v=abc123",
+                cache=cache,
+                deadline=10.0,
+            )
+        )
+        assert second["from_cache"] is True
+        assert second["mode_used"] == "youtube"
+        # youtube.fetch_youtube should NOT have been called again.
+        assert len(calls) == 1
+    finally:
+        cache.close()
+
+
+def test_youtube_raw_flag_adds_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--raw is meaningless for YouTube (no HTML); we surface a warning so
+    callers can detect the mismatch instead of silently dropping the flag.
+    """
+
+    async def fake_fetch_youtube(url: str, *, deadline: float, cfg: Any = None) -> dict:
+        return {
+            "url_requested": url,
+            "url_final": url,
+            "url_canonical": url,
+            "http_status": 200,
+            "mode_used": "youtube",
+            "fetched_at": _FAR_FUTURE_FETCHED_AT,
+            "from_cache": False,
+            "cache_age_seconds": 0,
+            "content_type": "text/youtube",
+            "title": "T",
+            "byline": None,
+            "published": None,
+            "modified": None,
+            "language": "en",
+            "site_name": "YouTube",
+            "word_count": 1,
+            "token_count_estimate": 1,
+            "quality": {},
+            "links": [],
+            "markdown": "hi",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(youtube_mod, "fetch_youtube", fake_fetch_youtube)
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://youtu.be/abc123", cache=cache, deadline=10.0, raw=True
+            )
+        )
+        assert "raw_unsupported_for_youtube" in env["warnings"]
     finally:
         cache.close()
 

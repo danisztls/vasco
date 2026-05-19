@@ -90,7 +90,7 @@ def search(
 ) -> None:
     """Query the web and stream title/url/snippet records."""
     cfg = _config.load_config()
-    searcher = _search.get_searcher(backend or cfg.search.default_backend)
+    searcher = _search.get_searcher(backend or cfg.search.default_backend, cfg=cfg)
     kwargs: dict[str, Any] = {
         "max_results": max_ if max_ is not None else cfg.search.max_results,
         "region": region or cfg.search.region,
@@ -229,31 +229,42 @@ def fetch(
 @app.command()
 def extract(
     url: Annotated[str, typer.Argument(help="URL to extract from.")],
-    query: Annotated[str, typer.Option("--query", help="Query for BM25 ranking.")] = ...,
+    query: Annotated[str, typer.Option("--query", help="Query for passage ranking.")] = ...,
     top: Annotated[int, typer.Option(help="Top K passages to return.")] = 5,
     context_chars: Annotated[int, typer.Option(help="Context chars around each passage.")] = 400,
     mode: Annotated[str, typer.Option(help="Fetch mode: auto|http|browser.")] = "auto",
+    rank: Annotated[str, typer.Option("--rank", help="Ranking: bm25|semantic.")] = "bm25",
     deadline: Annotated[str | None, typer.Option(help="Deadline e.g. 15s, 1m.")] = None,
 ) -> None:
-    """Fetch a URL and print BM25-ranked passages as pretty JSON."""
+    """Fetch a URL and print ranked passages as pretty JSON."""
+    if rank not in ("bm25", "semantic"):
+        raise typer.BadParameter("--rank must be one of: bm25, semantic")
     cfg = _config.load_config()
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
     )
     cache = _open_cache(cfg)
     try:
-        result = asyncio.run(
-            _extract.extract(
-                url,
-                query=query,
-                top=top,
-                context_chars=context_chars,
-                mode=mode,
-                deadline=deadline_seconds,
-                cache=cache,
-                cfg=cfg,
+        try:
+            result = asyncio.run(
+                _extract.extract(
+                    url,
+                    query=query,
+                    top=top,
+                    context_chars=context_chars,
+                    mode=mode,
+                    rank=rank,
+                    deadline=deadline_seconds,
+                    cache=cache,
+                    cfg=cfg,
+                )
             )
-        )
+        except Exception as exc:  # surface SemanticRankerUnavailable cleanly
+            from vasco.semantic import SemanticRankerUnavailable
+
+            if isinstance(exc, SemanticRankerUnavailable):
+                raise typer.BadParameter(str(exc)) from exc
+            raise
         json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
     finally:
@@ -338,6 +349,24 @@ def cache_stats() -> None:
         sys.stdout.write("\n")
     finally:
         c.close()
+
+
+# ---------------------------------------------------------------------------
+# mcp
+# ---------------------------------------------------------------------------
+
+
+@app.command("mcp")
+def mcp() -> None:
+    """Run the MCP server on stdio.
+
+    Exposes search, fetch, fetch_many, extract, map, and normalize as MCP tools
+    for agent clients (Claude Desktop, Claude Code). The BrowserPool and any
+    loaded semantic model stay warm for the server's lifetime.
+    """
+    from vasco import mcp as _mcp
+
+    _mcp.run()
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -39,11 +39,17 @@ class CacheCfg:
 
 
 @dataclass(frozen=True)
+class TavilyCfg:
+    api_key: str = ""
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
     browser: BrowserCfg = field(default_factory=BrowserCfg)
     cache: CacheCfg = field(default_factory=CacheCfg)
+    tavily: TavilyCfg = field(default_factory=TavilyCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -51,6 +57,7 @@ _SECTIONS: dict[str, type] = {
     "fetch": FetchCfg,
     "browser": BrowserCfg,
     "cache": CacheCfg,
+    "tavily": TavilyCfg,
 }
 
 

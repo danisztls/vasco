@@ -37,6 +37,82 @@ from vasco.cache import normalize_url, registered_domain
             "https://example.com/foo?a=1&b=2&c=3",
         ),
         ("HTTPS://EXAMPLE.COM/FOO", "https://example.com/FOO"),
+        # YouTube short links upgrade to the canonical /watch?v=… form so
+        # both URL shapes hit the same cache row.
+        ("https://youtu.be/dQw4w9WgXcQ", "https://youtube.com/watch?v=dQw4w9WgXcQ"),
+        ("https://www.youtu.be/dQw4w9WgXcQ", "https://youtube.com/watch?v=dQw4w9WgXcQ"),
+        (
+            "https://youtu.be/dQw4w9WgXcQ?t=42",
+            "https://youtube.com/watch?t=42&v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://youtu.be/dQw4w9WgXcQ?utm_source=x&t=42",
+            "https://youtube.com/watch?t=42&v=dQw4w9WgXcQ",
+        ),
+        # All youtube.com variants (subdomain, local TLD) collapse to the
+        # canonical host so the same video shares one cache row.
+        (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://www.youtube.com.br/watch?v=dQw4w9WgXcQ&t=42",
+            "https://youtube.com/watch?t=42&v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://youtube.com.br/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        # Alternate video paths (/embed, /shorts, /v, /live) collapse to /watch.
+        (
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://www.youtube.com/shorts/abcXYZ_-12",
+            "https://youtube.com/watch?v=abcXYZ_-12",
+        ),
+        (
+            "https://www.youtube.com/v/dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://www.youtube.com/live/dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        # Nocookie privacy-embed domain collapses to youtube.com/watch.
+        (
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://youtube-nocookie.com/embed/dQw4w9WgXcQ?start=42",
+            "https://youtube.com/watch?start=42&v=dQw4w9WgXcQ",
+        ),
+        # Watch URL with v= after another query param.
+        (
+            "https://www.youtube.com/watch?list=PL123&v=dQw4w9WgXcQ&t=42",
+            "https://youtube.com/watch?list=PL123&t=42&v=dQw4w9WgXcQ",
+        ),
+        # Non-video YouTube URLs get only host canonicalization.
+        (
+            "https://www.youtube.com/playlist?list=PLABC",
+            "https://youtube.com/playlist?list=PLABC",
+        ),
+        (
+            "https://m.youtube.com/c/channelname",
+            "https://youtube.com/c/channelname",
+        ),
+        # Non-YouTube hosts containing "youtube" in path are untouched.
+        ("https://example.com/youtube.com/foo", "https://example.com/youtube.com/foo"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:

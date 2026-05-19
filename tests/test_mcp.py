@@ -161,6 +161,70 @@ async def test_map_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "/a" in text and "/b" in text
 
 
+@pytest.mark.asyncio
+async def test_map_tool_forwards_exclude(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vasco import map as _map
+
+    captured: dict[str, Any] = {}
+
+    def fake_map_site(url: str, **kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return iter(())
+
+    monkeypatch.setattr(_map, "map_site", fake_map_site)
+    await mcp_mod.server.call_tool(
+        "map",
+        {"url": "https://example.com", "exclude": ["/team/", "/tag/"]},
+    )
+    assert captured["exclude"] == ["/team/", "/tag/"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_only_strips_markdown(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import fetch as _fetch
+
+    async def fake_fetch_one(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "url_requested": url,
+            "title": "T",
+            "word_count": 42,
+            "markdown": "BIG_BODY_CONTENT",
+        }
+
+    monkeypatch.setattr(_fetch, "fetch_one", fake_fetch_one)
+
+    result = await mcp_mod.server.call_tool(
+        "fetch", {"url": "https://example.com", "metadata_only": True}
+    )
+    text = _text(result)
+    assert "BIG_BODY_CONTENT" not in text
+    assert '"title"' in text or "'title'" in text
+    assert "42" in text
+
+
+@pytest.mark.asyncio
+async def test_fetch_many_metadata_only_strips_markdown(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import fetch as _fetch
+
+    async def fake_fetch_many(urls, **kwargs):  # type: ignore[no-untyped-def]
+        for u in urls:
+            yield {"url_requested": u, "title": "X", "markdown": f"BODY_{u}"}
+
+    monkeypatch.setattr(_fetch, "fetch_many", fake_fetch_many)
+
+    result = await mcp_mod.server.call_tool(
+        "fetch_many",
+        {"urls": ["https://a", "https://b"], "metadata_only": True},
+    )
+    text = _text(result)
+    assert "BODY_https://a" not in text
+    assert "BODY_https://b" not in text
+
+
 def _text(result: Any) -> str:
     """Extract a flat string from a FastMCP call_tool result for assertions."""
     # FastMCP returns either Sequence[ContentBlock] or dict[str, Any].

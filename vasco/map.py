@@ -80,12 +80,16 @@ def map_site(
     *,
     source: str = "all",
     limit: int = 1000,
+    exclude: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Discover URLs on a site via sitemap, feeds, and/or a light spider.
 
     Yields ``{"url": str, "source": str, "lastmod": str | None}``. When
     ``source="all"`` the three discovery paths are merged and deduplicated by
     URL (first-seen source wins). At most ``limit`` records are yielded.
+
+    ``exclude`` is a list of substring patterns; any URL containing one of
+    them is filtered out. Matching is case-sensitive against the full URL.
     """
     if limit <= 0:
         return
@@ -93,6 +97,7 @@ def map_site(
     sources = {"sitemap", "feeds", "spider"} if source == "all" else {source}
     seen: set[str] = set()
     emitted = 0
+    patterns = tuple(p for p in (exclude or ()) if p)
 
     streams: list[Iterator[dict[str, Any]]] = []
     if "sitemap" in sources:
@@ -108,6 +113,8 @@ def map_site(
             if not u or u in seen:
                 continue
             seen.add(u)
+            if patterns and any(p in u for p in patterns):
+                continue
             yield record
             emitted += 1
             if emitted >= limit:

@@ -28,9 +28,7 @@ def test_cloudflare_challenge_at_200_is_blocked_cloudflare() -> None:
 
 def test_paywall_soft_at_200_is_soft_with_partial() -> None:
     html = _load("paywall_soft.html")
-    assert (
-        classify(200, html, {}) == FailureReason.PAYWALL_SOFT_WITH_PARTIAL
-    )
+    assert classify(200, html, {}) == FailureReason.PAYWALL_SOFT_WITH_PARTIAL
 
 
 def test_paywall_hard_at_200_is_hard() -> None:
@@ -56,8 +54,8 @@ def test_login_form_at_401_is_login_required() -> None:
     html = (
         "<html><body>"
         '<form action="/login" method="post">'
-        "  <label>Email</label><input name=\"email\" />"
-        "  <label>Password</label><input name=\"password\" type=\"password\" />"
+        '  <label>Email</label><input name="email" />'
+        '  <label>Password</label><input name="password" type="password" />'
         "  <button>Log in</button>"
         "</form>"
         "</body></html>"
@@ -80,16 +78,16 @@ def test_grecaptcha_at_200_is_blocked_captcha() -> None:
 
 
 def test_status_zero_dns_hint_maps_to_dns_fail() -> None:
-    assert (
-        classify(0, "", {"_failure_hint": "dns_fail"})
-        == FailureReason.DNS_FAIL
-    )
+    assert classify(0, "", {"_failure_hint": "dns_fail"}) == FailureReason.DNS_FAIL
 
 
 def test_status_zero_timeout_hint_maps_to_timeout() -> None:
+    assert classify(0, "", {"_failure_hint": "timeout"}) == FailureReason.TIMEOUT
+
+
+def test_status_zero_bot_blocked_hint_maps_to_blocked_bot() -> None:
     assert (
-        classify(0, "", {"_failure_hint": "timeout"})
-        == FailureReason.TIMEOUT
+        classify(0, "", {"_failure_hint": "bot_blocked"}) == FailureReason.BLOCKED_BOT
     )
 
 

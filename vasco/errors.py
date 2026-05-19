@@ -7,6 +7,7 @@ class FailureReason(StrEnum):
     OK = "ok"
     BLOCKED_CLOUDFLARE = "blocked_cloudflare"
     BLOCKED_CAPTCHA = "blocked_captcha"
+    BLOCKED_BOT = "blocked_bot"
     PAYWALL_HARD = "paywall_hard"
     PAYWALL_SOFT_WITH_PARTIAL = "paywall_soft_with_partial"
     LOGIN_REQUIRED = "login_required"

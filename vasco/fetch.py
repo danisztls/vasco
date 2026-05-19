@@ -90,6 +90,30 @@ async def _http_fetch(
         return "", 0, {"_failure_hint": "dns_fail"}
 
 
+_BROWSER_DISCONNECT_MARKERS: tuple[str, ...] = (
+    "connection closed",
+    "target closed",
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "page.content",
+    "page.goto",
+    "net::err_aborted",
+    "net::err_http2_protocol_error",
+    "econnreset",
+)
+
+
+def _looks_like_bot_block(exc: BaseException) -> bool:
+    """Heuristic: did Camoufox lose the page mid-load?
+
+    Playwright surfaces anti-bot tear-downs as connection/target-closed errors
+    rather than HTTP statuses, so a transport exception during browser fetch is
+    far more likely bot detection than a true network failure.
+    """
+    msg = str(exc).lower()
+    return any(m in msg for m in _BROWSER_DISCONNECT_MARKERS)
+
+
 async def _browser_fetch(
     url: str,
     *,
@@ -102,6 +126,10 @@ async def _browser_fetch(
         return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
     except asyncio.TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
+    except Exception as exc:
+        if _looks_like_bot_block(exc):
+            return "", 0, {"_failure_hint": "bot_blocked"}
+        raise
 
 
 def _parse_retry_after(headers: dict[str, str] | None) -> int | None:
@@ -285,12 +313,12 @@ async def _do_fetch_html(
     cache: Any | None,
     cfg: Any | None,
 ) -> tuple[
-    str,             # html
-    int,             # status
+    str,  # html
+    int,  # status
     dict[str, str],  # headers
-    FailureReason,   # final reason
-    str,             # final mode_used
-    bool,            # browser_started (so caller can close)
+    FailureReason,  # final reason
+    str,  # final mode_used
+    bool,  # browser_started (so caller can close)
 ]:
     """Execute the auto-mode escalation; returns the terminal result."""
     domain = _registered_domain(url)
@@ -315,9 +343,7 @@ async def _do_fetch_html(
         reason = bot_detect.classify(status, html, headers)
         if cache is not None and hasattr(cache, "bump"):
             try:
-                cache.bump(
-                    domain, mode="browser", success=(reason == FailureReason.OK)
-                )
+                cache.bump(domain, mode="browser", success=(reason == FailureReason.OK))
             except Exception:
                 pass
         return html, status, headers, reason, "browser", browser_started
@@ -370,9 +396,7 @@ async def _do_fetch_html(
     if cache is not None and hasattr(cache, "bump"):
         # Attribute the bump to the tier that actually produced this outcome.
         try:
-            cache.bump(
-                domain, mode="browser", success=(b_reason == FailureReason.OK)
-            )
+            cache.bump(domain, mode="browser", success=(b_reason == FailureReason.OK))
         except Exception:
             pass
     return b_html, b_status, b_headers, b_reason, "browser", browser_started

@@ -56,7 +56,9 @@ class FakeCache:
         return self.store.get(url)
 
     def put(self, envelope: dict, *, ttl_seconds: int) -> None:
-        self.store[envelope.get("url_canonical") or envelope["url_requested"]] = envelope
+        self.store[envelope.get("url_canonical") or envelope["url_requested"]] = (
+            envelope
+        )
 
     def get_domain_strategy(self, domain: str) -> str | None:
         return self.preferred
@@ -126,9 +128,7 @@ def test_unknown_domain_http_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert env["mode_used"] == "http"
     assert "failure" not in env
-    assert cache.bumps == [
-        {"domain": "example.com", "mode": "http", "success": True}
-    ]
+    assert cache.bumps == [{"domain": "example.com", "mode": "http", "success": True}]
 
 
 def test_http_cloudflare_escalates_to_browser_ok(
@@ -137,9 +137,7 @@ def test_http_cloudflare_escalates_to_browser_ok(
     """Case 2: http → CF block → browser succeeds. mode_used=browser, bump browser/True."""
     cache = FakeCache()
     monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(
-        fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200)
-    )
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -171,9 +169,7 @@ def test_preferred_browser_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
         return "", 0, {}
 
     monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
-    monkeypatch.setattr(
-        fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200)
-    )
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -234,6 +230,71 @@ def test_deadline_exceeded_before_escalation(
     assert browser_called == []
 
 
+def test_browser_disconnect_classified_as_blocked_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Playwright-style disconnect during browser fetch → BLOCKED_BOT (not SERVER_ERROR)."""
+    cache = FakeCache(strategy="browser")
+
+    class _DisconnectingPool:
+        async def fetch(self, *a: Any, **kw: Any) -> tuple[str, int, dict[str, str]]:
+            raise RuntimeError(
+                "Page.content: Connection closed while reading from the driver"
+            )
+
+        async def close(self) -> None:
+            return None
+
+    from vasco import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(
+        browser_mod, "get_browser", lambda cfg=None: _DisconnectingPool()
+    )
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://anti-bot.example.com/x",
+            cache=cache,
+            use_cache=False,
+            deadline=10.0,
+        )
+    )
+    assert "failure" in env
+    assert env["failure"]["reason"] == FailureReason.BLOCKED_BOT.value
+    assert env["mode_used"] == "browser"
+
+
+def test_browser_unknown_exception_propagates_to_server_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecognized browser-tier exception falls through to SERVER_ERROR, not BLOCKED_BOT."""
+    cache = FakeCache(strategy="browser")
+
+    class _BoomPool:
+        async def fetch(self, *a: Any, **kw: Any) -> tuple[str, int, dict[str, str]]:
+            raise RuntimeError("totally unexpected internal error")
+
+        async def close(self) -> None:
+            return None
+
+    from vasco import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _BoomPool())
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://chaos.example.com/x",
+            cache=cache,
+            use_cache=False,
+            deadline=10.0,
+        )
+    )
+    assert "failure" in env
+    assert env["failure"]["reason"] == FailureReason.SERVER_ERROR.value
+
+
 def test_both_tiers_fail_returns_browser_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -253,9 +314,7 @@ def test_both_tiers_fail_returns_browser_reason(
         )
     )
     assert "failure" in env
-    assert (
-        env["failure"]["reason"] == FailureReason.BLOCKED_CLOUDFLARE.value
-    )
+    assert env["failure"]["reason"] == FailureReason.BLOCKED_CLOUDFLARE.value
     assert env["mode_used"] == "browser"
     # cache.bump was called twice: once after http (success=False), once after
     # browser (success=False).

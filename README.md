@@ -24,6 +24,7 @@ vasco fetch     <url...> [--mode auto|http|browser] [--workers 4]
                           [--json | --concat]
 vasco extract   <url>     --query "..." [--top 5] [--context-chars 400]
 vasco map       <url>     [--source sitemap|feeds|spider|all] [--limit 1000]
+                          [--exclude SUBSTR]...
 vasco normalize <url>
 vasco cache     list | purge [--older-than 7d] | stats
 ```
@@ -51,8 +52,9 @@ uv run vasco fetch https://arxiv.org/pdf/2410.10934.pdf | jq '.mode_used, .word_
 uv run vasco extract https://en.wikipedia.org/wiki/Device_fingerprint \
   --query "canvas font fingerprinting" --top 3
 
-# Map discovers URLs on a site
-uv run vasco map https://adrien.barbaresi.eu --source sitemap --limit 50
+# Map discovers URLs on a site; --exclude drops noise paths
+uv run vasco map https://adrien.barbaresi.eu --source sitemap --limit 50 \
+  --exclude /tag/ --exclude /author/
 
 # URL normalization is exposed (and used as the cache key)
 uv run vasco normalize "https://Example.COM:443/foo/?utm_source=x&b=2&a=1#frag"
@@ -99,7 +101,9 @@ Failures replace the success-only fields with a typed `failure` object:
 }
 ```
 
-`reason` is a closed enum: `ok`, `blocked_cloudflare`, `blocked_captcha`, `paywall_hard`, `paywall_soft_with_partial`, `login_required`, `not_found`, `server_error`, `timeout`, `deadline_exceeded`, `js_app_needs_interaction`, `dns_fail`, `robots_disallow`, `unsupported_content_type`, `invalid_url`.
+`reason` is a closed enum: `ok`, `blocked_cloudflare`, `blocked_captcha`, `blocked_bot`, `paywall_hard`, `paywall_soft_with_partial`, `login_required`, `not_found`, `server_error`, `timeout`, `deadline_exceeded`, `js_app_needs_interaction`, `dns_fail`, `robots_disallow`, `unsupported_content_type`, `invalid_url`.
+
+`blocked_bot` covers anti-bot tear-downs at the browser tier — the page killed the Playwright session before content could be read (e.g. *"Page.content: Connection closed while reading from the driver"*). Distinct from `blocked_cloudflare`, which requires a visible CF challenge body.
 
 ## Config
 
@@ -126,6 +130,11 @@ locale   = "en-US"
 Precedence: CLI flag > `VASCO_*` env var > config file > default. Example: `VASCO_FETCH_WORKERS=8` overrides `fetch.workers`.
 
 Cache lives at `$XDG_CACHE_HOME/vasco/cache.db` (default `~/.cache/vasco/cache.db`).
+
+## Known limitations
+
+- **Tables rendered via MathJax / CSS come out hollow.** Pages like the arXiv HTML view encode numeric cells through scripts that trafilatura (and most plain-HTML extractors) strip. Prose around the table survives intact; the table itself becomes a markdown skeleton with empty data cells. Workaround for now: read the surrounding paragraphs, or fetch the PDF version (`https://arxiv.org/pdf/...`) which preserves tabular data via `pdftotext`.
+- **Large pages may overflow downstream context windows.** A 10k-word article can yield ~80 KB of markdown. Consumers running into per-tool-output caps should call `extract` for query-targeted passages, or pass `metadata_only=true` to the MCP `fetch` / `fetch_many` tools to get the envelope without the `markdown` field.
 
 ## Status
 

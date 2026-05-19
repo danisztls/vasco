@@ -47,13 +47,16 @@ def parse_duration(text: str) -> float:
         raise typer.BadParameter(f"invalid duration: {text!r}")
     value = float(match.group(1))
     unit = (match.group(2) or "s").lower()
-    return value * {
-        "ms": 0.001,
-        "s": 1.0,
-        "m": 60.0,
-        "h": 3600.0,
-        "d": 86400.0,
-    }[unit]
+    return (
+        value
+        * {
+            "ms": 0.001,
+            "s": 1.0,
+            "m": 60.0,
+            "h": 3600.0,
+            "d": 86400.0,
+        }[unit]
+    )
 
 
 def _result_to_dict(result: Any) -> dict[str, Any]:
@@ -164,12 +167,24 @@ def fetch(
     urls: Annotated[list[str], typer.Argument(help="One or more URLs to fetch.")],
     mode: Annotated[str, typer.Option(help="Fetch mode: auto|http|browser.")] = "auto",
     workers: Annotated[int | None, typer.Option(help="Concurrent fetches.")] = None,
-    no_cache: Annotated[bool, typer.Option("--no-cache", help="Skip cache reads and writes.")] = False,
-    refresh: Annotated[bool, typer.Option("--refresh", help="Ignore cache on read; still write.")] = False,
-    deadline: Annotated[str | None, typer.Option(help="Deadline e.g. 15s, 1m, 1500ms.")] = None,
-    raw: Annotated[bool, typer.Option("--raw", help="Return raw HTML alongside markdown.")] = False,
-    json_: Annotated[bool, typer.Option("--json", help="Force JSON output for single URL.")] = False,
-    concat: Annotated[bool, typer.Option("--concat", help="Concatenate markdown for multi-URL.")] = False,
+    no_cache: Annotated[
+        bool, typer.Option("--no-cache", help="Skip cache reads and writes.")
+    ] = False,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Ignore cache on read; still write.")
+    ] = False,
+    deadline: Annotated[
+        str | None, typer.Option(help="Deadline e.g. 15s, 1m, 1500ms.")
+    ] = None,
+    raw: Annotated[
+        bool, typer.Option("--raw", help="Return raw HTML alongside markdown.")
+    ] = False,
+    json_: Annotated[
+        bool, typer.Option("--json", help="Force JSON output for single URL.")
+    ] = False,
+    concat: Annotated[
+        bool, typer.Option("--concat", help="Concatenate markdown for multi-URL.")
+    ] = False,
 ) -> None:
     """Fetch one or more URLs and emit envelopes."""
     cfg = _config.load_config()
@@ -229,11 +244,17 @@ def fetch(
 @app.command()
 def extract(
     url: Annotated[str, typer.Argument(help="URL to extract from.")],
-    query: Annotated[str, typer.Option("--query", help="Query for passage ranking.")] = ...,
+    query: Annotated[
+        str, typer.Option("--query", help="Query for passage ranking.")
+    ] = ...,
     top: Annotated[int, typer.Option(help="Top K passages to return.")] = 5,
-    context_chars: Annotated[int, typer.Option(help="Context chars around each passage.")] = 400,
+    context_chars: Annotated[
+        int, typer.Option(help="Context chars around each passage.")
+    ] = 400,
     mode: Annotated[str, typer.Option(help="Fetch mode: auto|http|browser.")] = "auto",
-    rank: Annotated[str, typer.Option("--rank", help="Ranking: bm25|semantic.")] = "bm25",
+    rank: Annotated[
+        str, typer.Option("--rank", help="Ranking: bm25|semantic.")
+    ] = "bm25",
     deadline: Annotated[str | None, typer.Option(help="Deadline e.g. 15s, 1m.")] = None,
 ) -> None:
     """Fetch a URL and print ranked passages as pretty JSON."""
@@ -281,9 +302,16 @@ def map_(
     url: Annotated[str, typer.Argument(help="Root URL of the site.")],
     source: Annotated[str, typer.Option(help="sitemap|feeds|spider|all.")] = "all",
     limit: Annotated[int, typer.Option(help="Maximum URLs to emit.")] = 1000,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude",
+            help="Substring(s) to filter out (repeatable). E.g. --exclude /team/ --exclude /tag/.",
+        ),
+    ] = None,
 ) -> None:
     """Discover URLs on a site and stream NDJSON records."""
-    for record in _map.map_site(url, source=source, limit=limit):
+    for record in _map.map_site(url, source=source, limit=limit, exclude=exclude):
         _io.write_ndjson(record)
         sys.stdout.flush()
 
@@ -304,7 +332,9 @@ def normalize(url: Annotated[str, typer.Argument(help="URL to canonicalize.")]) 
 # ---------------------------------------------------------------------------
 
 
-cache_app = typer.Typer(no_args_is_help=True, help="Inspect and manage the fetch cache.")
+cache_app = typer.Typer(
+    no_args_is_help=True, help="Inspect and manage the fetch cache."
+)
 app.add_typer(cache_app, name="cache")
 
 

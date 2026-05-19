@@ -94,12 +94,19 @@ async def search(
     ]
 
 
+def _strip_markdown(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Drop the large `markdown` field for triage-only callers."""
+    return {k: v for k, v in envelope.items() if k != "markdown"}
+
+
 @server.tool(
     description=(
         "Fetch a single URL and return its envelope: clean Markdown plus "
         "metadata (title, byline, published, word_count, links, etc.) or a "
         "typed failure object. YouTube URLs return a transcript; PDFs are "
-        "rendered to text."
+        "rendered to text. Set metadata_only=true to omit the `markdown` "
+        "field (useful when triaging many URLs before deciding what to read "
+        "in full)."
     ),
 )
 async def fetch(
@@ -108,8 +115,9 @@ async def fetch(
     deadline: float = 15.0,
     refresh: bool = False,
     raw: bool = False,
+    metadata_only: bool = False,
 ) -> dict[str, Any]:
-    return await _fetch.fetch_one(
+    envelope = await _fetch.fetch_one(
         url,
         mode=mode,
         deadline=deadline,
@@ -118,13 +126,18 @@ async def fetch(
         cache=_cache,
         cfg=_cfg,
     )
+    if metadata_only:
+        return _strip_markdown(envelope)
+    return envelope
 
 
 @server.tool(
     description=(
         "Fetch many URLs concurrently. Returns a list of envelopes (one per "
         "URL, NOT necessarily in input order). Reuses one browser instance "
-        "across the batch."
+        "across the batch. Set metadata_only=true to omit the `markdown` "
+        "field on every envelope — recommended for large batches where you "
+        "intend to triage first and refetch full content selectively."
     ),
 )
 async def fetch_many(
@@ -133,6 +146,7 @@ async def fetch_many(
     mode: str = "auto",
     deadline: float = 15.0,
     refresh: bool = False,
+    metadata_only: bool = False,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     async for env in _fetch.fetch_many(
@@ -144,7 +158,7 @@ async def fetch_many(
         cache=_cache,
         cfg=_cfg,
     ):
-        results.append(env)
+        results.append(_strip_markdown(env) if metadata_only else env)
     return results
 
 
@@ -182,18 +196,23 @@ async def extract(
     name="map",
     description=(
         "Discover URLs on a site via sitemap, feeds, or a shallow spider. "
-        "Returns a list of {url, source, lastmod} records."
+        "Returns a list of {url, source, lastmod} records. Pass `exclude` "
+        "as a list of substrings (e.g. ['/team/', '/tag/']) to filter out "
+        "noise paths like author bios or tag indices."
     ),
 )
 async def map_site(
     url: str,
     source: str = "all",
     limit: int = 1000,
+    exclude: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     # trafilatura does synchronous HTTP; offload to a thread so a slow
     # sitemap fetch doesn't block other in-flight MCP tool calls.
     return await asyncio.to_thread(
-        lambda: list(_map_mod.map_site(url, source=source, limit=limit))
+        lambda: list(
+            _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
+        )
     )
 
 

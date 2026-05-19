@@ -55,7 +55,7 @@ _PAYWALL_MARKERS: tuple[str, ...] = (
     "members only",
     'class="paywall"',
     "class='paywall'",
-    "id=\"paywall",
+    'id="paywall',
     "id='paywall",
     "data-paywall",
 )
@@ -114,15 +114,15 @@ def classify(
     body_lc = body.lower()
 
     # Normalize headers to a case-insensitive view (lowercase keys).
-    hdr_lc: dict[str, str] = {
-        str(k).lower(): str(v) for k, v in headers.items()
-    }
+    hdr_lc: dict[str, str] = {str(k).lower(): str(v) for k, v in headers.items()}
 
     # --- Sentinel statuses for connection-layer failures ----------------------
     if status == 0:
         hint = hdr_lc.get("_failure_hint", "").lower()
         if hint == "timeout":
             return FailureReason.TIMEOUT
+        if hint == "bot_blocked":
+            return FailureReason.BLOCKED_BOT
         if hint == "dns_fail":
             return FailureReason.DNS_FAIL
         # Default to DNS_FAIL when we got literally nothing.
@@ -159,10 +159,7 @@ def classify(
     # --- 2xx / 3xx: examine body ---------------------------------------------
     if 200 <= status < 400:
         # Cloudflare challenge served with a 200 status is common.
-        if (
-            _has_any(body_lc, _CLOUDFLARE_MARKERS)
-            or "cf-mitigated" in hdr_lc
-        ):
+        if _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc:
             return FailureReason.BLOCKED_CLOUDFLARE
 
         if _has_any(body_lc, _CAPTCHA_MARKERS):

@@ -61,3 +61,62 @@ def log_event(cfg: Any | None, event: dict[str, Any]) -> None:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         return
+
+
+# ---------------------------------------------------------------------------
+# Event-shape helpers
+#
+# Shared by `vasco.mcp` and `vasco.cli` so the JSONL schema stays identical
+# regardless of entry point. The summarizer (`vasco logs stats`) relies on a
+# consistent `outcome` discriminator: "ok" | "fail" | "exception" | "empty".
+# ---------------------------------------------------------------------------
+
+
+def record_success(cfg: Any | None, tool: str, **fields: Any) -> None:
+    payload: dict[str, Any] = {"tool": tool, "outcome": "ok"}
+    payload.update({k: v for k, v in fields.items() if v is not None})
+    log_event(cfg, payload)
+
+
+def record_failure(cfg: Any | None, tool: str, envelope: dict[str, Any]) -> None:
+    failure = envelope.get("failure") if isinstance(envelope, dict) else None
+    if not failure:
+        return
+    log_event(
+        cfg,
+        {
+            "tool": tool,
+            "outcome": "fail",
+            "url": envelope.get("url_requested"),
+            "failure_reason": failure.get("reason"),
+            "message": failure.get("message"),
+            "mode_used": envelope.get("mode_used"),
+            "http_status": envelope.get("http_status"),
+        },
+    )
+
+
+def record_exception(
+    cfg: Any | None, tool: str, exc: BaseException, **fields: Any
+) -> None:
+    log_event(
+        cfg,
+        {
+            "tool": tool,
+            "outcome": "exception",
+            "exception": f"{type(exc).__name__}: {exc}",
+            **fields,
+        },
+    )
+
+
+def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
+    """Standard success-event payload for fetch-shaped envelopes."""
+    return {
+        "url": env.get("url_requested"),
+        "mode_used": env.get("mode_used"),
+        "from_cache": bool(env.get("from_cache")),
+        "http_status": env.get("http_status"),
+        "word_count": env.get("word_count"),
+        "cache_age_seconds": env.get("cache_age_seconds"),
+    }

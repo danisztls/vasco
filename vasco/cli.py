@@ -5,6 +5,7 @@ import json
 import re
 import sys
 from dataclasses import asdict, is_dataclass
+from time import monotonic as _monotonic
 from typing import Annotated, Any
 
 import typer
@@ -14,8 +15,10 @@ from vasco import config as _config
 from vasco import extract as _extract
 from vasco import fetch as _fetch
 from vasco import io as _io
+from vasco import logstats as _logstats
 from vasco import map as _map
 from vasco import search as _search
+from vasco import telemetry as _telemetry
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -93,17 +96,35 @@ def search(
 ) -> None:
     """Query the web and stream title/url/snippet records."""
     cfg = _config.load_config()
-    searcher = _search.get_searcher(backend or cfg.search.default_backend, cfg=cfg)
-    kwargs: dict[str, Any] = {
-        "max_results": max_ if max_ is not None else cfg.search.max_results,
-        "region": region or cfg.search.region,
-    }
-    if time is not None:
-        kwargs["time"] = time
-    if site is not None:
-        kwargs["site"] = site
+    effective_backend = backend or cfg.search.default_backend
+    started = _monotonic()
+    try:
+        searcher = _search.get_searcher(effective_backend, cfg=cfg)
+        kwargs: dict[str, Any] = {
+            "max_results": max_ if max_ is not None else cfg.search.max_results,
+            "region": region or cfg.search.region,
+        }
+        if time is not None:
+            kwargs["time"] = time
+        if site is not None:
+            kwargs["site"] = site
 
-    results = list(searcher.search(query, **kwargs))
+        results = list(searcher.search(query, **kwargs))
+    except Exception as exc:
+        _telemetry.record_exception(
+            cfg, "search", exc, query=query, site=site, backend=effective_backend
+        )
+        raise
+    _telemetry.record_success(
+        cfg,
+        "search",
+        query=query,
+        backend=effective_backend,
+        site=site,
+        result_count=len(results),
+        duration_ms=int((_monotonic() - started) * 1000),
+    )
+
     rows = [_result_to_dict(r) for r in results]
 
     if json_:
@@ -149,6 +170,12 @@ async def _run_fetch_many(
         cache=cache,
         cfg=cfg,
     ):
+        if "failure" in env:
+            _telemetry.record_failure(cfg, "fetch_many", env)
+        else:
+            _telemetry.record_success(
+                cfg, "fetch_many", **_telemetry.fetch_success_fields(env)
+            )
         if concat:
             envelopes.append(env)
         else:
@@ -198,6 +225,7 @@ def fetch(
     try:
         if len(urls) == 1:
             url = urls[0]
+            started = _monotonic()
             env = asyncio.run(
                 _fetch.fetch_one(
                     url,
@@ -210,6 +238,16 @@ def fetch(
                     cfg=cfg,
                 )
             )
+            duration_ms = int((_monotonic() - started) * 1000)
+            if "failure" in env:
+                _telemetry.record_failure(cfg, "fetch", env)
+            else:
+                _telemetry.record_success(
+                    cfg,
+                    "fetch",
+                    duration_ms=duration_ms,
+                    **_telemetry.fetch_success_fields(env),
+                )
             if json_ or not _io.is_tty():
                 _io.write_json(env)
             else:
@@ -266,6 +304,7 @@ def extract(
     )
     cache = _open_cache(cfg)
     try:
+        started = _monotonic()
         try:
             result = asyncio.run(
                 _extract.extract(
@@ -285,7 +324,33 @@ def extract(
 
             if isinstance(exc, SemanticRankerUnavailable):
                 raise typer.BadParameter(str(exc)) from exc
+            _telemetry.record_exception(cfg, "extract", exc, url=url, query=query)
             raise
+        duration_ms = int((_monotonic() - started) * 1000)
+        passages = result.get("passages") if isinstance(result, dict) else None
+        if not passages:
+            _telemetry.log_event(
+                cfg,
+                {
+                    "tool": "extract",
+                    "outcome": "empty",
+                    "url": url,
+                    "query": query,
+                    "rank": rank,
+                    "empty_passages": True,
+                    "duration_ms": duration_ms,
+                },
+            )
+        else:
+            _telemetry.record_success(
+                cfg,
+                "extract",
+                url=url,
+                query=query,
+                rank=rank,
+                passage_count=len(passages),
+                duration_ms=duration_ms,
+            )
         json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
     finally:
@@ -311,9 +376,25 @@ def map_(
     ] = None,
 ) -> None:
     """Discover URLs on a site and stream NDJSON records."""
-    for record in _map.map_site(url, source=source, limit=limit, exclude=exclude):
-        _io.write_ndjson(record)
-        sys.stdout.flush()
+    cfg = _config.load_config()
+    started = _monotonic()
+    count = 0
+    try:
+        for record in _map.map_site(url, source=source, limit=limit, exclude=exclude):
+            _io.write_ndjson(record)
+            sys.stdout.flush()
+            count += 1
+    except Exception as exc:
+        _telemetry.record_exception(cfg, "map", exc, url=url, source=source)
+        raise
+    _telemetry.record_success(
+        cfg,
+        "map",
+        url=url,
+        source=source,
+        result_count=count,
+        duration_ms=int((_monotonic() - started) * 1000),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +460,30 @@ def cache_stats() -> None:
         sys.stdout.write("\n")
     finally:
         c.close()
+
+
+# ---------------------------------------------------------------------------
+# logs subcommands
+# ---------------------------------------------------------------------------
+
+
+logs_app = typer.Typer(
+    no_args_is_help=True, help="Inspect the telemetry event log."
+)
+app.add_typer(logs_app, name="logs")
+
+
+@logs_app.command("stats")
+def logs_stats(
+    days: Annotated[
+        int, typer.Option("--days", help="Days of history to include (default 1).")
+    ] = 1,
+) -> None:
+    """Print a rollup of telemetry events as JSON."""
+    cfg = _config.load_config()
+    summary = _logstats.summarize(cfg, days=days)
+    json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
 
 
 # ---------------------------------------------------------------------------

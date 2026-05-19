@@ -261,14 +261,21 @@ async def test_fetch_failure_logs_telemetry(
 
 
 @pytest.mark.asyncio
-async def test_fetch_success_does_not_log(
+async def test_fetch_success_logs_telemetry(
     patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from vasco import fetch as _fetch
     from vasco import telemetry as _telemetry
 
     async def fake_fetch_one(url: str, **kwargs: Any) -> dict[str, Any]:
-        return {"url_requested": url, "mode_used": "http", "markdown": "ok"}
+        return {
+            "url_requested": url,
+            "mode_used": "http",
+            "http_status": 200,
+            "word_count": 42,
+            "from_cache": False,
+            "markdown": "ok",
+        }
 
     monkeypatch.setattr(_fetch, "fetch_one", fake_fetch_one)
 
@@ -278,7 +285,102 @@ async def test_fetch_success_does_not_log(
     )
 
     await mcp_mod.server.call_tool("fetch", {"url": "https://ok.test"})
-    assert captured == []
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["tool"] == "fetch"
+    assert event["outcome"] == "ok"
+    assert event["url"] == "https://ok.test"
+    assert event["mode_used"] == "http"
+    assert event["http_status"] == 200
+    assert event["word_count"] == 42
+    assert event["from_cache"] is False
+    assert "duration_ms" in event
+
+
+@pytest.mark.asyncio
+async def test_search_success_logs_telemetry(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import search as _search
+    from vasco import telemetry as _telemetry
+
+    class _StubSearcher:
+        def search(self, query: str, **kwargs: Any) -> list[_search.SearchResult]:
+            return [
+                _search.SearchResult(title="T", url="https://x", snippet="s"),
+                _search.SearchResult(title="U", url="https://y", snippet="t"),
+            ]
+
+    monkeypatch.setattr(_search, "get_searcher", lambda *a, **kw: _StubSearcher())
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("search", {"query": "foo", "max_results": 2})
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["tool"] == "search"
+    assert event["outcome"] == "ok"
+    assert event["query"] == "foo"
+    assert event["result_count"] == 2
+    assert "duration_ms" in event
+
+
+@pytest.mark.asyncio
+async def test_map_success_logs_telemetry(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import map as _map_mod
+    from vasco import telemetry as _telemetry
+
+    monkeypatch.setattr(
+        _map_mod,
+        "map_site",
+        lambda *a, **kw: iter(
+            [{"url": "https://x/a", "source": "sitemap", "lastmod": None}]
+        ),
+    )
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("map", {"url": "https://x"})
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["tool"] == "map"
+    assert event["outcome"] == "ok"
+    assert event["url"] == "https://x"
+    assert event["result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_success_logs_telemetry(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import extract as _extract
+    from vasco import telemetry as _telemetry
+
+    async def fake_extract(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {"url": url, "passages": [{"text": "a"}, {"text": "b"}]}
+
+    monkeypatch.setattr(_extract, "extract", fake_extract)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("extract", {"url": "https://x", "query": "q"})
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["tool"] == "extract"
+    assert event["outcome"] == "ok"
+    assert event["passage_count"] == 2
+    assert event["rank"] == "bm25"
 
 
 @pytest.mark.asyncio

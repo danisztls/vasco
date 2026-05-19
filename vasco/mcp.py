@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from time import monotonic as _monotonic
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -86,11 +87,12 @@ async def search(
     backend: str | None = None,
 ) -> list[dict[str, str]]:
     assert _cfg is not None  # populated by lifespan before tools run
+    started = _monotonic()
     try:
         searcher = _search.get_searcher(
             backend or _cfg.search.default_backend, cfg=_cfg
         )
-        return [
+        rows = [
             {"title": r.title, "url": r.url, "snippet": r.snippet}
             for r in searcher.search(
                 query, max_results=max_results, region=region, time=time, site=site
@@ -99,6 +101,15 @@ async def search(
     except Exception as exc:
         _record_exception("search", exc, query=query, site=site, backend=backend)
         raise
+    _record_success(
+        "search",
+        query=query,
+        backend=backend or _cfg.search.default_backend,
+        site=site,
+        result_count=len(rows),
+        duration_ms=int((_monotonic() - started) * 1000),
+    )
+    return rows
 
 
 def _strip_markdown(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -107,33 +118,19 @@ def _strip_markdown(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def _record_failure(tool: str, envelope: dict[str, Any]) -> None:
-    """Emit a telemetry event if the envelope carries a typed failure."""
-    failure = envelope.get("failure") if isinstance(envelope, dict) else None
-    if not failure:
-        return
-    _telemetry.log_event(
-        _cfg,
-        {
-            "tool": tool,
-            "url": envelope.get("url_requested"),
-            "failure_reason": failure.get("reason"),
-            "message": failure.get("message"),
-            "mode_used": envelope.get("mode_used"),
-            "http_status": envelope.get("http_status"),
-        },
-    )
+    _telemetry.record_failure(_cfg, tool, envelope)
 
 
 def _record_exception(tool: str, exc: BaseException, **fields: Any) -> None:
-    """Emit a telemetry event for an uncaught tool-level exception."""
-    _telemetry.log_event(
-        _cfg,
-        {
-            "tool": tool,
-            "exception": f"{type(exc).__name__}: {exc}",
-            **fields,
-        },
-    )
+    _telemetry.record_exception(_cfg, tool, exc, **fields)
+
+
+def _record_success(tool: str, **fields: Any) -> None:
+    _telemetry.record_success(_cfg, tool, **fields)
+
+
+def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
+    return _telemetry.fetch_success_fields(env)
 
 
 @server.tool(
@@ -154,6 +151,7 @@ async def fetch(
     raw: bool = False,
     metadata_only: bool = False,
 ) -> dict[str, Any]:
+    started = _monotonic()
     envelope = await _fetch.fetch_one(
         url,
         mode=mode,
@@ -163,7 +161,13 @@ async def fetch(
         cache=_cache,
         cfg=_cfg,
     )
-    _record_failure("fetch", envelope)
+    duration_ms = int((_monotonic() - started) * 1000)
+    if "failure" in envelope:
+        _record_failure("fetch", envelope)
+    else:
+        _record_success(
+            "fetch", duration_ms=duration_ms, **_fetch_success_fields(envelope)
+        )
     if metadata_only:
         return _strip_markdown(envelope)
     return envelope
@@ -196,7 +200,10 @@ async def fetch_many(
         cache=_cache,
         cfg=_cfg,
     ):
-        _record_failure("fetch_many", env)
+        if "failure" in env:
+            _record_failure("fetch_many", env)
+        else:
+            _record_success("fetch_many", **_fetch_success_fields(env))
         results.append(_strip_markdown(env) if metadata_only else env)
     return results
 
@@ -218,6 +225,7 @@ async def extract(
     rank: str = "bm25",
     deadline: float = 15.0,
 ) -> dict[str, Any]:
+    started = _monotonic()
     try:
         result = await _extract_mod.extract(
             url,
@@ -233,18 +241,31 @@ async def extract(
     except Exception as exc:
         _record_exception("extract", exc, url=url, query=query)
         raise
-    # No typed-failure envelope here; an empty `passages` list is a legitimate
-    # outcome (no BM25 match), not a failure. Log it so we can distinguish
-    # "query was off" from "fetch silently broke" later.
-    if isinstance(result, dict) and not result.get("passages"):
+    duration_ms = int((_monotonic() - started) * 1000)
+    # An empty `passages` list is a legitimate outcome (no BM25 match), not a
+    # failure. Logging it distinguishes "query was off" from "fetch silently broke".
+    passages = result.get("passages") if isinstance(result, dict) else None
+    if not passages:
         _telemetry.log_event(
             _cfg,
             {
                 "tool": "extract",
+                "outcome": "empty",
                 "url": url,
                 "query": query,
+                "rank": rank,
                 "empty_passages": True,
+                "duration_ms": duration_ms,
             },
+        )
+    else:
+        _record_success(
+            "extract",
+            url=url,
+            query=query,
+            rank=rank,
+            passage_count=len(passages),
+            duration_ms=duration_ms,
         )
     return result
 
@@ -266,8 +287,9 @@ async def map_site(
 ) -> list[dict[str, Any]]:
     # trafilatura does synchronous HTTP; offload to a thread so a slow
     # sitemap fetch doesn't block other in-flight MCP tool calls.
+    started = _monotonic()
     try:
-        return await asyncio.to_thread(
+        results = await asyncio.to_thread(
             lambda: list(
                 _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
             )
@@ -275,6 +297,14 @@ async def map_site(
     except Exception as exc:
         _record_exception("map", exc, url=url, source=source)
         raise
+    _record_success(
+        "map",
+        url=url,
+        source=source,
+        result_count=len(results),
+        duration_ms=int((_monotonic() - started) * 1000),
+    )
+    return results
 
 
 # ---------------------------------------------------------------------------

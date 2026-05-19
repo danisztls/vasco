@@ -1,5 +1,5 @@
-"""MCP server for Vasco — exposes search, fetch, fetch_many, extract, map,
-normalize over stdio.
+"""MCP server for Vasco — exposes search, fetch, fetch_many, extract, map
+over stdio.
 
 Designed for long-lived processes (Claude Desktop, Claude Code): the
 ``BrowserPool`` singleton stays warm across calls and the semantic ranker
@@ -195,17 +195,6 @@ async def map_site(
     return await asyncio.to_thread(
         lambda: list(_map_mod.map_site(url, source=source, limit=limit))
     )
-
-
-@server.tool(
-    description=(
-        "Return the canonical (cache-key) form of a URL: lowercase host, "
-        "sorted query params, tracking params dropped, youtu.be upgraded to "
-        "youtube.com."
-    ),
-)
-def normalize(url: str) -> str:
-    return _cache_mod.normalize_url(url)
 
 
 # ---------------------------------------------------------------------------

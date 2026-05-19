@@ -17,7 +17,7 @@ from vasco import mcp as mcp_mod
 from vasco import config as _config
 
 
-EXPECTED_TOOL_NAMES = {"search", "fetch", "fetch_many", "extract", "map", "normalize"}
+EXPECTED_TOOL_NAMES = {"search", "fetch", "fetch_many", "extract", "map"}
 
 
 @pytest.mark.asyncio
@@ -44,17 +44,6 @@ def patched_cfg(monkeypatch: pytest.MonkeyPatch) -> _config.Config:
     monkeypatch.setattr(mcp_mod, "_cfg", cfg, raising=False)
     monkeypatch.setattr(mcp_mod, "_cache", None, raising=False)
     return cfg
-
-
-@pytest.mark.asyncio
-async def test_normalize_tool(patched_cfg: _config.Config) -> None:
-    result = await mcp_mod.server.call_tool(
-        "normalize", {"url": "https://Example.COM:443/foo?b=2&a=1"}
-    )
-    # FastMCP serializes scalar returns as TextContent. The structured_content
-    # key holds the typed value if available.
-    text = _text(result)
-    assert "https://example.com/foo?a=1&b=2" in text
 
 
 @pytest.mark.asyncio

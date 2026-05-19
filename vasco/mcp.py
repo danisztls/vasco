@@ -151,7 +151,6 @@ async def fetch(
     raw: bool = False,
     metadata_only: bool = False,
 ) -> dict[str, Any]:
-    started = _monotonic()
     envelope = await _fetch.fetch_one(
         url,
         mode=mode,
@@ -161,13 +160,10 @@ async def fetch(
         cache=_cache,
         cfg=_cfg,
     )
-    duration_ms = int((_monotonic() - started) * 1000)
     if "failure" in envelope:
         _record_failure("fetch", envelope)
     else:
-        _record_success(
-            "fetch", duration_ms=duration_ms, **_fetch_success_fields(envelope)
-        )
+        _record_success("fetch", **_fetch_success_fields(envelope))
     if metadata_only:
         return _strip_markdown(envelope)
     return envelope

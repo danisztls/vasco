@@ -82,18 +82,26 @@ def record_failure(cfg: Any | None, tool: str, envelope: dict[str, Any]) -> None
     failure = envelope.get("failure") if isinstance(envelope, dict) else None
     if not failure:
         return
-    log_event(
-        cfg,
-        {
-            "tool": tool,
-            "outcome": "fail",
-            "url": envelope.get("url_requested"),
-            "failure_reason": failure.get("reason"),
-            "message": failure.get("message"),
-            "mode_used": envelope.get("mode_used"),
-            "http_status": envelope.get("http_status"),
-        },
-    )
+    payload: dict[str, Any] = {
+        "tool": tool,
+        "outcome": "fail",
+        "url": envelope.get("url_requested"),
+        "failure_reason": failure.get("reason"),
+        "message": failure.get("message"),
+        "mode_used": envelope.get("mode_used"),
+        "http_status": envelope.get("http_status"),
+    }
+    for key in (
+        "duration_ms",
+        "network_ms",
+        "parse_ms",
+        "attempts",
+        "escalated_from",
+    ):
+        val = envelope.get(key)
+        if val is not None:
+            payload[key] = val
+    log_event(cfg, payload)
 
 
 def record_exception(
@@ -111,7 +119,12 @@ def record_exception(
 
 
 def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
-    """Standard success-event payload for fetch-shaped envelopes."""
+    """Standard success-event payload for fetch-shaped envelopes.
+
+    Includes phase timings (`network_ms`, `parse_ms`, `cache_write_ms`,
+    `attempts`, `escalated_from`) when present on the envelope, so a slow
+    fetch can be triaged from the log alone.
+    """
     return {
         "url": env.get("url_requested"),
         "mode_used": env.get("mode_used"),
@@ -119,4 +132,10 @@ def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
         "http_status": env.get("http_status"),
         "word_count": env.get("word_count"),
         "cache_age_seconds": env.get("cache_age_seconds"),
+        "duration_ms": env.get("duration_ms"),
+        "network_ms": env.get("network_ms"),
+        "parse_ms": env.get("parse_ms"),
+        "cache_write_ms": env.get("cache_write_ms"),
+        "attempts": env.get("attempts"),
+        "escalated_from": env.get("escalated_from"),
     }

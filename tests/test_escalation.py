@@ -352,3 +352,102 @@ def test_both_tiers_fail_returns_browser_reason(
     # browser (success=False).
     assert {b["mode"] for b in cache.bumps} <= {"http", "browser"}
     assert all(b["success"] is False for b in cache.bumps)
+
+
+# -----------------------------------------------------------------------------
+# Phase timing assertions (duration_ms / network_ms / parse_ms / attempts /
+# escalated_from). The fake http/browser helpers return immediately so the
+# wall-clock ms are tiny — we assert presence and structural relationships,
+# not absolute values.
+# -----------------------------------------------------------------------------
+
+
+def test_phase_timings_stamped_on_plain_http_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://example.com/article",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+
+    assert "failure" not in env
+    assert env["mode_used"] == "http"
+    # Phase fields are always stamped on a live fetch (zero ms means "fast",
+    # not "skipped"). They're omitted only on short-circuit paths.
+    assert isinstance(env["duration_ms"], int) and env["duration_ms"] >= 0
+    assert env["attempts"] == 1
+    assert isinstance(env["network_ms"], int)
+    assert isinstance(env["parse_ms"], int)
+    assert isinstance(env["cache_write_ms"], int)
+    # No escalation on a clean http success.
+    assert "escalated_from" not in env
+
+
+def test_phase_timings_record_escalation(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://blocked.example.com/page",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+
+    assert env["mode_used"] == "browser"
+    assert "failure" not in env
+    assert env["attempts"] == 2
+    assert env["escalated_from"] == "http"
+
+
+def test_cache_hit_envelope_omits_phase_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+
+    # First call: live fetch, populates cache.store.
+    first = run(
+        fetch_mod.fetch_one(
+            "https://example.com/article",
+            cache=cache,
+            use_cache=True,
+            deadline=30.0,
+        )
+    )
+    assert first["attempts"] == 1
+
+    # Second call: cache hit. Should carry duration_ms but none of the live-
+    # fetch phase fields, which describe how the entry was *originally*
+    # obtained and would be misleading on a cache hit. The real Cache.put
+    # doesn't persist phase columns at all; `_hydrate_cache_hit` also strips
+    # them defensively so this holds even with a dumb dict cache.
+    second = run(
+        fetch_mod.fetch_one(
+            "https://example.com/article",
+            cache=cache,
+            use_cache=True,
+            deadline=30.0,
+        )
+    )
+    assert second["from_cache"] is True
+    assert "duration_ms" in second
+    for absent in (
+        "network_ms",
+        "parse_ms",
+        "cache_write_ms",
+        "attempts",
+        "escalated_from",
+    ):
+        assert absent not in second, absent

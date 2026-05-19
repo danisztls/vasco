@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -34,6 +35,52 @@ BROWSER_MIN_BUDGET: float = 3.0
 
 # Default request timeout floor (seconds) for httpx within an outer deadline.
 _HTTP_TIMEOUT_FLOOR = 1.0
+
+
+@dataclass
+class _Phases:
+    """Accumulator threaded through a single fetch to break duration into parts.
+
+    Fields are stamped onto the success/failure envelope at the boundary of
+    `_fetch_one_inner` so callers (telemetry, tests) can distinguish a slow
+    network from a slow parse from a 2-attempt escalation.
+    """
+
+    network_ms: int = 0
+    parse_ms: int = 0
+    cache_write_ms: int = 0
+    attempts: int = 0
+    escalated_from: str | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+def _ms_since(monotonic_started: float) -> int:
+    return int((time.monotonic() - monotonic_started) * 1000)
+
+
+def _stamp_phases(
+    envelope: dict[str, Any],
+    *,
+    started_monotonic: float,
+    phases: _Phases | None,
+) -> dict[str, Any]:
+    """Write duration_ms + phase fields onto the envelope in place.
+
+    When `phases` is not None, all timing/attempt fields are stamped — even
+    when zero — so a value of 0 unambiguously means "this phase ran fast"
+    rather than "this phase was skipped." When `phases` is None (cache hit,
+    invalid URL, YouTube), only `duration_ms` is stamped.
+    """
+    envelope["duration_ms"] = _ms_since(started_monotonic)
+    if phases is None:
+        return envelope
+    envelope["network_ms"] = phases.network_ms
+    envelope["parse_ms"] = phases.parse_ms
+    envelope["cache_write_ms"] = phases.cache_write_ms
+    envelope["attempts"] = phases.attempts
+    if phases.escalated_from is not None:
+        envelope["escalated_from"] = phases.escalated_from
+    return envelope
 
 
 # ---------------------------------------------------------------------------
@@ -285,13 +332,27 @@ def _ttl_for(envelope: dict[str, Any], cfg: Any | None) -> int:
         return default
 
 
+_LIVE_FETCH_PHASE_KEYS = (
+    "duration_ms",
+    "network_ms",
+    "parse_ms",
+    "cache_write_ms",
+    "attempts",
+    "escalated_from",
+)
+
+
 def _hydrate_cache_hit(
     envelope: dict[str, Any], *, url_requested: str
 ) -> dict[str, Any]:
     """Mark a cached envelope as such, refresh cache_age, and restore the
     caller's original url_requested.
+
+    Live-fetch phase fields are stripped: they describe how the entry was
+    originally obtained and are misleading on a cache hit. The caller stamps
+    a fresh `duration_ms` for the cache-read path.
     """
-    env = dict(envelope)
+    env = {k: v for k, v in envelope.items() if k not in _LIVE_FETCH_PHASE_KEYS}
     fetched_at = int(env.get("fetched_at") or _now_epoch())
     env["from_cache"] = True
     env["cache_age_seconds"] = max(0, _now_epoch() - fetched_at)
@@ -312,6 +373,7 @@ async def _do_fetch_html(
     deadline_monotonic: float,
     cache: Any | None,
     cfg: Any | None,
+    phases: _Phases,
 ) -> tuple[
     str,  # html
     int,  # status
@@ -320,7 +382,12 @@ async def _do_fetch_html(
     str,  # final mode_used
     bool,  # browser_started (so caller can close)
 ]:
-    """Execute the auto-mode escalation; returns the terminal result."""
+    """Execute the auto-mode escalation; returns the terminal result.
+
+    Updates `phases` in place: bumps `attempts` for each network call,
+    accumulates `network_ms`, and records `escalated_from` if the http tier
+    was tried and then escalated to browser.
+    """
     domain = _registered_domain(url)
     strategy: str | None = None
     if cache is not None and hasattr(cache, "get_domain_strategy"):
@@ -336,9 +403,12 @@ async def _do_fetch_html(
     browser_started = False
 
     if effective_mode == "browser":
+        t0 = time.monotonic()
         html, status, headers = await _browser_fetch(
             url, deadline_monotonic=deadline_monotonic, cfg=cfg
         )
+        phases.network_ms += _ms_since(t0)
+        phases.attempts += 1
         browser_started = True
         reason = bot_detect.classify(status, html, headers)
         if cache is not None and hasattr(cache, "bump"):
@@ -349,9 +419,12 @@ async def _do_fetch_html(
         return html, status, headers, reason, "browser", browser_started
 
     # http tier (with optional escalation)
+    t0 = time.monotonic()
     html, status, headers = await _http_fetch(
         url, deadline_monotonic=deadline_monotonic, cfg=cfg
     )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
     reason = bot_detect.classify(status, html, headers)
 
     if reason == FailureReason.OK:
@@ -394,9 +467,13 @@ async def _do_fetch_html(
         )
 
     # Escalate to browser tier.
+    phases.escalated_from = "http"
+    t0 = time.monotonic()
     b_html, b_status, b_headers = await _browser_fetch(
         url, deadline_monotonic=deadline_monotonic, cfg=cfg
     )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
     browser_started = True
     b_reason = bot_detect.classify(b_status, b_html, b_headers)
     if cache is not None and hasattr(cache, "bump"):
@@ -419,6 +496,7 @@ async def _fetch_pdf(
     base: dict[str, Any],
     deadline_monotonic: float,
     cfg: Any | None,
+    phases: _Phases,
 ) -> dict[str, Any]:
     if httpx is None:
         return _failure_envelope(
@@ -435,6 +513,7 @@ async def _fetch_pdf(
             message="deadline elapsed before PDF download",
         )
 
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(
             http2=True,
@@ -446,26 +525,34 @@ async def _fetch_pdf(
             base["url_final"] = str(resp.url)
             base["http_status"] = int(resp.status_code)
     except Exception as exc:
+        phases.network_ms += _ms_since(t0)
+        phases.attempts += 1
         return _failure_envelope(
             base=base,
             reason=FailureReason.DNS_FAIL,
             message=f"pdf fetch error: {type(exc).__name__}",
         )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
 
+    t_parse = time.monotonic()
     try:
         text, meta = pdf.pdf_to_text(body)
     except FileNotFoundError as exc:
+        phases.parse_ms += _ms_since(t_parse)
         return _failure_envelope(
             base=base,
             reason=FailureReason.UNSUPPORTED_CONTENT_TYPE,
             message=str(exc),
         )
     except Exception as exc:
+        phases.parse_ms += _ms_since(t_parse)
         return _failure_envelope(
             base=base,
             reason=FailureReason.UNSUPPORTED_CONTENT_TYPE,
             message=f"pdf parse error: {type(exc).__name__}",
         )
+    phases.parse_ms += _ms_since(t_parse)
 
     base["content_type"] = "application/pdf"
     return _success_envelope(
@@ -492,6 +579,53 @@ async def _fetch_one_inner(
     Callers are responsible for browser-pool shutdown based on the
     browser_started flag (single fetch closes immediately; batch closes once
     after the whole batch).
+
+    Stamps the envelope with `duration_ms` (always) and — for fresh fetches
+    — the phase breakdown captured in `_Phases` (network/parse/cache_write
+    in ms, plus attempts and escalated_from). See `_stamp_phases`.
+    """
+    started = time.monotonic()
+    envelope, browser_started, phases = await _fetch_one_body(
+        url,
+        mode=mode,
+        deadline=deadline,
+        use_cache=use_cache,
+        refresh=refresh,
+        raw=raw,
+        cache=cache,
+        cfg=cfg,
+    )
+    _stamp_phases(envelope, started_monotonic=started, phases=phases)
+    return envelope, browser_started
+
+
+def _cache_put(
+    cache: Any, envelope: dict[str, Any], phases: _Phases, *, ttl_seconds: int
+) -> None:
+    """Time and execute a cache write. Failures are swallowed (best-effort)."""
+    t0 = time.monotonic()
+    try:
+        cache.put(envelope, ttl_seconds=ttl_seconds)
+    except Exception:
+        pass
+    phases.cache_write_ms += _ms_since(t0)
+
+
+async def _fetch_one_body(
+    url: str,
+    *,
+    mode: str,
+    deadline: float,
+    use_cache: bool,
+    refresh: bool,
+    raw: bool,
+    cache: Any | None,
+    cfg: Any | None,
+) -> tuple[dict[str, Any], bool, _Phases | None]:
+    """Full single-fetch state machine. Returns (envelope, browser_started, phases).
+
+    `phases` is None on short-circuit paths (invalid URL, cache hit, YouTube)
+    where the phase breakdown doesn't apply — only `duration_ms` is stamped.
     """
     normalized = _normalize_url(url, cache)
     if not normalized:
@@ -507,7 +641,7 @@ async def _fetch_one_inner(
             base=base,
             reason=FailureReason.INVALID_URL,
             message="URL could not be normalized",
-        ), False
+        ), False, None
 
     # --- Cache hit -----------------------------------------------------------
     if use_cache and not refresh and cache is not None:
@@ -516,9 +650,10 @@ async def _fetch_one_inner(
         except Exception:
             hit = None
         if hit is not None:
-            return _hydrate_cache_hit(hit, url_requested=url), False
+            return _hydrate_cache_hit(hit, url_requested=url), False, None
 
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+    phases = _Phases()
 
     # --- YouTube shortcut ---------------------------------------------------
     # YouTube transcripts have their own envelope shape (mode_used="youtube",
@@ -530,11 +665,8 @@ async def _fetch_one_inner(
         if raw:
             envelope.setdefault("warnings", []).append("raw_unsupported_for_youtube")
         if use_cache and cache is not None:
-            try:
-                cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-            except Exception:
-                pass
-        return envelope, False
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, False, phases
 
     base = _base_envelope(
         url_requested=url,
@@ -549,14 +681,15 @@ async def _fetch_one_inner(
     if _is_pdf(url, None):
         base["mode_used"] = "pdf"
         envelope = await _fetch_pdf(
-            url, base=base, deadline_monotonic=deadline_monotonic, cfg=cfg
+            url,
+            base=base,
+            deadline_monotonic=deadline_monotonic,
+            cfg=cfg,
+            phases=phases,
         )
         if use_cache and cache is not None:
-            try:
-                cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-            except Exception:
-                pass
-        return envelope, False
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, False, phases
 
     # --- HTML auto-mode escalation ------------------------------------------
     browser_started = False
@@ -575,6 +708,7 @@ async def _fetch_one_inner(
             deadline_monotonic=deadline_monotonic,
             cache=cache,
             cfg=cfg,
+            phases=phases,
         )
 
         base["http_status"] = int(status or 0)
@@ -591,13 +725,13 @@ async def _fetch_one_inner(
                 base=base,
                 deadline_monotonic=deadline_monotonic,
                 cfg=cfg,
+                phases=phases,
             )
             if use_cache and cache is not None:
-                try:
-                    cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-                except Exception:
-                    pass
-            return envelope, browser_started
+                _cache_put(
+                    cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
+                )
+            return envelope, browser_started, phases
 
         if reason != FailureReason.OK:
             envelope = _failure_envelope(
@@ -608,6 +742,7 @@ async def _fetch_one_inner(
                 partial_html=html if raw else None,
             )
             if not raw and html:
+                t_parse = time.monotonic()
                 try:
                     markdown, _meta = convert.html_to_markdown(
                         html, url=base["url_final"]
@@ -616,12 +751,12 @@ async def _fetch_one_inner(
                         envelope["markdown"] = markdown
                 except Exception:
                     pass
+                phases.parse_ms += _ms_since(t_parse)
             if use_cache and cache is not None:
-                try:
-                    cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-                except Exception:
-                    pass
-            return envelope, browser_started
+                _cache_put(
+                    cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
+                )
+            return envelope, browser_started, phases
 
         # Success path.
         if raw:
@@ -643,7 +778,9 @@ async def _fetch_one_inner(
                 token_count_estimate=io_mod.estimate_tokens(html or ""),
             )
         else:
+            t_parse = time.monotonic()
             markdown, meta = convert.html_to_markdown(html, url=base["url_final"])
+            phases.parse_ms += _ms_since(t_parse)
             envelope = _success_envelope(
                 base=base,
                 markdown=markdown,
@@ -652,11 +789,8 @@ async def _fetch_one_inner(
             )
 
         if use_cache and cache is not None:
-            try:
-                cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-            except Exception:
-                pass
-        return envelope, browser_started
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, browser_started, phases
     except Exception as exc:
         # Last-resort safety net: never raise out of fetch.
         envelope = _failure_envelope(
@@ -665,11 +799,8 @@ async def _fetch_one_inner(
             message=f"unhandled fetch error: {type(exc).__name__}: {exc}",
         )
         if use_cache and cache is not None:
-            try:
-                cache.put(envelope, ttl_seconds=_ttl_for(envelope, cfg))
-            except Exception:
-                pass
-        return envelope, browser_started
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, browser_started, phases
 
 
 # ---------------------------------------------------------------------------

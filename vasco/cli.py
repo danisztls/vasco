@@ -225,7 +225,6 @@ def fetch(
     try:
         if len(urls) == 1:
             url = urls[0]
-            started = _monotonic()
             env = asyncio.run(
                 _fetch.fetch_one(
                     url,
@@ -238,15 +237,11 @@ def fetch(
                     cfg=cfg,
                 )
             )
-            duration_ms = int((_monotonic() - started) * 1000)
             if "failure" in env:
                 _telemetry.record_failure(cfg, "fetch", env)
             else:
                 _telemetry.record_success(
-                    cfg,
-                    "fetch",
-                    duration_ms=duration_ms,
-                    **_telemetry.fetch_success_fields(env),
+                    cfg, "fetch", **_telemetry.fetch_success_fields(env)
                 )
             if json_ or not _io.is_tty():
                 _io.write_json(env)

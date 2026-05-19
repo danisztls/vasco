@@ -268,6 +268,7 @@ async def test_fetch_success_logs_telemetry(
     from vasco import telemetry as _telemetry
 
     async def fake_fetch_one(url: str, **kwargs: Any) -> dict[str, Any]:
+        # Mimic the shape stamped by _fetch._stamp_phases.
         return {
             "url_requested": url,
             "mode_used": "http",
@@ -275,6 +276,10 @@ async def test_fetch_success_logs_telemetry(
             "word_count": 42,
             "from_cache": False,
             "markdown": "ok",
+            "duration_ms": 123,
+            "network_ms": 90,
+            "parse_ms": 20,
+            "attempts": 1,
         }
 
     monkeypatch.setattr(_fetch, "fetch_one", fake_fetch_one)
@@ -294,7 +299,11 @@ async def test_fetch_success_logs_telemetry(
     assert event["http_status"] == 200
     assert event["word_count"] == 42
     assert event["from_cache"] is False
-    assert "duration_ms" in event
+    assert event["duration_ms"] == 123
+    assert event["network_ms"] == 90
+    assert event["parse_ms"] == 20
+    assert event["attempts"] == 1
+    assert "escalated_from" not in event  # only set on real escalation
 
 
 @pytest.mark.asyncio

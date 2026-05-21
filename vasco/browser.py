@@ -18,6 +18,14 @@ except Exception:  # pragma: no cover
     AsyncCamoufox = None  # type: ignore[assignment]
 
 
+_MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 "
+    "Mobile/15E148 Safari/604.1"
+)
+_MOBILE_VIEWPORT = {"width": 393, "height": 852}
+
+
 class BrowserPool:
     """Owns one Camoufox browser context for an invocation."""
 
@@ -45,12 +53,16 @@ class BrowserPool:
             self._browser = await self._cm.__aenter__()
 
     async def fetch(
-        self, url: str, *, deadline_monotonic: float
+        self, url: str, *, deadline_monotonic: float, mobile: bool = False
     ) -> tuple[str, int, dict[str, str]]:
         """Fetch a URL via the browser tier.
 
         Returns (html, status, headers). Raises asyncio.TimeoutError if the
         deadline has already passed.
+
+        When `mobile=True`, the page is created in a fresh context with iOS
+        Safari UA, mobile viewport, and touch — used as a recovery tier
+        when desktop Camoufox is blocked.
         """
         remaining = deadline_monotonic - time.monotonic()
         if remaining <= 0:
@@ -61,7 +73,21 @@ class BrowserPool:
         await self._ensure_started()
         assert self._browser is not None
 
-        page = await self._browser.new_page()
+        context = None
+        if mobile:
+            # NOTE: `is_mobile` and `has_touch` are Chromium-only in Playwright;
+            # Camoufox is Firefox-based, so we stick to UA + viewport +
+            # device_scale_factor — the three signals most server-side mobile
+            # routers actually inspect. The site never sees the missing touch
+            # capability since we don't dispatch events here.
+            context = await self._browser.new_context(
+                user_agent=_MOBILE_USER_AGENT,
+                viewport=_MOBILE_VIEWPORT,
+                device_scale_factor=3,
+            )
+            page = await context.new_page()
+        else:
+            page = await self._browser.new_page()
         try:
             remaining_ms = int(
                 max(0.0, deadline_monotonic - time.monotonic()) * 1000
@@ -108,6 +134,11 @@ class BrowserPool:
                 await page.close()
             except Exception:
                 pass
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
     async def close(self) -> None:
         if self._cm is None:

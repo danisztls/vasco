@@ -27,10 +27,13 @@ _CAPTCHA_MARKERS: tuple[str, ...] = (
     "class='h-captcha'",
     'class="g-recaptcha"',
     "class='g-recaptcha'",
-    "www.google.com/recaptcha/api.js",
-    "hcaptcha.com/1/api.js",
     "challenges.cloudflare.com/turnstile",
 )
+# Loading recaptcha/hcaptcha api.js alone is NOT a captcha challenge: tons of
+# normal sites embed these libraries for contact-form anti-spam, with the
+# widget rendered only after submit. The class markers above plus a Turnstile
+# script URL are the real signal. If neither fires but the api.js does, treat
+# the page as content unless it's small + challenge-shaped (handled below).
 
 _LOGIN_MARKERS: tuple[str, ...] = (
     "log in to continue",

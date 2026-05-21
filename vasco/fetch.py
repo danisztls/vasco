@@ -24,7 +24,7 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from . import bot_detect, browser, convert, io as io_mod, pdf, youtube
+from . import bot_detect, browser, convert, io as io_mod, pdf, wayback, youtube
 from .errors import FailureReason
 
 
@@ -32,6 +32,37 @@ from .errors import FailureReason
 # http tier to browser tier. Below this floor we return DEADLINE_EXCEEDED
 # rather than spawn Firefox for nothing.
 BROWSER_MIN_BUDGET: float = 3.0
+
+# Same idea for the post-browser recovery tiers in the auto chain. Mobile
+# re-uses the running Camoufox instance, so the floor matches browser.
+# Wayback adds an Availability API round-trip on top of the snapshot fetch,
+# so it needs slightly more headroom.
+MOBILE_MIN_BUDGET: float = 3.0
+WAYBACK_MIN_BUDGET: float = 4.0
+
+# Per-tier wall-clock caps. Without these, a connection hang in (say) the
+# browser tier would eat the full deadline and starve the later recovery
+# tiers — leaving the chain effectively unusable even with a generous total
+# deadline. Each tier's effective deadline is min(global, now + tier_cap).
+HTTP_MAX_BUDGET: float = 10.0
+BROWSER_MAX_BUDGET: float = 20.0
+MOBILE_MAX_BUDGET: float = 20.0
+WAYBACK_MAX_BUDGET: float = 20.0
+
+
+def _tier_deadline(global_deadline: float, tier_max: float) -> float:
+    """Clamp a per-tier deadline so a hung tier can't starve the next one."""
+    return min(global_deadline, time.monotonic() + tier_max)
+
+# Failure reasons that justify spending budget on mobile/wayback recovery.
+# Other failures (NOT_FOUND, DNS_FAIL, etc.) won't change with a new tier.
+_RECOVERABLE_REASONS: frozenset[FailureReason] = frozenset(
+    {
+        FailureReason.BLOCKED_BOT,
+        FailureReason.BLOCKED_CAPTCHA,
+        FailureReason.BLOCKED_CLOUDFLARE,
+    }
+)
 
 # Default request timeout floor (seconds) for httpx within an outer deadline.
 _HTTP_TIMEOUT_FLOOR = 1.0
@@ -166,17 +197,49 @@ async def _browser_fetch(
     *,
     deadline_monotonic: float,
     cfg: Any | None = None,
+    mobile: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
-    """Browser-tier fetch via the Camoufox singleton."""
+    """Browser-tier fetch via the Camoufox singleton.
+
+    When `mobile=True`, the page runs in a fresh mobile context (iOS Safari
+    UA + iPhone viewport + touch). Used as a recovery tier when the regular
+    browser fetch is blocked.
+    """
     pool = browser.get_browser(cfg)
     try:
-        return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
+        return await pool.fetch(
+            url, deadline_monotonic=deadline_monotonic, mobile=mobile
+        )
     except asyncio.TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
     except Exception as exc:
         if _looks_like_bot_block(exc):
             return "", 0, {"_failure_hint": "bot_blocked"}
         raise
+
+
+async def _wayback_fetch(
+    url: str,
+    *,
+    deadline_monotonic: float,
+    cfg: Any | None = None,
+) -> tuple[str, int, dict[str, str], str | None]:
+    """Resolve a Wayback snapshot for `url`, then http-fetch it.
+
+    Returns (html, status, headers, snapshot_url). When no snapshot exists
+    or the API fails, returns ("", 0, {"_failure_hint": "wayback_miss"}, None)
+    so the caller can fall back to the prior failure envelope.
+    """
+    snapshot_url = await wayback.find_snapshot(
+        url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    )
+    if snapshot_url is None:
+        return "", 0, {"_failure_hint": "wayback_miss"}, None
+    html, status, headers = await _http_fetch(
+        snapshot_url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    )
+    headers.setdefault("_url_final", snapshot_url)
+    return html, status, headers, snapshot_url
 
 
 def _parse_retry_after(headers: dict[str, str] | None) -> int | None:
@@ -365,6 +428,68 @@ def _hydrate_cache_hit(
 # ---------------------------------------------------------------------------
 
 
+async def _try_wayback_recovery(
+    url: str,
+    *,
+    deadline_monotonic: float,
+    cfg: Any | None,
+    phases: _Phases,
+) -> tuple[str, int, dict[str, str], FailureReason] | None:
+    """Last-resort recovery via Wayback Machine.
+
+    Returns the fetched envelope tuple on success, or None when no snapshot
+    exists / wayback itself failed (caller keeps the prior failure).
+    """
+    t0 = time.monotonic()
+    wb_html, wb_status, wb_headers, snapshot_url = await _wayback_fetch(
+        url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
+    if snapshot_url is None:
+        return None
+    wb_reason = bot_detect.classify(wb_status, wb_html, wb_headers)
+    if wb_reason != FailureReason.OK:
+        return None
+    return wb_html, wb_status, wb_headers, wb_reason
+
+
+async def _run_browser_tier(
+    url: str,
+    *,
+    mobile: bool,
+    deadline_monotonic: float,
+    cfg: Any | None,
+    phases: _Phases,
+    cache: Any | None,
+    domain: str,
+    bump: bool,
+) -> tuple[str, int, dict[str, str], FailureReason]:
+    """Single browser fetch (desktop or mobile) with phase accounting.
+
+    When `bump=True` and the call wasn't mobile, records the outcome against
+    the domain strategy cache. Mobile is always a recovery tier — it never
+    affects domain strategy.
+    """
+    tier_cap = MOBILE_MAX_BUDGET if mobile else BROWSER_MAX_BUDGET
+    t0 = time.monotonic()
+    html, status, headers = await _browser_fetch(
+        url,
+        deadline_monotonic=_tier_deadline(deadline_monotonic, tier_cap),
+        cfg=cfg,
+        mobile=mobile,
+    )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
+    reason = bot_detect.classify(status, html, headers)
+    if bump and not mobile and cache is not None and hasattr(cache, "bump"):
+        try:
+            cache.bump(domain, mode="browser", success=(reason == FailureReason.OK))
+        except Exception:
+            pass
+    return html, status, headers, reason
+
+
 async def _do_fetch_html(
     url: str,
     *,
@@ -382,11 +507,19 @@ async def _do_fetch_html(
     str,  # final mode_used
     bool,  # browser_started (so caller can close)
 ]:
-    """Execute the auto-mode escalation; returns the terminal result.
+    """Execute the fetch state machine; returns the terminal result.
+
+    Caller mode semantics:
+    - `http`, `browser`, `mobile`, `wayback`: terminal — only that tier runs.
+    - `auto`: chained — http → browser → browser+mobile → wayback, with the
+      starting tier chosen by the cached domain strategy. Recovery tiers
+      (mobile, wayback) always run after a browser failure with a recoverable
+      reason, gated by remaining budget. The domain strategy is an
+      optimization on where to start; it does not shorten the recovery tail.
 
     Updates `phases` in place: bumps `attempts` for each network call,
     accumulates `network_ms`, and records `escalated_from` if the http tier
-    was tried and then escalated to browser.
+    was tried first then escalated.
     """
     domain = _registered_domain(url)
     strategy: str | None = None
@@ -396,93 +529,186 @@ async def _do_fetch_html(
         except Exception:
             strategy = None
 
-    effective_mode = mode
-    if effective_mode == "auto":
-        effective_mode = strategy if strategy in ("http", "browser") else "http"
-
     browser_started = False
 
-    if effective_mode == "browser":
-        t0 = time.monotonic()
-        html, status, headers = await _browser_fetch(
-            url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    # --- Explicit terminal: browser / mobile --------------------------------
+    if mode in ("browser", "mobile"):
+        is_mobile = mode == "mobile"
+        html, status, headers, reason = await _run_browser_tier(
+            url,
+            mobile=is_mobile,
+            deadline_monotonic=deadline_monotonic,
+            cfg=cfg,
+            phases=phases,
+            cache=cache,
+            domain=domain,
+            bump=True,
         )
-        phases.network_ms += _ms_since(t0)
-        phases.attempts += 1
-        browser_started = True
-        reason = bot_detect.classify(status, html, headers)
-        if cache is not None and hasattr(cache, "bump"):
-            try:
-                cache.bump(domain, mode="browser", success=(reason == FailureReason.OK))
-            except Exception:
-                pass
-        return html, status, headers, reason, "browser", browser_started
+        return html, status, headers, reason, mode, True
 
-    # http tier (with optional escalation)
-    t0 = time.monotonic()
-    html, status, headers = await _http_fetch(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    phases.network_ms += _ms_since(t0)
-    phases.attempts += 1
-    reason = bot_detect.classify(status, html, headers)
-
-    if reason == FailureReason.OK:
-        if cache is not None and hasattr(cache, "bump"):
-            try:
-                cache.bump(domain, mode="http", success=True)
-            except Exception:
-                pass
-        return html, status, headers, reason, "http", browser_started
-
-    # http failed → consider escalation.
-    if mode == "http":
-        if cache is not None and hasattr(cache, "bump"):
-            try:
-                cache.bump(domain, mode="http", success=False)
-            except Exception:
-                pass
-        return html, status, headers, reason, "http", browser_started
-
-    # The server gave a definitive "this URL doesn't exist" answer; the browser
-    # tier can't conjure the resource back. Skip escalation and don't bump —
-    # http worked fine, the resource just isn't there.
-    if reason == FailureReason.NOT_FOUND:
-        return html, status, headers, reason, "http", browser_started
-
-    time_remaining = deadline_monotonic - time.monotonic()
-    if time_remaining < BROWSER_MIN_BUDGET:
-        if cache is not None and hasattr(cache, "bump"):
-            try:
-                cache.bump(domain, mode="http", success=False)
-            except Exception:
-                pass
+    # --- Explicit terminal: wayback -----------------------------------------
+    if mode == "wayback":
+        result = await _try_wayback_recovery(
+            url,
+            deadline_monotonic=_tier_deadline(
+                deadline_monotonic, WAYBACK_MAX_BUDGET
+            ),
+            cfg=cfg,
+            phases=phases,
+        )
+        if result is not None:
+            html, status, headers, reason = result
+            return html, status, headers, reason, "wayback", browser_started
         return (
-            html,
-            status,
-            headers,
-            FailureReason.DEADLINE_EXCEEDED,
-            "http",
+            "",
+            0,
+            {"_failure_hint": "wayback_miss"},
+            FailureReason.NOT_FOUND,
+            "wayback",
             browser_started,
         )
 
-    # Escalate to browser tier.
-    phases.escalated_from = "http"
-    t0 = time.monotonic()
-    b_html, b_status, b_headers = await _browser_fetch(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    # --- mode="http" or "auto" ----------------------------------------------
+    # The domain strategy chooses the starting tier in auto mode. It does NOT
+    # disable the recovery tail.
+    skip_http = mode == "auto" and strategy == "browser"
+
+    if not skip_http:
+        t0 = time.monotonic()
+        html, status, headers = await _http_fetch(
+            url,
+            deadline_monotonic=_tier_deadline(deadline_monotonic, HTTP_MAX_BUDGET),
+            cfg=cfg,
+        )
+        phases.network_ms += _ms_since(t0)
+        phases.attempts += 1
+        reason = bot_detect.classify(status, html, headers)
+
+        if reason == FailureReason.OK:
+            if cache is not None and hasattr(cache, "bump"):
+                try:
+                    cache.bump(domain, mode="http", success=True)
+                except Exception:
+                    pass
+            return html, status, headers, reason, "http", browser_started
+
+        if mode == "http":
+            # Caller-explicit http: terminal.
+            if cache is not None and hasattr(cache, "bump"):
+                try:
+                    cache.bump(domain, mode="http", success=False)
+                except Exception:
+                    pass
+            return html, status, headers, reason, "http", browser_started
+
+        # The server gave a definitive "this URL doesn't exist" answer; no
+        # later tier can conjure the resource back.
+        if reason == FailureReason.NOT_FOUND:
+            return html, status, headers, reason, "http", browser_started
+
+        if (deadline_monotonic - time.monotonic()) < BROWSER_MIN_BUDGET:
+            if cache is not None and hasattr(cache, "bump"):
+                try:
+                    cache.bump(domain, mode="http", success=False)
+                except Exception:
+                    pass
+            return (
+                html,
+                status,
+                headers,
+                FailureReason.DEADLINE_EXCEEDED,
+                "http",
+                browser_started,
+            )
+
+        phases.escalated_from = "http"
+
+    # --- Browser tier --------------------------------------------------------
+    b_html, b_status, b_headers, b_reason = await _run_browser_tier(
+        url,
+        mobile=False,
+        deadline_monotonic=deadline_monotonic,
+        cfg=cfg,
+        phases=phases,
+        cache=cache,
+        domain=domain,
+        bump=True,
     )
-    phases.network_ms += _ms_since(t0)
-    phases.attempts += 1
     browser_started = True
-    b_reason = bot_detect.classify(b_status, b_html, b_headers)
-    if cache is not None and hasattr(cache, "bump"):
-        # Attribute the bump to the tier that actually produced this outcome.
+
+    if b_reason == FailureReason.OK or b_reason not in _RECOVERABLE_REASONS:
+        return b_html, b_status, b_headers, b_reason, "browser", browser_started
+
+    # --- Recovery tier 1: browser + mobile ----------------------------------
+    last_html, last_status, last_headers, last_reason = (
+        b_html,
+        b_status,
+        b_headers,
+        b_reason,
+    )
+    last_mode = "browser"
+
+    if (deadline_monotonic - time.monotonic()) >= MOBILE_MIN_BUDGET:
+        # Mobile is best-effort: it's a recovery tier, not a primary path.
+        # Wrap so an unexpected Playwright/context error (e.g., capability
+        # unsupported by the underlying engine) falls through to wayback
+        # instead of failing the whole fetch.
         try:
-            cache.bump(domain, mode="browser", success=(b_reason == FailureReason.OK))
+            m_html, m_status, m_headers, m_reason = await _run_browser_tier(
+                url,
+                mobile=True,
+                deadline_monotonic=deadline_monotonic,
+                cfg=cfg,
+                phases=phases,
+                cache=cache,
+                domain=domain,
+                bump=False,
+            )
         except Exception:
-            pass
-    return b_html, b_status, b_headers, b_reason, "browser", browser_started
+            m_reason = FailureReason.SERVER_ERROR  # soft-skip
+            m_html = m_status = m_headers = None  # type: ignore[assignment]
+        else:
+            if m_reason == FailureReason.OK:
+                return (
+                    m_html,
+                    m_status,
+                    m_headers,
+                    m_reason,
+                    "browser+mobile",
+                    browser_started,
+                )
+            if m_reason not in _RECOVERABLE_REASONS:
+                # Mobile surfaced a different (non-block) failure — that
+                # fresher signal is more useful than the original browser
+                # block.
+                return (
+                    m_html,
+                    m_status,
+                    m_headers,
+                    m_reason,
+                    "browser+mobile",
+                    browser_started,
+                )
+        # Still blocked (or mobile errored); keep the original browser failure
+        # as "last" so the reported mode_used reflects what the user is
+        # actually blocked from.
+
+    # --- Recovery tier 2: Wayback Machine -----------------------------------
+    if (deadline_monotonic - time.monotonic()) >= WAYBACK_MIN_BUDGET:
+        wb = await _try_wayback_recovery(
+            url,
+            deadline_monotonic=_tier_deadline(
+                deadline_monotonic, WAYBACK_MAX_BUDGET
+            ),
+            cfg=cfg,
+            phases=phases,
+        )
+        if wb is not None:
+            wb_html, wb_status, wb_headers, wb_reason = wb
+            return wb_html, wb_status, wb_headers, wb_reason, "wayback", browser_started
+
+    # All recovery tiers exhausted. Return the prior browser failure.
+    return last_html, last_status, last_headers, last_reason, last_mode, browser_started
 
 
 # ---------------------------------------------------------------------------

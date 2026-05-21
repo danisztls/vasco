@@ -78,7 +78,11 @@ def _make_http(html: str, status: int = 200, headers: dict | None = None):
 
 def _make_browser(html: str, status: int = 200, headers: dict | None = None):
     async def _fake_browser(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        mobile: bool = False,
     ) -> tuple[str, int, dict[str, str]]:
         return html, status, dict(headers or {})
 
@@ -98,6 +102,22 @@ def _disable_browser_close(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
     monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _NopPool())
+
+
+def _disable_wayback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the wayback recovery tier to find no snapshot.
+
+    Tests that exercise a fully-blocked auto chain need this so the final
+    recovery attempt doesn't hit the real archive.org.
+    """
+    from vasco import wayback as wayback_mod
+
+    async def _no_snapshot(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> str | None:
+        return None
+
+    monkeypatch.setattr(wayback_mod, "find_snapshot", _no_snapshot)
 
 
 def run(coro: Any) -> Any:
@@ -330,12 +350,19 @@ def test_http_not_found_does_not_escalate(monkeypatch: pytest.MonkeyPatch) -> No
 def test_both_tiers_fail_returns_browser_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case 5: Both tiers fail → failure envelope reflects browser-tier reason."""
+    """Case 5: Both tiers (plus the post-browser recovery tiers) fail →
+    failure envelope reflects browser-tier reason and mode_used="browser".
+
+    The recovery chain still runs (mobile + wayback), but with the same
+    blocked response and no wayback snapshot, the original browser failure
+    is what's reported.
+    """
     cache = FakeCache()
-    # http returns CF challenge, browser also returns CF challenge.
+    # http returns CF challenge, browser (incl. mobile retry) also returns CF.
     monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
     monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
     _disable_browser_close(monkeypatch)
+    _disable_wayback(monkeypatch)
 
     env = run(
         fetch_mod.fetch_one(
@@ -348,8 +375,7 @@ def test_both_tiers_fail_returns_browser_reason(
     assert "failure" in env
     assert env["failure"]["reason"] == FailureReason.BLOCKED_CLOUDFLARE.value
     assert env["mode_used"] == "browser"
-    # cache.bump was called twice: once after http (success=False), once after
-    # browser (success=False).
+    # cache.bump should only reflect http + browser tiers, never mobile/wayback.
     assert {b["mode"] for b in cache.bumps} <= {"http", "browser"}
     assert all(b["success"] is False for b in cache.bumps)
 
@@ -451,3 +477,261 @@ def test_cache_hit_envelope_omits_phase_fields(monkeypatch: pytest.MonkeyPatch) 
         "escalated_from",
     ):
         assert absent not in second, absent
+
+
+# -----------------------------------------------------------------------------
+# Recovery chain: mobile and wayback tiers triggered after browser blocks
+# -----------------------------------------------------------------------------
+
+
+def _make_browser_then_clean(
+    blocked_html: str, clean_html: str, status: int = 200
+):
+    """Browser stub: returns blocked_html on first call, clean_html when mobile=True."""
+
+    async def _fake_browser(
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        mobile: bool = False,
+    ) -> tuple[str, int, dict[str, str]]:
+        return (clean_html if mobile else blocked_html), status, {}
+
+    return _fake_browser
+
+
+def _patch_wayback_snapshot(
+    monkeypatch: pytest.MonkeyPatch, snapshot_url: str | None
+) -> list[str]:
+    """Patch wayback.find_snapshot to return `snapshot_url` for any input.
+
+    Returns a list that records each call's input URL so tests can assert
+    that wayback was (or wasn't) consulted.
+    """
+    from vasco import wayback as wayback_mod
+
+    calls: list[str] = []
+
+    async def _fake(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> str | None:
+        calls.append(url)
+        return snapshot_url
+
+    monkeypatch.setattr(wayback_mod, "find_snapshot", _fake)
+    return calls
+
+
+def test_mobile_recovers_after_browser_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto chain: http CF block → browser CF block → mobile recovers."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(
+        fetch_mod, "_browser_fetch", _make_browser_then_clean(CF_HTML, CLEAN_HTML)
+    )
+    wb_calls = _patch_wayback_snapshot(monkeypatch, None)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://hard.example.com/x",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert "failure" not in env
+    assert env["mode_used"] == "browser+mobile"
+    # Wayback should not have been consulted since mobile succeeded.
+    assert wb_calls == []
+    # Mobile is a recovery tier; it must not be recorded as a domain strategy.
+    assert {b["mode"] for b in cache.bumps} <= {"http", "browser"}
+
+
+def test_wayback_recovers_after_mobile_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto chain: every tier blocked except wayback, which returns clean HTML."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+
+    snapshot_url = "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
+    wb_calls = _patch_wayback_snapshot(monkeypatch, snapshot_url)
+
+    # Once wayback gives us a snapshot URL, fetch.py calls _http_fetch again
+    # against that URL. Swap the stub mid-flight by URL-matching.
+    real_http_stub = _make_http(CF_HTML, 200)
+    clean_for_snapshot = _make_http(CLEAN_HTML, 200)
+
+    async def _dispatching_http(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        if url.startswith("https://web.archive.org/"):
+            return await clean_for_snapshot(
+                url, deadline_monotonic=deadline_monotonic, cfg=cfg
+            )
+        return await real_http_stub(
+            url, deadline_monotonic=deadline_monotonic, cfg=cfg
+        )
+
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _dispatching_http)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://hard.example.com/x",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert "failure" not in env, env.get("failure")
+    assert env["mode_used"] == "wayback"
+    assert wb_calls == ["https://hard.example.com/x"]
+
+
+def test_explicit_wayback_mode_skips_other_tiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mode="wayback" goes straight to wayback; http/browser stubs are never called."""
+    cache = FakeCache()
+
+    http_calls: list[str] = []
+
+    async def _http_should_not_be_called(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        http_calls.append(url)
+        # Wayback's snapshot fetch uses _http_fetch, so allow archive.org URLs through.
+        if url.startswith("https://web.archive.org/"):
+            return CLEAN_HTML, 200, {"_url_final": url}
+        return "", 0, {}
+
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
+    snapshot = (
+        "https://web.archive.org/web/20240501123045if_/https://wb.example.com/x"
+    )
+    _patch_wayback_snapshot(monkeypatch, snapshot)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://wb.example.com/x",
+            mode="wayback",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert env["mode_used"] == "wayback"
+    assert "failure" not in env
+    # Only the snapshot fetch should hit _http_fetch — never the origin URL.
+    assert http_calls == [snapshot]
+
+
+def test_explicit_wayback_returns_not_found_when_no_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mode="wayback" with no available snapshot → failure with NOT_FOUND."""
+    cache = FakeCache()
+    _patch_wayback_snapshot(monkeypatch, None)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://nothing.example.com/x",
+            mode="wayback",
+            cache=cache,
+            use_cache=False,
+            deadline=10.0,
+        )
+    )
+    assert "failure" in env
+    assert env["failure"]["reason"] == FailureReason.NOT_FOUND.value
+    assert env["mode_used"] == "wayback"
+
+
+def test_explicit_mobile_mode_calls_browser_with_mobile_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mode="mobile" forces browser tier with mobile=True; no http preamble."""
+    cache = FakeCache()
+    calls: list[dict] = []
+
+    async def _fake_browser(
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        mobile: bool = False,
+    ) -> tuple[str, int, dict[str, str]]:
+        calls.append({"url": url, "mobile": mobile})
+        return CLEAN_HTML, 200, {}
+
+    http_calls: list[str] = []
+
+    async def _http_should_not_be_called(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        http_calls.append(url)
+        return "", 0, {}
+
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _fake_browser)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://m.example.com/x",
+            mode="mobile",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert env["mode_used"] == "mobile"
+    assert "failure" not in env
+    assert http_calls == []
+    assert calls == [{"url": "https://m.example.com/x", "mobile": True}]
+    # Explicit mobile mode should not bump domain strategy.
+    assert cache.bumps == []
+
+
+def test_recovery_skipped_when_budget_too_tight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If only ~1s remains after browser fails, neither mobile nor wayback should run."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+
+    async def _slow_browser(
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        mobile: bool = False,
+    ) -> tuple[str, int, dict[str, str]]:
+        # Burn most of the remaining budget so mobile/wayback can't run.
+        remaining = max(0.0, deadline_monotonic - time.monotonic())
+        await asyncio.sleep(max(0.0, remaining - 1.0))
+        return CF_HTML, 200, {}
+
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _slow_browser)
+    wb_calls = _patch_wayback_snapshot(monkeypatch, None)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://tight.example.com/x",
+            cache=cache,
+            use_cache=False,
+            deadline=4.0,
+        )
+    )
+    assert "failure" in env
+    assert env["mode_used"] == "browser"
+    assert wb_calls == []  # wayback skipped due to budget

@@ -192,7 +192,10 @@ async def _run_fetch_many(
 @app.command()
 def fetch(
     urls: Annotated[list[str], typer.Argument(help="One or more URLs to fetch.")],
-    mode: Annotated[str, typer.Option(help="Fetch mode: auto|http|browser.")] = "auto",
+    mode: Annotated[
+        str,
+        typer.Option(help="Fetch mode: auto|http|browser|mobile|wayback."),
+    ] = "auto",
     workers: Annotated[int | None, typer.Option(help="Concurrent fetches.")] = None,
     no_cache: Annotated[
         bool, typer.Option("--no-cache", help="Skip cache reads and writes.")
@@ -284,7 +287,10 @@ def extract(
     context_chars: Annotated[
         int, typer.Option(help="Context chars around each passage.")
     ] = 400,
-    mode: Annotated[str, typer.Option(help="Fetch mode: auto|http|browser.")] = "auto",
+    mode: Annotated[
+        str,
+        typer.Option(help="Fetch mode: auto|http|browser|mobile|wayback."),
+    ] = "auto",
     rank: Annotated[
         str, typer.Option("--rank", help="Ranking: bm25|semantic.")
     ] = "bm25",

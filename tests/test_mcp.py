@@ -113,8 +113,12 @@ async def test_fetch_many_tool_drains_iterator(
 
     monkeypatch.setattr(_fetch, "fetch_many", fake_fetch_many)
 
+    # fetch_many's default is metadata_only=true (triage mode). This test asserts
+    # the full pipeline streams content end-to-end, so it opts back into full
+    # Markdown explicitly.
     result = await mcp_mod.server.call_tool(
-        "fetch_many", {"urls": ["https://a", "https://b"]}
+        "fetch_many",
+        {"urls": ["https://a", "https://b"], "metadata_only": False},
     )
     text = _text(result)
     assert "HTTPS://A" in text
@@ -414,6 +418,73 @@ async def test_extract_empty_passages_logs_telemetry(
     assert len(captured) == 1
     assert captured[0]["tool"] == "extract"
     assert captured[0]["empty_passages"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_many_default_strips_markdown(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Locks in the new default: metadata_only=true unless explicitly disabled."""
+    from vasco import fetch as _fetch
+
+    async def fake_fetch_many(urls, **kwargs):  # type: ignore[no-untyped-def]
+        for u in urls:
+            yield {"url_requested": u, "title": "X", "markdown": f"BODY_{u}"}
+
+    monkeypatch.setattr(_fetch, "fetch_many", fake_fetch_many)
+
+    result = await mcp_mod.server.call_tool(
+        "fetch_many", {"urls": ["https://a", "https://b"]}
+    )
+    text = _text(result)
+    assert "BODY_https://a" not in text
+    assert "BODY_https://b" not in text
+
+
+@pytest.mark.asyncio
+async def test_lifespan_prewarms_browser_when_enabled(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import browser as _browser
+
+    _browser._reset_for_tests()
+    monkeypatch.setenv("VASCO_BROWSER_PREWARM", "true")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    called = {"n": 0}
+
+    async def fake_start(self: Any) -> None:
+        called["n"] += 1
+
+    monkeypatch.setattr(_browser.BrowserPool, "_ensure_started", fake_start)
+
+    async with mcp_mod._lifespan(mcp_mod.server):
+        pass
+    assert called["n"] == 1
+    _browser._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_prewarm_failure_does_not_kill_server(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import browser as _browser
+
+    _browser._reset_for_tests()
+    monkeypatch.setenv("VASCO_BROWSER_PREWARM", "true")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    async def boom(self: Any) -> None:
+        raise RuntimeError("camoufox missing")
+
+    monkeypatch.setattr(_browser.BrowserPool, "_ensure_started", boom)
+
+    # Must not raise: the lifespan should swallow prewarm errors.
+    async with mcp_mod._lifespan(mcp_mod.server):
+        pass
+    _browser._reset_for_tests()
 
 
 def _text(result: Any) -> str:

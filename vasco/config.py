@@ -31,6 +31,7 @@ class FetchCfg:
 class BrowserCfg:
     headless: bool = True
     locale: str = "en-US"
+    prewarm: bool = False
 
 
 @dataclass(frozen=True)

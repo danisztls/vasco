@@ -40,6 +40,18 @@ async def _lifespan(_server: FastMCP):  # type: ignore[no-untyped-def]
     global _cache, _cfg
     _cfg = _config.load_config()
     _cache = _cache_mod.Cache(_cfg.cache.path or None)
+    if _cfg.browser.prewarm:
+        t0 = _monotonic()
+        try:
+            await _browser.get_browser(_cfg)._ensure_started()
+            log.info(
+                "vasco MCP browser pre-warmed in %d ms",
+                int((_monotonic() - t0) * 1000),
+            )
+        except Exception as exc:
+            # A prewarm failure (e.g. camoufox not installed) must not kill the
+            # server — HTTP-tier fetches still work without the browser.
+            log.warning("vasco MCP browser pre-warm failed: %s", exc)
     log.info("vasco MCP server ready")
     try:
         yield {"cfg": _cfg, "cache": _cache}
@@ -171,11 +183,14 @@ async def fetch(
 
 @server.tool(
     description=(
-        "Fetch many URLs concurrently. Returns a list of envelopes (one per "
-        "URL, NOT necessarily in input order). Reuses one browser instance "
-        "across the batch. Set metadata_only=true to omit the `markdown` "
-        "field on every envelope — recommended for large batches where you "
-        "intend to triage first and refetch full content selectively."
+        "Fetch many URLs concurrently. Returns one envelope per URL (NOT "
+        "necessarily in input order). Reuses one browser instance across the "
+        "batch. By DEFAULT the `markdown` field is omitted from every envelope "
+        "(triage mode) — this keeps the response small so an agent can decide "
+        "which URLs are worth reading in full before spending context on "
+        "content. To read the chosen URLs' full Markdown, call `fetch` on each "
+        "one (cache hits, near-free). Pass metadata_only=false only when you "
+        "genuinely want every URL's full content in a single response."
     ),
 )
 async def fetch_many(
@@ -184,7 +199,7 @@ async def fetch_many(
     mode: str = "auto",
     deadline: float = 15.0,
     refresh: bool = False,
-    metadata_only: bool = False,
+    metadata_only: bool = True,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     async for env in _fetch.fetch_many(

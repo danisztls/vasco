@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,11 @@ class LoggingCfg:
 
 
 @dataclass(frozen=True)
+class YouTubeCfg:
+    cookies_from_browser: str = ""  # "" disables; e.g. "firefox", "chrome", "brave"
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -58,6 +64,7 @@ class Config:
     cache: CacheCfg = field(default_factory=CacheCfg)
     tavily: TavilyCfg = field(default_factory=TavilyCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
+    youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -67,12 +74,13 @@ _SECTIONS: dict[str, type] = {
     "cache": CacheCfg,
     "tavily": TavilyCfg,
     "logging": LoggingCfg,
+    "youtube": YouTubeCfg,
 }
 
 
 def _config_path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(xdg) / "vasco" / "config.toml"
+    return Path(xdg) / "vasco" / "config.yaml"
 
 
 def _coerce(value: Any, target_type: type) -> Any:
@@ -124,7 +132,7 @@ def _apply_env(section: Any, section_name: str) -> Any:
 
 
 def load_config() -> Config:
-    """Load config from $XDG_CONFIG_HOME/vasco/config.toml then apply VASCO_* env overrides.
+    """Load config from $XDG_CONFIG_HOME/vasco/config.yaml then apply VASCO_* env overrides.
 
     Missing file is not an error: defaults are returned. Env var pattern is
     VASCO_<SECTION>_<FIELD>, e.g. VASCO_FETCH_WORKERS=8.
@@ -134,10 +142,12 @@ def load_config() -> Config:
     data: dict[str, Any] = {}
     if path.is_file():
         try:
-            with path.open("rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError):
-            data = {}
+            with path.open("r", encoding="utf-8") as fh:
+                loaded = yaml.safe_load(fh)
+        except (OSError, yaml.YAMLError):
+            loaded = None
+        if isinstance(loaded, dict):
+            data = loaded
 
     sections: dict[str, Any] = {}
     for name, _ in _SECTIONS.items():

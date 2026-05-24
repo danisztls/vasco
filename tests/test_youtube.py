@@ -147,7 +147,9 @@ def test_apply_sponsorblock_empty_segments_noop() -> None:
 def test_apply_sponsorblock_malformed_segment_ignored() -> None:
     cues = [(0.0, "a"), (5.0, "b")]
     # No "segment" key, or wrong shape — should be skipped, not raise.
-    assert youtube.apply_sponsorblock(cues, [{"foo": "bar"}, {"segment": "nope"}]) == cues
+    assert (
+        youtube.apply_sponsorblock(cues, [{"foo": "bar"}, {"segment": "nope"}]) == cues
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,20 +166,26 @@ def _patch_workers(
     info_exc: Exception | None = None,
     vtt_exc: Exception | None = None,
 ) -> None:
-    def fake_info(url: str) -> dict:
+    def fake_info(url: str, cfg: object | None = None) -> dict:
         if info_exc:
             raise info_exc
-        return info if info is not None else {
-            "title": "Test Video",
-            "id": "abc123",
-            "uploader": "Test Channel",
-            "upload_date": "20251101",
-            "duration": 123,
-            "subtitles": {"en": [{"url": "x"}]},
-            "automatic_captions": {},
-        }
+        return (
+            info
+            if info is not None
+            else {
+                "title": "Test Video",
+                "id": "abc123",
+                "uploader": "Test Channel",
+                "upload_date": "20251101",
+                "duration": 123,
+                "subtitles": {"en": [{"url": "x"}]},
+                "automatic_captions": {},
+            }
+        )
 
-    def fake_vtt(url: str, lang: str, is_auto: bool) -> str | None:
+    def fake_vtt(
+        url: str, lang: str, is_auto: bool, cfg: object | None = None
+    ) -> str | None:
         if vtt_exc:
             raise vtt_exc
         return vtt
@@ -212,18 +220,24 @@ async def test_fetch_youtube_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_sponsorblock_filters_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_sponsorblock_filters_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Transition-block cues land at t=2.5 ("hello world"), t=5.0 ("this is a test"),
     # and t=7.0 ("final line"). A SponsorBlock range of [4.0, 6.0) drops the
     # middle cue only.
     _patch_workers(monkeypatch, sb=[{"segment": [4.0, 6.0]}])
-    env = await youtube.fetch_youtube("https://www.youtube.com/watch?v=abc123", deadline=10.0)
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/watch?v=abc123", deadline=10.0
+    )
     assert "failure" not in env
     assert env["markdown"] == "hello world final line"
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_sponsorblock_unavailable_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_sponsorblock_unavailable_warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_workers(monkeypatch, sb=None)  # None means API failed
     env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
     assert "failure" not in env
@@ -254,28 +268,36 @@ async def test_fetch_youtube_no_captions(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_metadata_error_age_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_metadata_error_age_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_workers(monkeypatch, info_exc=RuntimeError("Sign in to confirm your age"))
     env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
     assert env["failure"]["reason"] == FailureReason.LOGIN_REQUIRED.value
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_metadata_error_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_metadata_error_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_workers(monkeypatch, info_exc=RuntimeError("Video unavailable"))
     env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
     assert env["failure"]["reason"] == FailureReason.NOT_FOUND.value
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_vtt_download_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_vtt_download_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_workers(monkeypatch, vtt=None, sb=[])
     env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
     assert env["failure"]["reason"] == FailureReason.UNSUPPORTED_CONTENT_TYPE.value
 
 
 @pytest.mark.asyncio
-async def test_fetch_youtube_auto_captions_used_when_no_subs(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_youtube_auto_captions_used_when_no_subs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_workers(
         monkeypatch,
         info={
@@ -296,3 +318,27 @@ async def test_fetch_youtube_deadline_exceeded(monkeypatch: pytest.MonkeyPatch) 
     _patch_workers(monkeypatch, sb=[])
     env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=0.0)
     assert env["failure"]["reason"] == FailureReason.DEADLINE_EXCEEDED.value
+
+
+# ---------------------------------------------------------------------------
+# _ytdlp_base_opts — cookie plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_ytdlp_base_opts_omits_cookies_when_unset() -> None:
+    from vasco.config import Config
+
+    assert "cookiesfrombrowser" not in youtube._ytdlp_base_opts(None)
+    assert "cookiesfrombrowser" not in youtube._ytdlp_base_opts(Config())
+
+
+def test_ytdlp_base_opts_passes_cookies_from_browser() -> None:
+    from vasco.config import Config, YouTubeCfg
+
+    cfg = Config(youtube=YouTubeCfg(cookies_from_browser="Firefox"))
+    opts = youtube._ytdlp_base_opts(cfg)
+    # yt-dlp wants a tuple, lowercased
+    assert opts["cookiesfrombrowser"] == ("firefox",)
+    # Other base options are preserved
+    assert opts["skip_download"] is True
+    assert opts["quiet"] is True

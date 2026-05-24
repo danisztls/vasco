@@ -1,0 +1,35 @@
+# Vasco configuration template.
+# Copy to $XDG_CONFIG_HOME/vasco/config.yaml and uncomment what you need.
+# Env vars (VASCO_<SECTION>_<FIELD>=value) override anything set here.
+# CLI flags (where present) override env vars.
+
+# search:
+#   default_backend: ddg        # "ddg" | "tavily"
+#   region: us-en
+#   max_results: 10
+
+# fetch:
+#   default_mode: auto          # "auto" | "http" | "browser" | "wayback"
+#   workers: 4
+#   ttl_seconds: 86400
+#   failure_ttl_seconds: 900
+#   deadline_seconds: 15.0
+#   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# browser:
+#   headless: true
+#   locale: en-US
+#   prewarm: false              # MCP-only: warm Camoufox at server startup
+
+# cache:
+#   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite
+
+# tavily:
+#   api_key: ""                 # or set TAVILY_API_KEY
+
+# logging:
+#   enabled: true
+#   path: ""                    # empty → $XDG_DATA_HOME/vasco/logs
+
+# youtube:
+#   cookies_from_browser: ""    # "" disables; e.g. "firefox", "chrome", "brave"

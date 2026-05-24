@@ -83,7 +83,7 @@ class TavilyBackend:
         if not api_key:
             raise ValueError(
                 "Tavily API key not configured. "
-                "Set TAVILY_API_KEY or [tavily] api_key in config.toml."
+                "Set TAVILY_API_KEY or tavily.api_key in config.yaml."
             )
         self._api_key = api_key
 

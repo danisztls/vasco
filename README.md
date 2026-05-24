@@ -121,28 +121,31 @@ Failures replace the success-only fields with a typed `failure` object:
 
 ## Config
 
-`~/.config/vasco/config.toml` (all optional):
+`~/.config/vasco/config.yaml` (all optional — see `config.yaml.template` at the repo root for every section):
 
-```toml
-[search]
-default_backend = "ddg"
-region          = "us-en"
-max_results     = 10
+```yaml
+search:
+  default_backend: ddg
+  region: us-en
+  max_results: 10
 
-[fetch]
-workers              = 4
-deadline_seconds     = 15
-ttl_seconds          = 86400
-failure_ttl_seconds  = 900
-user_agent           = "Mozilla/5.0 (...)"
+fetch:
+  workers: 4
+  deadline_seconds: 15
+  ttl_seconds: 86400
+  failure_ttl_seconds: 900
+  user_agent: "Mozilla/5.0 (...)"
 
-[browser]
-headless = true
-locale   = "en-US"
+browser:
+  headless: true
+  locale: en-US
 
-[logging]
-enabled = true
-path    = ""        # empty → $XDG_DATA_HOME/vasco/logs
+logging:
+  enabled: true
+  path: ""        # empty → $XDG_DATA_HOME/vasco/logs
+
+youtube:
+  cookies_from_browser: ""   # "firefox" | "chrome" | "brave" — pulls auth cookies for yt-dlp
 ```
 
 Precedence: CLI flag > `VASCO_*` env var > config file > default. Example: `VASCO_FETCH_WORKERS=8` overrides `fetch.workers`.
@@ -158,7 +161,7 @@ Both the CLI and the MCP server write structured JSONL events to `$XDG_DATA_HOME
 - `empty` — `extract` returning zero passages (separates "query was off" from "fetch silently broke")
 - `exception` — uncaught tool-level exception
 
-Common fields: `tool`, `url`, `ts` (UTC ISO 8601). Disable with `[logging] enabled = false` or `VASCO_LOGGING_ENABLED=false`. Writes never block tool calls — any I/O error is swallowed silently.
+Common fields: `tool`, `url`, `ts` (UTC ISO 8601). Disable with `logging.enabled: false` or `VASCO_LOGGING_ENABLED=false`. Writes never block tool calls — any I/O error is swallowed silently.
 
 `vasco logs stats [--days N]` rolls the JSONL into a JSON summary: per-tool outcome counts, cache-hit ratio, mode mix, failure histogram, p50/p95/p99 of `duration_ms`, per-phase percentiles, and `escalation_rate` (fraction of successful fetches where auto-mode started in `http` and finished in `browser`).
 

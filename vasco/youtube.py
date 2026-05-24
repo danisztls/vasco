@@ -119,7 +119,12 @@ def parse_vtt(content: str) -> list[tuple[float, str]]:
         m = _VTT_CUE_RE.match(line)
         if m:
             _flush()
-            h, mn, s, ms = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            h, mn, s, ms = (
+                int(m.group(1)),
+                int(m.group(2)),
+                int(m.group(3)),
+                int(m.group(4)),
+            )
             current_start = h * 3600 + mn * 60 + s + ms / 1000
             current_lines = []
             current_has_tags = False
@@ -168,23 +173,39 @@ def cues_to_text(cues: list[tuple[float, str]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _extract_info(url: str) -> dict[str, Any]:
+def _ytdlp_base_opts(cfg: Any | None) -> dict[str, Any]:
+    """Build the common yt-dlp options dict, threading in browser cookies if configured.
+
+    yt-dlp's ``cookiesfrombrowser`` expects a tuple
+    ``(browser_name, profile, keyring, container)`` — we only set the browser name,
+    leaving the rest defaulted. Reads the user's real on-disk browser profile, not
+    Camoufox.
+    """
+    opts: dict[str, Any] = {"skip_download": True, "quiet": True, "no_warnings": True}
+    browser = ""
+    if cfg is not None:
+        browser = (
+            (getattr(getattr(cfg, "youtube", None), "cookies_from_browser", "") or "")
+            .strip()
+            .lower()
+        )
+    if browser:
+        opts["cookiesfrombrowser"] = (browser,)
+    return opts
+
+
+def _extract_info(url: str, cfg: Any | None) -> dict[str, Any]:
     import yt_dlp
 
-    with yt_dlp.YoutubeDL(
-        {"skip_download": True, "quiet": True, "no_warnings": True}
-    ) as ydl:
+    with yt_dlp.YoutubeDL(_ytdlp_base_opts(cfg)) as ydl:
         return ydl.extract_info(url, download=False) or {}
 
 
-def _download_vtt(url: str, lang: str, is_auto: bool) -> str | None:
+def _download_vtt(url: str, lang: str, is_auto: bool, cfg: Any | None) -> str | None:
     import yt_dlp
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        opts = {
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
+        opts = _ytdlp_base_opts(cfg) | {
             "writesubtitles": not is_auto,
             "writeautomaticsub": is_auto,
             "subtitlesformat": "vtt",
@@ -202,7 +223,9 @@ async def _fetch_sponsorblock(video_id: str) -> list[dict[str, Any]] | None:
     network failure (caller should warn)."""
     import httpx
 
-    url = f"{_SPONSORBLOCK_URL}?videoID={video_id}&categories={_SPONSORBLOCK_CATEGORIES}"
+    url = (
+        f"{_SPONSORBLOCK_URL}?videoID={video_id}&categories={_SPONSORBLOCK_CATEGORIES}"
+    )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url)
@@ -289,7 +312,7 @@ async def fetch_youtube(
     url: str,
     *,
     deadline: float = 30.0,
-    cfg: Any | None = None,  # noqa: ARG001 — reserved for future use
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch a YouTube transcript and return a Vasco envelope."""
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
@@ -308,7 +331,7 @@ async def fetch_youtube(
         )
     try:
         info = await asyncio.wait_for(
-            asyncio.to_thread(_extract_info, url), timeout=remaining
+            asyncio.to_thread(_extract_info, url, cfg), timeout=remaining
         )
     except asyncio.TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "yt-dlp metadata timeout")
@@ -345,7 +368,7 @@ async def fetch_youtube(
     try:
         vtt_content, sb_result = await asyncio.wait_for(
             asyncio.gather(
-                asyncio.to_thread(_download_vtt, url, selected_lang, is_auto),
+                asyncio.to_thread(_download_vtt, url, selected_lang, is_auto, cfg),
                 _fetch_sponsorblock(video_id),
             ),
             timeout=remaining,

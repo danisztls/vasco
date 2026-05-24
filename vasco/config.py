@@ -21,7 +21,7 @@ class FetchCfg:
     workers: int = 4
     ttl_seconds: int = 86400
     failure_ttl_seconds: int = 900
-    deadline_seconds: float = 15.0
+    deadline_seconds: float = 30.0
     user_agent: str = (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

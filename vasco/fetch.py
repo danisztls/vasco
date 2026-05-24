@@ -40,14 +40,16 @@ BROWSER_MIN_BUDGET: float = 3.0
 MOBILE_MIN_BUDGET: float = 3.0
 WAYBACK_MIN_BUDGET: float = 4.0
 
-# Per-tier wall-clock caps. Without these, a connection hang in (say) the
-# browser tier would eat the full deadline and starve the later recovery
-# tiers — leaving the chain effectively unusable even with a generous total
-# deadline. Each tier's effective deadline is min(global, now + tier_cap).
-HTTP_MAX_BUDGET: float = 10.0
-BROWSER_MAX_BUDGET: float = 20.0
-MOBILE_MAX_BUDGET: float = 20.0
-WAYBACK_MAX_BUDGET: float = 20.0
+# Per-tier wall-clock caps. These are the *primary* budget contract — each
+# tier runs for up to its cap, and the chain naturally takes up to the sum
+# (≈24s for http→browser→mobile→wayback). The caller-supplied `deadline`
+# is a kill-switch hard upper bound, defaulted generously so the per-tier
+# caps are what users feel in practice. Each tier's effective deadline is
+# `min(global_kill_switch, now + tier_cap)`.
+HTTP_MAX_BUDGET: float = 5.0
+BROWSER_MAX_BUDGET: float = 8.0
+MOBILE_MAX_BUDGET: float = 5.0
+WAYBACK_MAX_BUDGET: float = 6.0
 
 
 def _tier_deadline(global_deadline: float, tier_max: float) -> float:
@@ -1070,7 +1072,7 @@ async def fetch_one(
     url: str,
     *,
     mode: str = "auto",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
     use_cache: bool = True,
     refresh: bool = False,
     raw: bool = False,
@@ -1101,7 +1103,7 @@ async def fetch_many(
     *,
     workers: int = 4,
     mode: str = "auto",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
     use_cache: bool = True,
     refresh: bool = False,
     raw: bool = False,

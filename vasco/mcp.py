@@ -173,7 +173,7 @@ def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
 async def fetch(
     url: str,
     mode: str = "auto",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
     refresh: bool = False,
     raw: bool = False,
     metadata_only: bool = False,
@@ -212,7 +212,7 @@ async def fetch_many(
     urls: list[str],
     workers: int = 4,
     mode: str = "auto",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
     refresh: bool = False,
     metadata_only: bool = True,
 ) -> list[dict[str, Any]]:
@@ -249,7 +249,7 @@ async def extract(
     context_chars: int = 400,
     mode: str = "auto",
     rank: str = "bm25",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
 ) -> dict[str, Any]:
     started = _monotonic()
     try:

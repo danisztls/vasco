@@ -138,7 +138,7 @@ async def extract(
     context_chars: int = 400,
     mode: str = "auto",
     rank: str = "bm25",
-    deadline: float = 15.0,
+    deadline: float = 30.0,
     use_cache: bool = True,
     refresh: bool = False,
     cache: Any = None,
@@ -162,7 +162,12 @@ async def extract(
         cfg=cfg,
     )
 
-    final_url = env.get("url_final") or env.get("url_canonical") or env.get("url_requested") or url
+    final_url = (
+        env.get("url_final")
+        or env.get("url_canonical")
+        or env.get("url_requested")
+        or url
+    )
     base: dict[str, Any] = {
         "url": final_url,
         "title": env.get("title"),

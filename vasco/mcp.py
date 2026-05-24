@@ -113,14 +113,29 @@ async def search(
     except Exception as exc:
         _record_exception("search", exc, query=query, site=site, backend=backend)
         raise
-    _record_success(
-        "search",
-        query=query,
-        backend=backend or _cfg.search.default_backend,
-        site=site,
-        result_count=len(rows),
-        duration_ms=int((_monotonic() - started) * 1000),
-    )
+    duration_ms = int((_monotonic() - started) * 1000)
+    if not rows:
+        # 0 results is a legitimate outcome, not a failure (matches extract).
+        _telemetry.log_event(
+            _cfg,
+            {
+                "tool": "search",
+                "outcome": "empty",
+                "query": query,
+                "backend": backend or _cfg.search.default_backend,
+                "site": site,
+                "duration_ms": duration_ms,
+            },
+        )
+    else:
+        _record_success(
+            "search",
+            query=query,
+            backend=backend or _cfg.search.default_backend,
+            site=site,
+            result_count=len(rows),
+            duration_ms=duration_ms,
+        )
     return rows
 
 

@@ -36,17 +36,26 @@ class DdgsBackend:
         site: str | None = None,
     ) -> Iterator[SearchResult]:
         from ddgs import DDGS
+        from ddgs.exceptions import DDGSException
 
         full_query = f"site:{site} {query}" if site else query
-        with DDGS() as client:
-            items = list(
-                client.text(
-                    full_query,
-                    region=region,
-                    timelimit=time,
-                    max_results=max_results,
+        try:
+            with DDGS() as client:
+                items = list(
+                    client.text(
+                        full_query,
+                        region=region,
+                        timelimit=time,
+                        max_results=max_results,
+                    )
                 )
-            )
+        except DDGSException as exc:
+            # DDGS raises for the legitimate 0-results case ("No results found.").
+            # That's not an exception from our perspective — yield nothing and
+            # let the caller log it as `empty`.
+            if "no results" in str(exc).lower():
+                return
+            raise
         for item in items:
             title = item.get("title") or ""
             url = item.get("href") or item.get("url") or ""

@@ -113,6 +113,23 @@ from vasco.cache import normalize_url, registered_domain
         ),
         # Non-YouTube hosts containing "youtube" in path are untouched.
         ("https://example.com/youtube.com/foo", "https://example.com/youtube.com/foo"),
+        # AMP query markers collapse to the canonical URL.
+        ("https://example.com/article?amp=1", "https://example.com/article"),
+        ("https://example.com/article?amp=", "https://example.com/article"),
+        ("https://example.com/article?amp=true", "https://example.com/article"),
+        ("https://example.com/article?amp", "https://example.com/article"),
+        ("https://example.com/x?output=amp&id=42", "https://example.com/x?id=42"),
+        # `output=json` is not AMP — keep it.
+        ("https://example.com/x?output=json", "https://example.com/x?output=json"),
+        # AMP path segments and suffix get folded.
+        ("https://example.com/article/amp", "https://example.com/article"),
+        ("https://example.com/amp/article", "https://example.com/article"),
+        (
+            "https://example.com/imovel/amp/foo-123",
+            "https://example.com/imovel/foo-123",
+        ),
+        # Full-segment match only — don't mangle "amphibian".
+        ("https://example.com/amphibian/x", "https://example.com/amphibian/x"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:
@@ -121,9 +138,13 @@ def test_normalize_url(raw: str, expected: str) -> None:
 
 def test_normalize_repeated_keys_preserve_within_key_order() -> None:
     """Repeated keys should keep their relative order."""
-    assert normalize_url("https://example.com/x?a=1&a=2&a=3") == "https://example.com/x?a=1&a=2&a=3"
     assert (
-        normalize_url("https://example.com/x?b=9&a=1&a=2") == "https://example.com/x?a=1&a=2&b=9"
+        normalize_url("https://example.com/x?a=1&a=2&a=3")
+        == "https://example.com/x?a=1&a=2&a=3"
+    )
+    assert (
+        normalize_url("https://example.com/x?b=9&a=1&a=2")
+        == "https://example.com/x?a=1&a=2&b=9"
     )
 
 

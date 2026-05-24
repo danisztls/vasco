@@ -12,6 +12,13 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 
+# AMP query params stripped to fold AMP variants into the canonical row.
+# `?amp=1` is the vivareal / generic-CMS form; `?output=amp` is Twitter/X
+# and several news sites. We only drop `output` when its value is the
+# AMP sentinel — `output=json` etc. is meaningful elsewhere.
+_AMP_AMP_VALUES = frozenset({"", "1", "true", "amp"})
+_AMP_OUTPUT_VALUES = frozenset({"amp"})
+
 _KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne"}
 
 # Matches any YouTube URL that points to a specific video, capturing the
@@ -51,6 +58,36 @@ def _is_tracking_param(key: str) -> bool:
     return any(key.startswith(p) for p in _TRACKING_PREFIXES)
 
 
+def _is_amp_param(key: str, value: str) -> bool:
+    """Is this query param an AMP-mode marker we should drop?"""
+    if key == "amp":
+        return value.lower() in _AMP_AMP_VALUES
+    if key == "output":
+        return value.lower() in _AMP_OUTPUT_VALUES
+    return False
+
+
+def _strip_amp_path(path: str) -> str:
+    """Collapse common AMP path patterns (`/amp` suffix, `/amp/` segment).
+
+    Examples:
+      /article/amp        → /article
+      /imovel/amp/foo     → /imovel/foo
+      /amp/foo            → /foo
+      /amphibian/x        → /amphibian/x   (full segment match only)
+    """
+    if "/amp" not in path:
+        return path
+    segments = path.split("/")
+    cleaned = [s for s in segments if s != "amp"]
+    if cleaned == segments:
+        return path
+    new_path = "/".join(cleaned)
+    if path.startswith("/") and not new_path.startswith("/"):
+        new_path = "/" + new_path
+    return new_path or "/"
+
+
 def _canonicalize_youtube_host(raw: str) -> str:
     """Collapse every YouTube URL form for one video to a single canonical
     ``https://youtube.com/watch?v=<id>`` so they share a cache row.
@@ -88,6 +125,8 @@ def normalize_url(url: str) -> str:
       - Drop trailing slash from non-root paths
       - Sort query params alphabetically (preserving order of repeated keys)
       - Drop tracking params: utm_*, fbclid, gclid, mc_eid
+      - Drop AMP markers: ``?amp=`` (any AMP-ish value) and ``?output=amp``;
+        strip ``/amp/`` segments and ``/amp`` suffix from the path
       - Leave percent-encoded characters alone
       - Collapse YouTube variants (``youtu.be``, ``m./music./www.youtube.com``,
         local TLDs like ``youtube.com.br``) to bare ``youtube.com``
@@ -120,7 +159,7 @@ def normalize_url(url: str) -> str:
     if port is not None:
         netloc += f":{port}"
 
-    path = parts.path
+    path = _strip_amp_path(parts.path)
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/") or "/"
 
@@ -137,6 +176,8 @@ def normalize_url(url: str) -> str:
                 has_eq = False
             k_dec = unquote(k)
             if _is_tracking_param(k_dec):
+                continue
+            if _is_amp_param(k_dec, unquote(v)):
                 continue
             triples.append((k_dec, v, has_eq))
         triples.sort(key=lambda t: t[0])
@@ -267,7 +308,9 @@ class Cache:
             "quality": json.loads(row["quality_json"]) if row["quality_json"] else {},
             "links": json.loads(row["links_json"]) if row["links_json"] else [],
             "markdown": row["markdown"] or "",
-            "warnings": json.loads(row["warnings_json"]) if row["warnings_json"] else [],
+            "warnings": json.loads(row["warnings_json"])
+            if row["warnings_json"]
+            else [],
         }
         if row["failure_json"]:
             envelope["failure"] = json.loads(row["failure_json"])
@@ -313,10 +356,16 @@ class Cache:
                 envelope.get("site_name"),
                 envelope.get("word_count"),
                 envelope.get("token_count_estimate"),
-                json.dumps(envelope.get("quality", {})) if envelope.get("quality") is not None else None,
-                json.dumps(envelope.get("links", [])) if envelope.get("links") is not None else None,
+                json.dumps(envelope.get("quality", {}))
+                if envelope.get("quality") is not None
+                else None,
+                json.dumps(envelope.get("links", []))
+                if envelope.get("links") is not None
+                else None,
                 envelope.get("markdown"),
-                json.dumps(envelope.get("warnings", [])) if envelope.get("warnings") is not None else None,
+                json.dumps(envelope.get("warnings", []))
+                if envelope.get("warnings") is not None
+                else None,
                 envelope.get("http_status"),
                 failure_reason,
                 failure_json,
@@ -404,7 +453,9 @@ class Cache:
         return deleted
 
     def stats(self) -> dict:
-        entries = self._conn.execute("SELECT COUNT(*) AS n FROM fetch_cache").fetchone()["n"]
+        entries = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM fetch_cache"
+        ).fetchone()["n"]
         size_bytes = 0
         try:
             size_bytes = self._path.stat().st_size

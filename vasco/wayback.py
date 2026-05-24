@@ -66,9 +66,7 @@ async def find_snapshot(
                 if deadline_monotonic - time.monotonic() <= 0:
                     return None
                 try:
-                    resp = await client.get(
-                        _AVAILABILITY_API, params={"url": variant}
-                    )
+                    resp = await client.get(_AVAILABILITY_API, params={"url": variant})
                 except Exception:
                     continue
                 if resp.status_code != 200:
@@ -80,6 +78,9 @@ async def find_snapshot(
                 snapshot = _extract_snapshot(data)
                 if snapshot is not None:
                     return snapshot
+                # 200 + empty archived_snapshots is an authoritative "no
+                # snapshot" — don't waste budget on the trailing-slash retry.
+                return None
     except Exception:
         return None
     return None

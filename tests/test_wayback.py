@@ -23,7 +23,9 @@ from vasco import wayback
 def test_inject_if_modifier_basic() -> None:
     url = "https://web.archive.org/web/20240501123045/https://example.com/foo"
     out = wayback._inject_if_modifier(url)
-    assert out == "https://web.archive.org/web/20240501123045if_/https://example.com/foo"
+    assert (
+        out == "https://web.archive.org/web/20240501123045if_/https://example.com/foo"
+    )
 
 
 def test_inject_if_modifier_idempotent_when_modifier_already_present() -> None:
@@ -66,7 +68,9 @@ class _FakeResponse:
 class _FakeClient:
     """Minimal stand-in for httpx.AsyncClient that returns canned responses."""
 
-    def __init__(self, *, response: _FakeResponse | None = None, raises: Exception | None = None) -> None:
+    def __init__(
+        self, *, response: _FakeResponse | None = None, raises: Exception | None = None
+    ) -> None:
         self._response = response
         self._raises = raises
         self.calls: list[tuple[str, dict]] = []
@@ -183,6 +187,73 @@ def test_find_snapshot_swallows_network_errors(
         wayback.find_snapshot("https://example.com/", deadline_monotonic=deadline)
     )
     assert out is None
+
+
+def test_find_snapshot_skips_retry_on_authoritative_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 200 with empty archived_snapshots is final — don't try the
+    trailing-slash variant."""
+    payload = {"archived_snapshots": {}}
+    client = _FakeClient(response=_FakeResponse(status_code=200, payload=payload))
+    _install_fake_httpx(monkeypatch, client)
+
+    deadline = time.monotonic() + 30.0
+    out = asyncio.run(
+        wayback.find_snapshot("https://example.com/foo", deadline_monotonic=deadline)
+    )
+    assert out is None
+    assert len(client.calls) == 1  # no trailing-slash retry
+
+
+def test_find_snapshot_retries_on_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-200 / exception on the first variant should still trigger a retry."""
+
+    class _FlakyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+            self._first = True
+
+        async def __aenter__(self) -> "_FlakyClient":
+            return self
+
+        async def __aexit__(self, *a: Any) -> None: ...
+
+        async def get(self, url: str, params: dict | None = None):
+            self.calls.append((url, params or {}))
+            if self._first:
+                self._first = False
+                return _FakeResponse(status_code=503, payload={})
+            return _FakeResponse(
+                status_code=200,
+                payload={
+                    "archived_snapshots": {
+                        "closest": {
+                            "available": True,
+                            "status": "200",
+                            "url": "https://web.archive.org/web/20240501/https://example.com/foo",
+                        }
+                    }
+                },
+            )
+
+    client = _FlakyClient()
+
+    class _Factory:
+        def __call__(self, *a: Any, **kw: Any) -> _FlakyClient:
+            return client
+
+    fake_module = type("FakeHttpx", (), {"AsyncClient": _Factory()})
+    monkeypatch.setattr(wayback, "httpx", fake_module)
+
+    deadline = time.monotonic() + 30.0
+    out = asyncio.run(
+        wayback.find_snapshot("https://example.com/foo", deadline_monotonic=deadline)
+    )
+    assert out is not None
+    assert len(client.calls) == 2  # retry happened
 
 
 def test_find_snapshot_none_when_deadline_exhausted(

@@ -181,7 +181,16 @@ def _ytdlp_base_opts(cfg: Any | None) -> dict[str, Any]:
     leaving the rest defaulted. Reads the user's real on-disk browser profile, not
     Camoufox.
     """
-    opts: dict[str, Any] = {"skip_download": True, "quiet": True, "no_warnings": True}
+    # `extractor_retries=0`: yt-dlp's default of 3 retries is wasteful for
+    # extractor errors, which are almost always terminal (login_required,
+    # private, age-gated, removed). Network-level retries (`retries`) are
+    # untouched — those still benefit from yt-dlp's default backoff.
+    opts: dict[str, Any] = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_retries": 0,
+    }
     browser = ""
     if cfg is not None:
         browser = (

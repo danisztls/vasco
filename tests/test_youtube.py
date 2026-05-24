@@ -332,6 +332,12 @@ def test_ytdlp_base_opts_omits_cookies_when_unset() -> None:
     assert "cookiesfrombrowser" not in youtube._ytdlp_base_opts(Config())
 
 
+def test_ytdlp_base_opts_disables_extractor_retries() -> None:
+    """Extractor failures (login_required, private, removed) are terminal —
+    yt-dlp's default 3 retries just wastes time before we surface them."""
+    assert youtube._ytdlp_base_opts(None)["extractor_retries"] == 0
+
+
 def test_ytdlp_base_opts_passes_cookies_from_browser() -> None:
     from vasco.config import Config, YouTubeCfg
 

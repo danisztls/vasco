@@ -25,6 +25,14 @@ class Searcher(Protocol):
     ) -> Iterator[SearchResult]: ...
 
 
+# All current ddgs text backends EXCEPT "grokipedia" (xAI's Wikipedia clone).
+# Default `backend="auto"` prepends grokipedia + wikipedia ahead of the real
+# search engines, and grokipedia's typeahead API is flaky enough to raise
+# DDGSException for the whole call. Pinning the list keeps coverage parity
+# with auto while dropping the unstable provider.
+_DDGS_TEXT_BACKENDS = "google,bing,brave,duckduckgo,mojeek,yahoo,yandex,wikipedia"
+
+
 class DdgsBackend:
     def search(
         self,
@@ -47,6 +55,7 @@ class DdgsBackend:
                         region=region,
                         timelimit=time,
                         max_results=max_results,
+                        backend=_DDGS_TEXT_BACKENDS,
                     )
                 )
         except DDGSException as exc:

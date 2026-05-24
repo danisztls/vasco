@@ -391,17 +391,44 @@ def _failure_envelope(
     return env
 
 
+# Negative-cache TTL multipliers, keyed by failure reason. Some failures
+# (NOT_FOUND, ROBOTS_DISALLOW, INVALID_URL) won't change for a long time and
+# deserve the full success TTL; others (TIMEOUT, SERVER_ERROR) are transient
+# and should expire quickly so a retry can pick up a recovered upstream.
+_FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
+    FailureReason.NOT_FOUND: 96.0,  # ~24h at default 900s base
+    FailureReason.ROBOTS_DISALLOW: 96.0,
+    FailureReason.INVALID_URL: 96.0,
+    FailureReason.UNSUPPORTED_CONTENT_TYPE: 96.0,
+    FailureReason.PAYWALL_HARD: 24.0,  # ~6h
+    FailureReason.LOGIN_REQUIRED: 24.0,
+    FailureReason.BLOCKED_BOT: 4.0,  # ~1h
+    FailureReason.BLOCKED_CLOUDFLARE: 4.0,
+    FailureReason.BLOCKED_CAPTCHA: 4.0,
+    FailureReason.TIMEOUT: 0.33,  # ~5min
+    FailureReason.DEADLINE_EXCEEDED: 0.33,
+    FailureReason.SERVER_ERROR: 0.33,
+    FailureReason.DNS_FAIL: 0.33,
+}
+
+
 def _ttl_for(envelope: dict[str, Any], cfg: Any | None) -> int:
     success = "failure" not in envelope
-    default = 86400 if success else 900
-    if cfg is None:
-        return default
+    if success:
+        try:
+            return int(cfg.fetch.ttl_seconds) if cfg is not None else 86400
+        except Exception:
+            return 86400
     try:
-        if success:
-            return int(cfg.fetch.ttl_seconds)
-        return int(cfg.fetch.failure_ttl_seconds)
+        base = int(cfg.fetch.failure_ttl_seconds) if cfg is not None else 900
     except Exception:
-        return default
+        base = 900
+    reason_str = envelope.get("failure", {}).get("reason")
+    try:
+        reason = FailureReason(reason_str)
+    except (ValueError, TypeError):
+        return base
+    return max(1, int(base * _FAILURE_TTL_MULTIPLIER.get(reason, 1.0)))
 
 
 _LIVE_FETCH_PHASE_KEYS = (

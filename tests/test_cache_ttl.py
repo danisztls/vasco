@@ -145,3 +145,19 @@ def test_stats_reports_entries(cache: Cache, fake_time) -> None:
     cache.put(_success_envelope("https://example.com/a"), ttl_seconds=10)
     cache.put(_success_envelope("https://example.com/b"), ttl_seconds=10)
     assert cache.stats()["entries"] == 2
+
+
+def test_failure_ttl_scales_per_reason() -> None:
+    """NOT_FOUND should outlive transient failures; TIMEOUT should be short."""
+    from vasco.fetch import _ttl_for
+
+    def env(reason: str) -> dict:
+        return {"failure": {"reason": reason}}
+
+    base = 900  # default cfg.fetch.failure_ttl_seconds
+    assert _ttl_for(env("not_found"), None) == base * 96
+    assert _ttl_for(env("blocked_bot"), None) == base * 4
+    assert _ttl_for(env("timeout"), None) == int(base * 0.33)
+    assert _ttl_for(env("server_error"), None) == int(base * 0.33)
+    # Unknown reasons fall back to the base TTL.
+    assert _ttl_for(env("totally_made_up"), None) == base

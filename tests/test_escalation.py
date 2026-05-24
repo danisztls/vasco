@@ -285,6 +285,40 @@ def test_browser_disconnect_classified_as_blocked_bot(
     assert env["mode_used"] == "browser"
 
 
+def test_playwright_timeout_classified_as_timeout_not_bot_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playwright TimeoutError → TIMEOUT, not BLOCKED_BOT (regression: slow
+    loads on w3.org / turing.ac.uk used to be mislabeled as bot blocks)."""
+
+    class _PWTimeout(Exception):
+        pass
+
+    _PWTimeout.__name__ = "TimeoutError"  # mirror playwright's class name
+
+    class _Pool:
+        async def fetch(self, *a: Any, **kw: Any) -> tuple[str, int, dict[str, str]]:
+            raise _PWTimeout("Page.goto: Timeout 15000ms exceeded.")
+
+        async def close(self) -> None: ...
+
+    from vasco import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _Pool())
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://slow.example.com/x",
+            cache=FakeCache(strategy="browser"),
+            use_cache=False,
+            deadline=10.0,
+        )
+    )
+    assert env["failure"]["reason"] == FailureReason.TIMEOUT.value
+    assert env["mode_used"] == "browser"
+
+
 def test_browser_unknown_exception_propagates_to_server_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -484,9 +518,7 @@ def test_cache_hit_envelope_omits_phase_fields(monkeypatch: pytest.MonkeyPatch) 
 # -----------------------------------------------------------------------------
 
 
-def _make_browser_then_clean(
-    blocked_html: str, clean_html: str, status: int = 200
-):
+def _make_browser_then_clean(blocked_html: str, clean_html: str, status: int = 200):
     """Browser stub: returns blocked_html on first call, clean_html when mobile=True."""
 
     async def _fake_browser(
@@ -559,7 +591,9 @@ def test_wayback_recovers_after_mobile_blocked(
     monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
     monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
 
-    snapshot_url = "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
+    snapshot_url = (
+        "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
+    )
     wb_calls = _patch_wayback_snapshot(monkeypatch, snapshot_url)
 
     # Once wayback gives us a snapshot URL, fetch.py calls _http_fetch again
@@ -574,9 +608,7 @@ def test_wayback_recovers_after_mobile_blocked(
             return await clean_for_snapshot(
                 url, deadline_monotonic=deadline_monotonic, cfg=cfg
             )
-        return await real_http_stub(
-            url, deadline_monotonic=deadline_monotonic, cfg=cfg
-        )
+        return await real_http_stub(url, deadline_monotonic=deadline_monotonic, cfg=cfg)
 
     monkeypatch.setattr(fetch_mod, "_http_fetch", _dispatching_http)
     _disable_browser_close(monkeypatch)
@@ -612,9 +644,7 @@ def test_explicit_wayback_mode_skips_other_tiers(
         return "", 0, {}
 
     monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
-    snapshot = (
-        "https://web.archive.org/web/20240501123045if_/https://wb.example.com/x"
-    )
+    snapshot = "https://web.archive.org/web/20240501123045if_/https://wb.example.com/x"
     _patch_wayback_snapshot(monkeypatch, snapshot)
     _disable_browser_close(monkeypatch)
 

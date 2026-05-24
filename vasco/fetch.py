@@ -54,6 +54,7 @@ def _tier_deadline(global_deadline: float, tier_max: float) -> float:
     """Clamp a per-tier deadline so a hung tier can't starve the next one."""
     return min(global_deadline, time.monotonic() + tier_max)
 
+
 # Failure reasons that justify spending budget on mobile/wayback recovery.
 # Other failures (NOT_FOUND, DNS_FAIL, etc.) won't change with a new tier.
 _RECOVERABLE_REASONS: frozenset[FailureReason] = frozenset(
@@ -168,17 +169,23 @@ async def _http_fetch(
         return "", 0, {"_failure_hint": "dns_fail"}
 
 
+# Markers are disconnect-specific. "page.goto" / "page.content" were dropped:
+# they also appear in plain Playwright TimeoutError messages and were causing
+# slow loads to be mislabeled as BLOCKED_BOT.
 _BROWSER_DISCONNECT_MARKERS: tuple[str, ...] = (
     "connection closed",
     "target closed",
     "target page, context or browser has been closed",
     "browser has been closed",
-    "page.content",
-    "page.goto",
     "net::err_aborted",
     "net::err_http2_protocol_error",
     "econnreset",
 )
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    # Playwright's TimeoutError is a separate class from asyncio.TimeoutError.
+    return type(exc).__name__ == "TimeoutError" or "timeout" in str(exc).lower()
 
 
 def _looks_like_bot_block(exc: BaseException) -> bool:
@@ -213,6 +220,8 @@ async def _browser_fetch(
     except asyncio.TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
     except Exception as exc:
+        if _looks_like_timeout(exc):
+            return "", 0, {"_failure_hint": "timeout"}
         if _looks_like_bot_block(exc):
             return "", 0, {"_failure_hint": "bot_blocked"}
         raise
@@ -550,9 +559,7 @@ async def _do_fetch_html(
     if mode == "wayback":
         result = await _try_wayback_recovery(
             url,
-            deadline_monotonic=_tier_deadline(
-                deadline_monotonic, WAYBACK_MAX_BUDGET
-            ),
+            deadline_monotonic=_tier_deadline(deadline_monotonic, WAYBACK_MAX_BUDGET),
             cfg=cfg,
             phases=phases,
         )
@@ -697,9 +704,7 @@ async def _do_fetch_html(
     if (deadline_monotonic - time.monotonic()) >= WAYBACK_MIN_BUDGET:
         wb = await _try_wayback_recovery(
             url,
-            deadline_monotonic=_tier_deadline(
-                deadline_monotonic, WAYBACK_MAX_BUDGET
-            ),
+            deadline_monotonic=_tier_deadline(deadline_monotonic, WAYBACK_MAX_BUDGET),
             cfg=cfg,
             phases=phases,
         )
@@ -863,11 +868,15 @@ async def _fetch_one_body(
             mode_used="http",
             content_type="",
         )
-        return _failure_envelope(
-            base=base,
-            reason=FailureReason.INVALID_URL,
-            message="URL could not be normalized",
-        ), False, None
+        return (
+            _failure_envelope(
+                base=base,
+                reason=FailureReason.INVALID_URL,
+                message="URL could not be normalized",
+            ),
+            False,
+            None,
+        )
 
     # --- Cache hit -----------------------------------------------------------
     if use_cache and not refresh and cache is not None:
@@ -954,9 +963,7 @@ async def _fetch_one_body(
                 phases=phases,
             )
             if use_cache and cache is not None:
-                _cache_put(
-                    cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
-                )
+                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
             return envelope, browser_started, phases
 
         if reason != FailureReason.OK:
@@ -979,9 +986,7 @@ async def _fetch_one_body(
                     pass
                 phases.parse_ms += _ms_since(t_parse)
             if use_cache and cache is not None:
-                _cache_put(
-                    cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
-                )
+                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
             return envelope, browser_started, phases
 
         # Success path.

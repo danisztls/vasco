@@ -149,7 +149,24 @@ async def _http_fetch(
         except Exception:
             pass
 
-    headers_out = {"User-Agent": user_agent, "Accept": "*/*"}
+    # A bare User-Agent + Accept:*/* is itself a "non-browser" tell on the
+    # HTTP tier — any one missing Sec-Fetch-* header lets WAFs short-circuit
+    # before we even reach the browser tier. We send a fixed modern-Chrome
+    # shape; the UA stays configurable via cfg.fetch.user_agent.
+    headers_out = {
+        "User-Agent": user_agent,
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-User": "?1",
+        "Sec-Fetch-Dest": "document",
+    }
     try:
         async with httpx.AsyncClient(
             http2=True,

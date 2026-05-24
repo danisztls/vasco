@@ -9,6 +9,7 @@ in a `finally` block.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
@@ -29,9 +30,23 @@ _MOBILE_VIEWPORT = {"width": 393, "height": 852}
 class BrowserPool:
     """Owns one Camoufox browser context for an invocation."""
 
-    def __init__(self, *, headless: bool = True, locale: str = "en-US") -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        locale: str = "en-US",
+        user_data_dir: str = "",
+    ) -> None:
         self._headless = headless
         self._locale = locale
+        # Persistent profile dir: when non-empty, Camoufox runs in
+        # persistent_context mode so cookies (Cloudflare clearance, login
+        # sessions, etc.) survive across Vasco runs. In that mode
+        # AsyncCamoufox.__aenter__ yields a BrowserContext rather than a
+        # Browser — we lose `.new_context()`, so the mobile recovery tier
+        # falls back to UA/viewport overrides on a context page.
+        self._user_data_dir = _expand_profile_dir(user_data_dir)
+        self._is_persistent = bool(self._user_data_dir)
         self._lock = asyncio.Lock()
         self._cm: Any | None = None
         self._browser: Any | None = None
@@ -46,10 +61,15 @@ class BrowserPool:
                 raise RuntimeError(
                     "camoufox is not installed; cannot start browser tier"
                 )
-            self._cm = AsyncCamoufox(
-                headless=self._headless,
-                locale=(self._locale,),
-            )
+            kwargs: dict[str, Any] = {
+                "headless": self._headless,
+                "locale": (self._locale,),
+            }
+            if self._is_persistent:
+                os.makedirs(self._user_data_dir, exist_ok=True)
+                kwargs["persistent_context"] = True
+                kwargs["user_data_dir"] = self._user_data_dir
+            self._cm = AsyncCamoufox(**kwargs)
             self._browser = await self._cm.__aenter__()
 
     async def fetch(
@@ -74,7 +94,7 @@ class BrowserPool:
         assert self._browser is not None
 
         context = None
-        if mobile:
+        if mobile and not self._is_persistent:
             # NOTE: `is_mobile` and `has_touch` are Chromium-only in Playwright;
             # Camoufox is Firefox-based, so we stick to UA + viewport +
             # device_scale_factor — the three signals most server-side mobile
@@ -87,11 +107,16 @@ class BrowserPool:
             )
             page = await context.new_page()
         else:
+            # Persistent mode: AsyncCamoufox yields a BrowserContext, which has
+            # `.new_page()` but no `.new_context()`. Mobile recovery applies UA
+            # + viewport per-page; device_scale_factor isn't settable here, but
+            # most mobile routing checks UA + viewport.
             page = await self._browser.new_page()
+            if mobile:
+                await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
+                await page.set_viewport_size(_MOBILE_VIEWPORT)
         try:
-            remaining_ms = int(
-                max(0.0, deadline_monotonic - time.monotonic()) * 1000
-            )
+            remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
             if remaining_ms <= 0:
                 raise asyncio.TimeoutError(
                     "deadline elapsed before page.goto could start"
@@ -102,14 +127,10 @@ class BrowserPool:
                 timeout=remaining_ms,
             )
 
-            remaining_ms = int(
-                max(0.0, deadline_monotonic - time.monotonic()) * 1000
-            )
+            remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
             if remaining_ms > 0:
                 try:
-                    await page.wait_for_load_state(
-                        "networkidle", timeout=remaining_ms
-                    )
+                    await page.wait_for_load_state("networkidle", timeout=remaining_ms)
                 except Exception:
                     pass
 
@@ -123,8 +144,7 @@ class BrowserPool:
                 except Exception:
                     try:
                         headers = {
-                            str(k): str(v)
-                            for k, v in (response.headers or {}).items()
+                            str(k): str(v) for k, v in (response.headers or {}).items()
                         }
                     except Exception:
                         headers = {}
@@ -155,6 +175,13 @@ class BrowserPool:
 _pool: BrowserPool | None = None
 
 
+def _expand_profile_dir(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(raw)))
+
+
 def get_browser(cfg: Any | None = None) -> BrowserPool:
     """Return the process-wide BrowserPool singleton.
 
@@ -167,13 +194,19 @@ def get_browser(cfg: Any | None = None) -> BrowserPool:
     if _pool is None:
         headless = True
         locale = "en-US"
+        user_data_dir = ""
         if cfg is not None:
             try:
                 headless = bool(cfg.browser.headless)
                 locale = str(cfg.browser.locale)
+                user_data_dir = str(cfg.browser.user_data_dir or "")
             except Exception:
                 pass
-        _pool = BrowserPool(headless=headless, locale=locale)
+        _pool = BrowserPool(
+            headless=headless,
+            locale=locale,
+            user_data_dir=user_data_dir,
+        )
     return _pool
 
 

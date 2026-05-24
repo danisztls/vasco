@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vasco.config import Config, YouTubeCfg, load_config
+from vasco.config import BrowserCfg, Config, YouTubeCfg, load_config
 
 
 def _write_yaml(tmp_path: Path, body: str) -> Path:
@@ -76,3 +76,15 @@ def test_unknown_section_is_ignored(tmp_path: Path) -> None:
     _write_yaml(tmp_path, "bogus:\n  hello: world\nfetch:\n  workers: 3\n")
     cfg = load_config()
     assert cfg.fetch.workers == 3
+
+
+def test_browser_user_data_dir_from_yaml(tmp_path: Path) -> None:
+    _write_yaml(tmp_path, "browser:\n  user_data_dir: /var/lib/vasco/profile\n")
+    cfg = load_config()
+    assert cfg.browser == BrowserCfg(user_data_dir="/var/lib/vasco/profile")
+
+
+def test_browser_user_data_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VASCO_BROWSER_USER_DATA_DIR", "/tmp/vasco-profile")
+    cfg = load_config()
+    assert cfg.browser.user_data_dir == "/tmp/vasco-profile"

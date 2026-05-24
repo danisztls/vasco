@@ -33,6 +33,7 @@ class BrowserCfg:
     headless: bool = True
     locale: str = "en-US"
     prewarm: bool = False
+    user_data_dir: str = ""  # "" disables persistent profile
 
 
 @dataclass(frozen=True)

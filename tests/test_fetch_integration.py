@@ -12,17 +12,16 @@ from typing import Any
 
 import pytest
 
-
-# A year-2100 epoch second — used as fetched_at in faked envelopes so the
-# cache's TTL (current_time + 86400) is always far in the future, making
-# tests independent of the wall clock at run time.
-_FAR_FUTURE_FETCHED_AT = 4_102_444_800
-
 from vasco import browser as browser_mod
 from vasco import fetch as fetch_mod
 from vasco import youtube as youtube_mod
 from vasco.cache import Cache
 
+
+# A year-2100 epoch second — used as fetched_at in faked envelopes so the
+# cache's TTL (current_time + 86400) is always far in the future, making
+# tests independent of the wall clock at run time.
+_FAR_FUTURE_FETCHED_AT = 4_102_444_800
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -188,9 +187,7 @@ def test_youtube_url_routes_to_youtube_fetcher(
     cache = Cache(str(tmp_path / "cache.db"))
     try:
         first = asyncio.run(
-            fetch_mod.fetch_one(
-                "https://youtu.be/abc123", cache=cache, deadline=10.0
-            )
+            fetch_mod.fetch_one("https://youtu.be/abc123", cache=cache, deadline=10.0)
         )
         assert first["mode_used"] == "youtube"
         assert first["markdown"] == "hello world"
@@ -273,9 +270,7 @@ def test_refresh_flag_writes_but_ignores_read(
     cache = Cache(str(tmp_path / "cache.db"))
     try:
         first = asyncio.run(
-            fetch_mod.fetch_one(
-                "https://example.com/y", cache=cache, deadline=10.0
-            )
+            fetch_mod.fetch_one("https://example.com/y", cache=cache, deadline=10.0)
         )
         assert first["from_cache"] is False
 
@@ -295,9 +290,7 @@ def test_refresh_flag_writes_but_ignores_read(
 
         # And the cache should now hold the refreshed body.
         third = asyncio.run(
-            fetch_mod.fetch_one(
-                "https://example.com/y", cache=cache, deadline=10.0
-            )
+            fetch_mod.fetch_one("https://example.com/y", cache=cache, deadline=10.0)
         )
         assert third["from_cache"] is True
         assert "second" in (third.get("markdown") or "").lower()

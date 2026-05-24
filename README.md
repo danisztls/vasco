@@ -19,14 +19,17 @@ PDF support shells out to `pdftotext` and `pdfinfo` — install via `poppler` (L
 
 ```
 vasco search    <query>  [--max 10] [--region us-en] [--time d|w|m|y] [--site DOMAIN] [--json]
-vasco fetch     <url...> [--mode auto|http|browser] [--workers 4]
+vasco fetch     <url...> [--mode auto|http|browser|mobile|wayback] [--workers 4]
                           [--no-cache] [--refresh] [--deadline 15s] [--raw]
                           [--json | --concat]
 vasco extract   <url>     --query "..." [--top 5] [--context-chars 400]
+                          [--rank bm25|semantic] [--mode auto|http|browser|mobile|wayback]
 vasco map       <url>     [--source sitemap|feeds|spider|all] [--limit 1000]
                           [--exclude SUBSTR]...
 vasco normalize <url>
 vasco cache     list | purge [--older-than 7d] | stats
+vasco logs      stats [--days 1]
+vasco mcp
 ```
 
 ### Quick tour
@@ -39,8 +42,11 @@ uv run vasco search "rust async runtimes" --max 5 --json | jq .
 uv run vasco fetch https://example.com
 uv run vasco fetch https://example.com | jq '.title, .word_count, .from_cache'
 
-# Bot-protected sites auto-escalate to a stealth browser
-uv run vasco fetch https://www.g2.com/products/notion/reviews | jq '.mode_used, .failure'
+# Bot-protected sites auto-escalate: http → browser → browser+mobile → wayback
+uv run vasco fetch https://www.g2.com/products/notion/reviews | jq '.mode_used, .escalated_from, .failure'
+
+# Per-fetch phase timing on the envelope
+uv run vasco fetch https://example.com | jq '.duration_ms, .network_ms, .parse_ms, .attempts'
 
 # Batch streams NDJSON as pages complete
 uv run vasco fetch https://example.com https://news.ycombinator.com
@@ -82,9 +88,17 @@ Every successful `fetch` (cache hit or miss) returns the same envelope:
   "quality": { "trafilatura_confidence": 0.86, "boilerplate_ratio": 0.12 },
   "links":    [{"url": "...", "anchor": "...", "rel": null}],
   "markdown": "...",
+  "duration_ms":     842,
+  "network_ms":      610,
+  "parse_ms":         95,
+  "cache_write_ms":   12,
+  "attempts":          1,
+  "escalated_from":  null,
   "warnings": []
 }
 ```
+
+Phase fields (`network_ms`, `parse_ms`, `cache_write_ms`, `attempts`, `escalated_from`) are populated on real fetches. Cache hits and short-circuit paths stamp only `duration_ms`. `escalated_from` is set when auto-mode started in one tier and finished in another (e.g. `"http"` → finished in `browser`).
 
 Failures replace the success-only fields with a typed `failure` object:
 
@@ -137,30 +151,35 @@ Cache lives at `$XDG_CACHE_HOME/vasco/cache.db` (default `~/.cache/vasco/cache.d
 
 ## Telemetry
 
-The MCP server writes structured JSONL events to `$XDG_DATA_HOME/vasco/logs/YYYY-MM-DD.jsonl` (default `~/.local/share/vasco/logs/`) — one file per day, append-only. Events are emitted on:
+Both the CLI and the MCP server write structured JSONL events to `$XDG_DATA_HOME/vasco/logs/YYYY-MM-DD.jsonl` (default `~/.local/share/vasco/logs/`) — one file per day, append-only. Every tool call emits a single record with an `outcome` discriminator:
 
-- typed fetch failures (per call for `fetch`, per URL for `fetch_many`)
-- `extract` returning zero passages (lets you separate "query was off" from "fetch silently broke")
-- uncaught tool-level exceptions
+- `ok` — success; carries `mode_used`, `http_status`, `from_cache`, and the phase fields (`duration_ms`, `network_ms`, `parse_ms`, `cache_write_ms`, `attempts`, `escalated_from`)
+- `fail` — typed failure; carries `failure_reason` + `message` (per URL for `fetch_many`)
+- `empty` — `extract` returning zero passages (separates "query was off" from "fetch silently broke")
+- `exception` — uncaught tool-level exception
 
-Each record is a single JSON object — `tool`, `url`, `failure_reason`, `message`, `mode_used`, `http_status`, `ts` (UTC ISO 8601). Successful calls are not logged. Disable with `[logging] enabled = false` or `VASCO_LOGGING_ENABLED=false`. Writes never block tool calls — any I/O error is swallowed silently.
+Common fields: `tool`, `url`, `ts` (UTC ISO 8601). Disable with `[logging] enabled = false` or `VASCO_LOGGING_ENABLED=false`. Writes never block tool calls — any I/O error is swallowed silently.
 
-Quick tour:
+`vasco logs stats [--days N]` rolls the JSONL into a JSON summary: per-tool outcome counts, cache-hit ratio, mode mix, failure histogram, p50/p95/p99 of `duration_ms`, per-phase percentiles, and `escalation_rate` (fraction of successful fetches where auto-mode started in `http` and finished in `browser`).
 
 ```bash
 tail -f ~/.local/share/vasco/logs/$(date -u +%F).jsonl | jq .
-jq -r '.failure_reason // empty' ~/.local/share/vasco/logs/*.jsonl | sort | uniq -c | sort -rn
+uv run vasco logs stats --days 7 | jq '.by_tool, .escalation_rate, .phase_percentiles'
+jq -r 'select(.outcome=="fail") | .failure_reason' ~/.local/share/vasco/logs/*.jsonl | sort | uniq -c | sort -rn
 ```
+
+## MCP server
+
+`vasco mcp` runs the server on stdio, exposing `search`, `fetch`, `fetch_many`, `extract`, and `map` to MCP clients (Claude Desktop, Claude Code). The `BrowserPool` and any loaded semantic model stay warm for the server's lifetime.
+
+- **`fetch_many` defaults to `metadata_only=true`.** Batch fan-outs return triage envelopes (no `markdown`) so an agent can pick what to read instead of dumping N pages of markdown into context. Refetching a chosen URL afterwards is near-free — it's a cache hit. Pass `metadata_only=false` to override.
+- **`fetch` accepts `metadata_only=true`** for the same reason on large pages that would otherwise blow per-tool-output caps.
+- **Browser prewarm is opt-in.** Set `VASCO_BROWSER_PREWARM=true` (or `[browser] prewarm = true`) and the server launches Camoufox during lifespan startup, so the first browser-tier fetch doesn't pay Firefox cold-start cost. Prewarm failures (e.g. camoufox not installed) are swallowed — HTTP-tier users are unaffected.
 
 ## Known limitations
 
 - **Tables rendered via MathJax / CSS come out hollow.** Pages like the arXiv HTML view encode numeric cells through scripts that trafilatura (and most plain-HTML extractors) strip. Prose around the table survives intact; the table itself becomes a markdown skeleton with empty data cells. Workaround for now: read the surrounding paragraphs, or fetch the PDF version (`https://arxiv.org/pdf/...`) which preserves tabular data via `pdftotext`.
 - **Large pages may overflow downstream context windows.** A 10k-word article can yield ~80 KB of markdown. Consumers running into per-tool-output caps should call `extract` for query-targeted passages, or pass `metadata_only=true` to the MCP `fetch` / `fetch_many` tools to get the envelope without the `markdown` field.
-
-## Status
-
-- **v0.1** — shipped. Search (ddg), fetch (HTTP + Camoufox auto-escalation with per-domain learning), extract (BM25), map, cache, PDF.
-- **v0.2** — planned. MCP server, semantic extract, paid search backends (Tavily/Brave/Kagi), YouTube transcripts, daemon mode. See [PLAN.md](PLAN.md).
 
 ## License
 

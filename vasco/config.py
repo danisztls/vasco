@@ -64,6 +64,12 @@ class WikimediaCfg:
 
 
 @dataclass(frozen=True)
+class QualityCfg:
+    blocklist_paths: tuple[str, ...] = ()
+    classifier_model_path: str = ""  # non-empty enables the classifier
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -73,6 +79,7 @@ class Config:
     logging: LoggingCfg = field(default_factory=LoggingCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
+    quality: QualityCfg | None = field(default_factory=QualityCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -84,6 +91,7 @@ _SECTIONS: dict[str, type] = {
     "logging": LoggingCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,
+    "quality": QualityCfg,
 }
 
 
@@ -113,12 +121,16 @@ def _apply_dict(section: Any, data: dict[str, Any]) -> Any:
     field_types = {f.name: f.type for f in fields(section)}
     for key, val in data.items():
         if key in field_types:
-            ftype = field_types[key]
-            if isinstance(ftype, str):
-                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
-                    ftype, str
-                )
-            overrides[key] = _coerce(val, ftype)
+            current = getattr(section, key)
+            if isinstance(current, tuple) and isinstance(val, list):
+                overrides[key] = tuple(val)
+            else:
+                ftype = field_types[key]
+                if isinstance(ftype, str):
+                    ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
+                        ftype, str
+                    )
+                overrides[key] = _coerce(val, ftype)
     return replace(section, **overrides) if overrides else section
 
 
@@ -131,12 +143,21 @@ def _apply_env(section: Any, section_name: str) -> Any:
             continue
         field_name = env_key[len(prefix) :].lower()
         if field_name in field_types:
-            ftype = field_types[field_name]
-            if isinstance(ftype, str):
-                ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
-                    ftype, str
+            current = getattr(section, field_name)
+            if isinstance(current, tuple):
+                overrides[field_name] = tuple(
+                    s.strip() for s in env_val.split(":") if s.strip()
                 )
-            overrides[field_name] = _coerce(env_val, ftype)
+            else:
+                ftype = field_types[field_name]
+                if isinstance(ftype, str):
+                    ftype = {
+                        "str": str,
+                        "int": int,
+                        "float": float,
+                        "bool": bool,
+                    }.get(ftype, str)
+                overrides[field_name] = _coerce(env_val, ftype)
     return replace(section, **overrides) if overrides else section
 
 
@@ -166,5 +187,17 @@ def load_config() -> Config:
             current = _apply_dict(current, section_data)
         current = _apply_env(current, name)
         sections[name] = current
+
+    # quality: None / false in YAML disables scoring entirely.
+    quality_raw = data.get("quality")
+    if quality_raw is not None and not quality_raw:
+        sections["quality"] = None
+    if os.environ.get("VASCO_QUALITY_ENABLED", "").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        sections["quality"] = None
 
     return Config(**sections)

@@ -40,3 +40,9 @@
 #   password: ""                # or VASCO_WIKIMEDIA_PASSWORD
 #                               # Sign up free at https://dashboard.enterprise.wikimedia.com/signup/
 #                               # Without credentials, falls back to the free REST API (all languages, no cap)
+
+# quality:                       # remove or set to `false` to disable scoring entirely
+#   blocklist_paths:            # local files or remote URLs (plain-domain or uBlacklist format)
+#     - ~/.config/vasco/blocklist.txt
+#     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt
+#   classifier_model_path: ""   # path to .bin model; non-empty enables fastText classifier (vasco[classifier])

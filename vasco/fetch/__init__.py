@@ -25,7 +25,8 @@ except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
 from . import bot_detect, browser
-from vasco import io as io_mod
+from vasco import io as io_mod, quality as quality_mod
+from vasco.config import QualityCfg
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import wayback, wikimedia, youtube
 from vasco.errors import FailureReason
@@ -1200,6 +1201,12 @@ async def _fetch_one_body(
             t_parse = time.monotonic()
             markdown, meta = convert.html_to_markdown(html, url=base["url_final"])
             phases.parse_ms += _ms_since(t_parse)
+            quality_cfg = cfg.quality if cfg is not None else QualityCfg()
+            if quality_cfg is not None:
+                quality_scores = quality_mod.score(
+                    markdown, url=base["url_final"], cfg=quality_cfg
+                )
+                meta["quality"].update(quality_scores)
             envelope = _success_envelope(
                 base=base,
                 markdown=markdown,

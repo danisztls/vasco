@@ -24,16 +24,9 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from . import (
-    bot_detect,
-    browser,
-    convert,
-    io as io_mod,
-    pdf,
-    wayback,
-    wikimedia,
-    youtube,
-)
+from . import bot_detect, browser, io as io_mod
+from .converters import convert, pdf
+from .adapters import wayback, wikimedia, youtube
 from .errors import FailureReason
 
 

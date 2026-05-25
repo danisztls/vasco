@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from vasco import search as search_mod
+from vasco.adapters.ddgs import DdgsBackend
 
 
 def test_no_results_yields_empty_not_exception(
@@ -24,7 +24,7 @@ def test_no_results_yields_empty_not_exception(
             raise DDGSException("No results found.")
 
     monkeypatch.setattr("ddgs.DDGS", _DDGS)
-    assert list(search_mod.DdgsBackend().search("nonexistent query")) == []
+    assert list(DdgsBackend().search("nonexistent query")) == []
 
 
 def test_other_ddgs_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,4 +42,4 @@ def test_other_ddgs_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr("ddgs.DDGS", _DDGS)
     with pytest.raises(DDGSException):
-        list(search_mod.DdgsBackend().search("anything"))
+        list(DdgsBackend().search("anything"))

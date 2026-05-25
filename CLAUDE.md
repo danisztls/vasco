@@ -17,17 +17,19 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 |---|---|
 | `vasco/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `cache` and `logs` sub-apps |
 | `vasco/fetch.py` | `fetch_one` / `fetch_many`, auto chain `http → browser → browser+mobile → wayback`, phase timing, envelope assembly |
-| `vasco/search.py` | `Searcher` protocol + `DdgsBackend` (and Tavily), `--site` operator |
+| `vasco/search.py` | `Searcher` protocol, `SearchResult`, `get_searcher()` factory, `--site` operator |
+| `vasco/adapters/ddgs.py` | DuckDuckGo search backend (`DdgsBackend`) |
+| `vasco/adapters/tavily.py` | Tavily search backend (`TavilyBackend`) |
+| `vasco/adapters/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
+| `vasco/adapters/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
+| `vasco/adapters/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
 | `vasco/extract.py` | Passage segmentation + BM25 / semantic ranking |
 | `vasco/semantic.py` | Lazy sentence-transformers ranker; raises `SemanticRankerUnavailable` if extra is missing |
 | `vasco/map.py` | sitemap / feeds / spider via trafilatura, `--exclude` filters; llms.txt discovery (disk-cached 24h) |
 | `vasco/cache.py` | SQLite cache + URL normalization (incl. AMP folding, YouTube collapse, Wikimedia mobile→desktop) + per-domain strategy (starting tier only) |
 | `vasco/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
-| `vasco/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
-| `vasco/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
-| `vasco/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
-| `vasco/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
-| `vasco/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
+| `vasco/converters/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
+| `vasco/converters/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
 | `vasco/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
 | `vasco/errors.py` | `FailureReason` enum |
 | `vasco/config.py` | `load_config()` → YAML + `VASCO_*` env vars |

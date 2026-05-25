@@ -22,8 +22,8 @@ import tempfile
 import time
 from typing import Any
 
-from .cache import YT_VIDEO_ID_RE
-from .errors import FailureReason
+from ..cache import YT_VIDEO_ID_RE
+from ..errors import FailureReason
 
 log = logging.getLogger(__name__)
 
@@ -418,7 +418,7 @@ async def fetch_youtube(
             "no transcript text after filtering",
         )
 
-    from . import io as io_mod  # avoid circular import at module load.
+    from .. import io as io_mod
 
     env = _base_envelope(url, http_status=200)
     env.update(

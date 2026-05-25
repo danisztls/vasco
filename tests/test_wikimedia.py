@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from vasco import wikimedia
+from vasco.adapters import wikimedia
 from vasco.errors import FailureReason
 
 

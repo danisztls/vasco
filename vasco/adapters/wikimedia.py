@@ -21,8 +21,8 @@ import time
 from typing import Any
 from urllib.parse import quote, unquote
 
-from .cache import WIKIMEDIA_PROJECTS
-from .errors import FailureReason
+from ..cache import WIKIMEDIA_PROJECTS
+from ..errors import FailureReason
 
 log = logging.getLogger(__name__)
 
@@ -328,7 +328,7 @@ def _structured_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]
 
 
 def _standard_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    from . import convert
+    from ..converters import convert
 
     html = (article.get("article_body") or {}).get("html") or ""
     if html:
@@ -448,7 +448,7 @@ def _success_envelope(
     site_name: str = "Wikipedia",
     http_status: int = 200,
 ) -> dict[str, Any]:
-    from . import io as io_mod
+    from .. import io as io_mod
 
     env = _base_envelope(url, http_status=http_status)
     env.update(

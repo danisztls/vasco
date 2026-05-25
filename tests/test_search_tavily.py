@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from vasco import search
+from vasco.adapters.tavily import TavilyBackend
 
 
 def _mock_transport(
@@ -47,7 +48,7 @@ def test_tavily_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     _patch_httpx_client(monkeypatch, transport)
 
-    backend = search.TavilyBackend(api_key="tvly-test")
+    backend = TavilyBackend(api_key="tvly-test")
     results = list(backend.search("rust async", max_results=5))
 
     assert captured["method"] == "POST"
@@ -69,7 +70,7 @@ def test_tavily_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tavily_time_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     _patch_httpx_client(monkeypatch, _mock_transport(captured))
-    backend = search.TavilyBackend(api_key="tvly-test")
+    backend = TavilyBackend(api_key="tvly-test")
     list(backend.search("q", time="w"))
     assert captured["json"]["time_range"] == "week"
 
@@ -77,7 +78,7 @@ def test_tavily_time_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tavily_unknown_time_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     _patch_httpx_client(monkeypatch, _mock_transport(captured))
-    backend = search.TavilyBackend(api_key="tvly-test")
+    backend = TavilyBackend(api_key="tvly-test")
     list(backend.search("q", time="garbage"))
     assert "time_range" not in captured["json"]
 
@@ -85,20 +86,20 @@ def test_tavily_unknown_time_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tavily_site_maps_to_include_domains(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     _patch_httpx_client(monkeypatch, _mock_transport(captured))
-    backend = search.TavilyBackend(api_key="tvly-test")
+    backend = TavilyBackend(api_key="tvly-test")
     list(backend.search("q", site="doc.rust-lang.org"))
     assert captured["json"]["include_domains"] == ["doc.rust-lang.org"]
 
 
 def test_tavily_missing_key_raises() -> None:
     with pytest.raises(ValueError, match="Tavily API key"):
-        search.TavilyBackend(api_key="")
+        TavilyBackend(api_key="")
 
 
 def test_get_searcher_tavily_with_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-from-env")
     backend = search.get_searcher("tavily")
-    assert isinstance(backend, search.TavilyBackend)
+    assert isinstance(backend, TavilyBackend)
 
 
 def test_get_searcher_tavily_prefers_canonical_env(

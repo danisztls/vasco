@@ -110,7 +110,7 @@ def _disable_wayback(monkeypatch: pytest.MonkeyPatch) -> None:
     Tests that exercise a fully-blocked auto chain need this so the final
     recovery attempt doesn't hit the real archive.org.
     """
-    from vasco import wayback as wayback_mod
+    from vasco.adapters import wayback as wayback_mod
 
     async def _no_snapshot(
         url: str, *, deadline_monotonic: float, cfg: Any | None = None
@@ -541,7 +541,7 @@ def _patch_wayback_snapshot(
     Returns a list that records each call's input URL so tests can assert
     that wayback was (or wasn't) consulted.
     """
-    from vasco import wayback as wayback_mod
+    from vasco.adapters import wayback as wayback_mod
 
     calls: list[str] = []
 

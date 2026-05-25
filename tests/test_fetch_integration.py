@@ -14,7 +14,7 @@ import pytest
 
 from vasco import browser as browser_mod
 from vasco import fetch as fetch_mod
-from vasco import youtube as youtube_mod
+from vasco.adapters import youtube as youtube_mod
 from vasco.cache import Cache
 
 

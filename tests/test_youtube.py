@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from vasco import youtube
+from vasco.adapters import youtube
 from vasco.errors import FailureReason
 
 

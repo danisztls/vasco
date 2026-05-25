@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from vasco import wayback
+from vasco.adapters import wayback
 
 
 # -----------------------------------------------------------------------------

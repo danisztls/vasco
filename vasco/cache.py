@@ -21,12 +21,20 @@ _AMP_OUTPUT_VALUES = frozenset({"amp"})
 
 _KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne"}
 
-# Matches Wikimedia project article URLs across all languages and mobile
-# subdomains.  Captures language, project domain, and title.
-# Covers: en.wikipedia.org, en.m.wiktionary.org, fr.wikisource.org, etc.
+WIKIMEDIA_PROJECTS = (
+    "wikibooks",
+    "wikinews",
+    "wikipedia",
+    "wikiquote",
+    "wikisource",
+    "wikiversity",
+    "wikivoyage",
+    "wiktionary",
+)
+
 _WIKIMEDIA_RE = re.compile(
     r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\."
-    r"(?P<project>wikipedia|wiktionary|wikibooks|wikiquote|wikisource|wikivoyage|wikiversity|wikinews)"
+    r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")"
     r"\.org/wiki/(?P<title>.+)",
     re.IGNORECASE,
 )

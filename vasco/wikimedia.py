@@ -21,32 +21,18 @@ import time
 from typing import Any
 from urllib.parse import quote, unquote
 
+from .cache import WIKIMEDIA_PROJECTS
 from .errors import FailureReason
 
 log = logging.getLogger(__name__)
 
 _STRUCTURED_LANGS = frozenset({"en", "de", "fr", "es", "pt", "it", "nl", "cy", "id"})
 
-_WIKIMEDIA_PROJECTS = frozenset(
-    {
-        "wikipedia",
-        "wiktionary",
-        "wikibooks",
-        "wikiquote",
-        "wikisource",
-        "wikivoyage",
-        "wikiversity",
-        "wikinews",
-    }
-)
-
-# Maps project domain to Enterprise project code suffix.
-# Wikipedia is special: en.wikipedia.org → "enwiki" (not "enwikipedia").
 _PROJECT_CODES: dict[str, str] = {"wikipedia": "wiki"}
 
 _WIKIMEDIA_RE = re.compile(
     r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\."
-    r"(?P<project>" + "|".join(_WIKIMEDIA_PROJECTS) + r")"
+    r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")"
     r"\.org/wiki/(?P<title>[^#?]+)",
     re.IGNORECASE,
 )
@@ -249,6 +235,10 @@ async def _enterprise_request(
 # ---------------------------------------------------------------------------
 
 
+def _esc_pipe(v: str) -> str:
+    return v.replace("|", "\\|")
+
+
 def _render_table(table: dict[str, Any], parts: list[str]) -> None:
     headers = table.get("headers") or []
     rows = table.get("rows") or []
@@ -256,13 +246,12 @@ def _render_table(table: dict[str, Any], parts: list[str]) -> None:
         return
 
     if headers:
-        header_row = headers[0] if headers else []
-        cells = [cell.get("value", "") for cell in header_row]
+        cells = [_esc_pipe(cell.get("value", "")) for cell in headers[0]]
         parts.append("| " + " | ".join(cells) + " |")
         parts.append("| " + " | ".join("---" for _ in cells) + " |")
 
     for row in rows:
-        cells = [cell.get("value", "") for cell in row]
+        cells = [_esc_pipe(cell.get("value", "")) for cell in row]
         parts.append("| " + " | ".join(cells) + " |")
 
     parts.append("")
@@ -418,9 +407,7 @@ def _word_count(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(
-    url: str, *, http_status: int = 0, site_name: str = "Wikipedia"
-) -> dict[str, Any]:
+def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
     return {
         "url_requested": url,
         "url_final": url,
@@ -431,7 +418,6 @@ def _base_envelope(
         "from_cache": False,
         "cache_age_seconds": 0,
         "content_type": "text/wikimedia",
-        "_site_name": site_name,
     }
 
 
@@ -441,9 +427,8 @@ def _failure_envelope(
     message: str,
     *,
     http_status: int = 0,
-    site_name: str = "Wikipedia",
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status, site_name=site_name)
+    env = _base_envelope(url, http_status=http_status)
     env["failure"] = {
         "reason": str(reason),
         "retry_after_seconds": None,
@@ -451,7 +436,6 @@ def _failure_envelope(
     }
     env["markdown"] = ""
     env["warnings"] = []
-    del env["_site_name"]
     return env
 
 
@@ -466,7 +450,7 @@ def _success_envelope(
 ) -> dict[str, Any]:
     from . import io as io_mod
 
-    env = _base_envelope(url, http_status=http_status, site_name=site_name)
+    env = _base_envelope(url, http_status=http_status)
     env.update(
         {
             "title": meta.get("title"),
@@ -483,7 +467,6 @@ def _success_envelope(
             "warnings": meta.get("warnings", []),
         }
     )
-    env.pop("_site_name", None)
     return env
 
 
@@ -512,10 +495,7 @@ async def fetch_wikimedia(
     token = await _ensure_token(cfg, deadline_monotonic)
     if not token:
         return _failure_envelope(
-            url,
-            FailureReason.LOGIN_REQUIRED,
-            "Wikimedia Enterprise auth failed",
-            site_name=site_name,
+            url, FailureReason.LOGIN_REQUIRED, "Wikimedia Enterprise auth failed"
         )
 
     resolved = await _resolve_redirect(
@@ -550,11 +530,7 @@ async def fetch_wikimedia(
     )
     if not article:
         return _failure_envelope(
-            url,
-            FailureReason.NOT_FOUND,
-            "article not found",
-            http_status=404,
-            site_name=site_name,
+            url, FailureReason.NOT_FOUND, "article not found", http_status=404
         )
 
     markdown, meta = _standard_to_fields(article)
@@ -563,7 +539,6 @@ async def fetch_wikimedia(
             url,
             FailureReason.UNSUPPORTED_CONTENT_TYPE,
             "no text extracted from article",
-            site_name=site_name,
         )
 
     return _success_envelope(url, markdown, meta, lang=lang, site_name=site_name)

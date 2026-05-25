@@ -20,7 +20,7 @@ PDF support shells out to `pdftotext` and `pdfinfo` — install via `poppler` (L
 ```
 vasco search    <query>  [--max 10] [--region us-en] [--time d|w|m|y] [--site DOMAIN] [--json]
 vasco fetch     <url...> [--mode auto|http|browser|mobile|wayback] [--workers 4]
-                          [--no-cache] [--refresh] [--deadline 15s] [--raw]
+                          [--no-cache] [--refresh] [--deadline 30s] [--raw]
                           [--json | --concat]
 vasco extract   <url>     --query "..." [--top 5] [--context-chars 400]
                           [--rank bm25|semantic] [--mode auto|http|browser|mobile|wayback]
@@ -65,6 +65,10 @@ uv run vasco map https://adrien.barbaresi.eu --source sitemap --limit 50 \
 # URL normalization is exposed (and used as the cache key)
 uv run vasco normalize "https://Example.COM:443/foo/?utm_source=x&b=2&a=1#frag"
 # → https://example.com/foo?a=1&b=2
+
+# AMP variants fold into the canonical URL
+uv run vasco normalize "https://example.com/article/amp?amp=1"
+# → https://example.com/article
 ```
 
 ## Output contract
@@ -100,6 +104,8 @@ Every successful `fetch` (cache hit or miss) returns the same envelope:
 
 Phase fields (`network_ms`, `parse_ms`, `cache_write_ms`, `attempts`, `escalated_from`) are populated on real fetches. Cache hits and short-circuit paths stamp only `duration_ms`. `escalated_from` is set when auto-mode started in one tier and finished in another (e.g. `"http"` → finished in `browser`).
 
+Each tier in the auto chain has its own wall-clock cap (http 5s, browser 8s, mobile 5s, wayback 6s) — these are the primary budget. The `deadline` (default 30s) is a hard upper-bound kill-switch, not the timing users feel in practice.
+
 Failures replace the success-only fields with a typed `failure` object:
 
 ```json
@@ -131,7 +137,7 @@ search:
 
 fetch:
   workers: 4
-  deadline_seconds: 15
+  deadline_seconds: 30
   ttl_seconds: 86400
   failure_ttl_seconds: 900
   user_agent: "Mozilla/5.0 (...)"
@@ -139,6 +145,7 @@ fetch:
 browser:
   headless: true
   locale: en-US
+  user_data_dir: ""     # non-empty path enables persistent Camoufox profile
 
 logging:
   enabled: true
@@ -150,7 +157,9 @@ youtube:
 
 Precedence: CLI flag > `VASCO_*` env var > config file > default. Example: `VASCO_FETCH_WORKERS=8` overrides `fetch.workers`.
 
-Cache lives at `$XDG_CACHE_HOME/vasco/cache.db` (default `~/.cache/vasco/cache.db`).
+Cache lives at `$XDG_CACHE_HOME/vasco/cache.db` (default `~/.cache/vasco/cache.db`). Negative-cache TTL scales per failure reason: permanent failures (`not_found`, `robots_disallow`) cache for ~24h, transient ones (`timeout`, `server_error`) for ~5min, using `failure_ttl_seconds` as the base.
+
+Setting `browser.user_data_dir` to a path (e.g. `~/.local/share/vasco/profile`) enables a persistent Camoufox profile — Cloudflare clearance cookies and login sessions survive across runs.
 
 ## Telemetry
 
@@ -177,7 +186,7 @@ jq -r 'select(.outcome=="fail") | .failure_reason' ~/.local/share/vasco/logs/*.j
 
 - **`fetch_many` defaults to `metadata_only=true`.** Batch fan-outs return triage envelopes (no `markdown`) so an agent can pick what to read instead of dumping N pages of markdown into context. Refetching a chosen URL afterwards is near-free — it's a cache hit. Pass `metadata_only=false` to override.
 - **`fetch` accepts `metadata_only=true`** for the same reason on large pages that would otherwise blow per-tool-output caps.
-- **Browser prewarm is opt-in.** Set `VASCO_BROWSER_PREWARM=true` (or `[browser] prewarm = true`) and the server launches Camoufox during lifespan startup, so the first browser-tier fetch doesn't pay Firefox cold-start cost. Prewarm failures (e.g. camoufox not installed) are swallowed — HTTP-tier users are unaffected.
+- **Browser prewarm is opt-in.** Set `VASCO_BROWSER_PREWARM=true` (or `browser.prewarm: true` in config) and the server launches Camoufox during lifespan startup, so the first browser-tier fetch doesn't pay Firefox cold-start cost. Prewarm failures (e.g. camoufox not installed) are swallowed — HTTP-tier users are unaffected.
 
 ## Known limitations
 

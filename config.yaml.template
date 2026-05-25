@@ -13,13 +13,14 @@
 #   workers: 4
 #   ttl_seconds: 86400
 #   failure_ttl_seconds: 900
-#   deadline_seconds: 15.0
+#   deadline_seconds: 30.0
 #   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # browser:
 #   headless: true
 #   locale: en-US
 #   prewarm: false              # MCP-only: warm Camoufox at server startup
+#   user_data_dir: ""           # persistent profile dir; non-empty enables cookie persistence
 
 # cache:
 #   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite

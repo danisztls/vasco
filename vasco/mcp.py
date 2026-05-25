@@ -165,7 +165,9 @@ def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
         "Fetch a single URL and return its envelope: clean Markdown plus "
         "metadata (title, byline, published, word_count, links, etc.) or a "
         "typed failure object. YouTube URLs return a transcript; PDFs are "
-        "rendered to text. Set metadata_only=true to omit the `markdown` "
+        "rendered to text; Wikipedia/Wikimedia URLs use the Enterprise API "
+        "when configured. Set refresh=true to bypass the cache and re-fetch "
+        "from the source. Set metadata_only=true to omit the `markdown` "
         "field (useful when triaging many URLs before deciding what to read "
         "in full)."
     ),

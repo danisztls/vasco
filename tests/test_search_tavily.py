@@ -17,12 +17,16 @@ def _mock_transport(
         captured["url"] = str(request.url)
         captured["method"] = request.method
         captured["json"] = json.loads(request.content)
-        return httpx.Response(status, content=body, headers={"content-type": "application/json"})
+        return httpx.Response(
+            status, content=body, headers={"content-type": "application/json"}
+        )
 
     return httpx.MockTransport(handler)
 
 
-def _patch_httpx_client(monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport) -> None:
+def _patch_httpx_client(
+    monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
+) -> None:
     original_client = httpx.Client
 
     def factory(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -97,13 +101,17 @@ def test_get_searcher_tavily_with_env_key(monkeypatch: pytest.MonkeyPatch) -> No
     assert isinstance(backend, search.TavilyBackend)
 
 
-def test_get_searcher_tavily_prefers_canonical_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_searcher_tavily_prefers_canonical_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-canonical")
     monkeypatch.setenv("VASCO_TAVILY_API_KEY", "tvly-prefixed")
     assert search._resolve_tavily_key(cfg=None) == "tvly-canonical"
 
 
-def test_get_searcher_tavily_falls_back_to_vasco_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_searcher_tavily_falls_back_to_vasco_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("VASCO_TAVILY_API_KEY", "tvly-prefixed")
     assert search._resolve_tavily_key(cfg=None) == "tvly-prefixed"

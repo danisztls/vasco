@@ -136,9 +136,9 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             for field_name in _PHASE_FIELDS:
                 val = rec.get(field_name)
                 if isinstance(val, (int, float)):
-                    phase_values.setdefault(tool, {}).setdefault(
-                        field_name, []
-                    ).append(int(val))
+                    phase_values.setdefault(tool, {}).setdefault(field_name, []).append(
+                        int(val)
+                    )
 
     duration_stats: dict[str, dict[str, int]] = {}
     for tool, vals in durations.items():

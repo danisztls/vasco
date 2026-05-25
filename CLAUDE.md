@@ -20,11 +20,12 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/search.py` | `Searcher` protocol + `DdgsBackend` (and Tavily), `--site` operator |
 | `vasco/extract.py` | Passage segmentation + BM25 / semantic ranking |
 | `vasco/semantic.py` | Lazy sentence-transformers ranker; raises `SemanticRankerUnavailable` if extra is missing |
-| `vasco/map.py` | sitemap / feeds / spider via trafilatura, `--exclude` filters |
-| `vasco/cache.py` | SQLite cache + URL normalization (incl. AMP folding, YouTube collapse) + per-domain strategy (starting tier only) |
+| `vasco/map.py` | sitemap / feeds / spider via trafilatura, `--exclude` filters; llms.txt discovery (disk-cached 24h) |
+| `vasco/cache.py` | SQLite cache + URL normalization (incl. AMP folding, YouTube collapse, Wikimedia mobile→desktop) + per-domain strategy (starting tier only) |
 | `vasco/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
 | `vasco/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
+| `vasco/wikimedia.py` | Wikipedia article fetch — Enterprise Structured Contents (9 beta langs) + REST API fallback; own envelope shape (`mode_used="wikipedia"`, `content_type="text/wikipedia"`) |
 | `vasco/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
 | `vasco/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
 | `vasco/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
@@ -33,7 +34,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/io.py` | TTY detection, NDJSON/JSON/markdown writers, token estimator |
 | `vasco/telemetry.py` | JSONL event log; `record_success` / `record_failure` / `record_exception` with `outcome` discriminator |
 | `vasco/logstats.py` | `summarize(cfg, days=)` — per-tool counts, cache-hit ratio, mode mix, failure histogram, duration + phase percentiles, escalation rate |
-| `vasco/mcp.py` | MCP server (stdio); opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true` |
+| `vasco/mcp.py` | MCP server (stdio); opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
 
 ## Invariants
 

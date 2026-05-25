@@ -34,3 +34,9 @@
 
 # youtube:
 #   cookies_from_browser: ""    # "" disables; e.g. "firefox", "chrome", "brave"
+
+# wikimedia:
+#   username: ""                # Wikimedia Enterprise account; or VASCO_WIKIMEDIA_USERNAME
+#   password: ""                # or VASCO_WIKIMEDIA_PASSWORD
+#                               # Sign up free at https://dashboard.enterprise.wikimedia.com/signup/
+#                               # Without credentials, falls back to the free REST API (all languages, no cap)

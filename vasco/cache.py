@@ -21,6 +21,16 @@ _AMP_OUTPUT_VALUES = frozenset({"amp"})
 
 _KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne"}
 
+# Matches Wikimedia project article URLs across all languages and mobile
+# subdomains.  Captures language, project domain, and title.
+# Covers: en.wikipedia.org, en.m.wiktionary.org, fr.wikisource.org, etc.
+_WIKIMEDIA_RE = re.compile(
+    r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\."
+    r"(?P<project>wikipedia|wiktionary|wikibooks|wikiquote|wikisource|wikivoyage|wikiversity|wikinews)"
+    r"\.org/wiki/(?P<title>.+)",
+    re.IGNORECASE,
+)
+
 # Matches any YouTube URL that points to a specific video, capturing the
 # video ID. One of three named groups will be set per match:
 #   - id_short: youtu.be/<id>
@@ -115,6 +125,27 @@ def _canonicalize_youtube_host(raw: str) -> str:
     return raw
 
 
+def _canonicalize_wikimedia(raw: str) -> str:
+    """Collapse Wikimedia project URL variants to a canonical form.
+
+    Strips mobile subdomains and normalizes the title (spaces → underscores,
+    first char uppercase) so different encodings share a cache row.
+    Works for all Wikimedia projects: wikipedia, wiktionary, wikibooks, etc.
+    """
+    m = _WIKIMEDIA_RE.match(raw)
+    if not m:
+        return raw
+    lang = m.group("lang").lower()
+    project = m.group("project").lower()
+    title_raw = m.group("title").split("#")[0].split("?")[0]
+    title = unquote(title_raw).replace(" ", "_")
+    if title:
+        title = title[0].upper() + title[1:]
+    return (
+        f"https://{lang}.{project}.org/wiki/{quote(title, safe="/:@!$&'()*+,;=-._~")}"
+    )
+
+
 def normalize_url(url: str) -> str:
     """Normalize a URL.
 
@@ -138,6 +169,7 @@ def normalize_url(url: str) -> str:
         raw = "http://" + raw
 
     raw = _canonicalize_youtube_host(raw)
+    raw = _canonicalize_wikimedia(raw)
     parts = urlsplit(raw)
     scheme = parts.scheme.lower()
     host = parts.hostname or ""

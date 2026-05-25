@@ -29,7 +29,9 @@ In contrast, plain httpx is fast but cannot evaluate JavaScript at all.
 """
 
 
-def _success_envelope(markdown: str = _CAMOUFOX_MARKDOWN, **overrides: Any) -> dict[str, Any]:
+def _success_envelope(
+    markdown: str = _CAMOUFOX_MARKDOWN, **overrides: Any
+) -> dict[str, Any]:
     env: dict[str, Any] = {
         "url_requested": "https://example.com/article",
         "url_final": "https://example.com/article",
@@ -45,7 +47,9 @@ def _success_envelope(markdown: str = _CAMOUFOX_MARKDOWN, **overrides: Any) -> d
     return env
 
 
-def _patch_fetch(monkeypatch: pytest.MonkeyPatch, envelope: dict[str, Any]) -> list[dict[str, Any]]:
+def _patch_fetch(
+    monkeypatch: pytest.MonkeyPatch, envelope: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Patch fetch_one to return ``envelope`` and record the kwargs it saw."""
     calls: list[dict[str, Any]] = []
 
@@ -131,7 +135,9 @@ async def test_failure_envelope_passthrough(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["url"] == "https://example.com/missing"
 
 
-async def test_empty_markdown_returns_no_passages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_empty_markdown_returns_no_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_fetch(monkeypatch, _success_envelope(markdown=""))
     result = await extract(
         "https://example.com/article",
@@ -141,7 +147,9 @@ async def test_empty_markdown_returns_no_passages(monkeypatch: pytest.MonkeyPatc
     assert "failure" not in result
 
 
-async def test_no_positive_scores_returns_no_passages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_no_positive_scores_returns_no_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Markdown has content but shares zero query tokens — BM25 yields 0 scores.
     md = (
         "The quick brown fox jumps over the lazy dog near the riverbank.\n\n"
@@ -156,7 +164,9 @@ async def test_no_positive_scores_returns_no_passages(monkeypatch: pytest.Monkey
     assert result["passages"] == []
 
 
-async def test_segmentation_splits_long_paragraph(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_segmentation_splits_long_paragraph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # One giant "paragraph" composed of many sentences; one sentence mentions
     # the rare keyword. Make sure it's surfaced and not buried by neighbors.
     long_para = (

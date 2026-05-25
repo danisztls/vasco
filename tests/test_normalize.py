@@ -113,6 +113,46 @@ from vasco.cache import normalize_url, registered_domain
         ),
         # Non-YouTube hosts containing "youtube" in path are untouched.
         ("https://example.com/youtube.com/foo", "https://example.com/youtube.com/foo"),
+        # Wikipedia: mobile subdomain collapses, title gets normalized.
+        (
+            "https://en.m.wikipedia.org/wiki/Python_(programming_language)",
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+        ),
+        (
+            "https://de.m.wikipedia.org/wiki/Berlin",
+            "https://de.wikipedia.org/wiki/Berlin",
+        ),
+        # Percent-encoded spaces become underscores, first char uppercased.
+        (
+            "https://en.wikipedia.org/wiki/new%20york%20city",
+            "https://en.wikipedia.org/wiki/New_york_city",
+        ),
+        # Fragment and query stripped from the title portion.
+        (
+            "https://en.wikipedia.org/wiki/Foo#History?bar=1",
+            "https://en.wikipedia.org/wiki/Foo",
+        ),
+        # Other Wikimedia projects: same normalization rules apply.
+        (
+            "https://en.m.wiktionary.org/wiki/hello",
+            "https://en.wiktionary.org/wiki/Hello",
+        ),
+        (
+            "https://fr.m.wikisource.org/wiki/Les_Mis%C3%A9rables",
+            "https://fr.wikisource.org/wiki/Les_Mis%C3%A9rables",
+        ),
+        (
+            "https://de.wikibooks.org/wiki/some%20book",
+            "https://de.wikibooks.org/wiki/Some_book",
+        ),
+        (
+            "https://en.m.wikivoyage.org/wiki/Paris#Get_in",
+            "https://en.wikivoyage.org/wiki/Paris",
+        ),
+        (
+            "https://it.wikiquote.org/wiki/Dante_Alighieri",
+            "https://it.wikiquote.org/wiki/Dante_Alighieri",
+        ),
         # AMP query markers collapse to the canonical URL.
         ("https://example.com/article?amp=1", "https://example.com/article"),
         ("https://example.com/article?amp=", "https://example.com/article"),

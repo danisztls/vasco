@@ -43,9 +43,7 @@ class _LinkParser(HTMLParser):
         self._current: dict[str, str | None] | None = None
         self._buf: list[str] = []
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() != "a":
             return
         attrd = {k.lower(): v for k, v in attrs}
@@ -100,9 +98,7 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
-def html_to_markdown(
-    html: str, *, url: str | None = None
-) -> tuple[str, dict]:
+def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     """Convert HTML to Markdown via trafilatura and return (markdown, metadata).
 
     Metadata keys: title, byline, published, modified, language, site_name,

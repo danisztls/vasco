@@ -16,7 +16,9 @@ from vasco import fetch as fetch_mod
 from vasco import semantic
 
 
-HAS_SENTENCE_TRANSFORMERS = importlib.util.find_spec("sentence_transformers") is not None
+HAS_SENTENCE_TRANSFORMERS = (
+    importlib.util.find_spec("sentence_transformers") is not None
+)
 
 
 class _StubModel:
@@ -136,7 +138,9 @@ def test_extract_rejects_unknown_rank() -> None:
         )
 
 
-def test_semantic_unavailable_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_semantic_unavailable_raises_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When sentence-transformers is not installed, the lazy importer raises a
     typed error with installation instructions.
     """

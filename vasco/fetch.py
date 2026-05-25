@@ -24,7 +24,16 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from . import bot_detect, browser, convert, io as io_mod, pdf, wayback, youtube
+from . import (
+    bot_detect,
+    browser,
+    convert,
+    io as io_mod,
+    pdf,
+    wayback,
+    wikimedia,
+    youtube,
+)
 from .errors import FailureReason
 
 
@@ -945,6 +954,17 @@ async def _fetch_one_body(
         envelope["url_canonical"] = normalized
         if raw:
             envelope.setdefault("warnings", []).append("raw_unsupported_for_youtube")
+        if use_cache and cache is not None:
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, False, phases
+
+    # --- Wikipedia shortcut (Enterprise only; no creds → normal HTTP) ------
+    if wikimedia.is_wikipedia_url(url) and wikimedia.has_credentials(cfg):
+        envelope = await wikimedia.fetch_wikipedia(url, deadline=deadline, cfg=cfg)
+        envelope["url_requested"] = url
+        envelope["url_canonical"] = normalized
+        if raw:
+            envelope.setdefault("warnings", []).append("raw_unsupported_for_wikipedia")
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases

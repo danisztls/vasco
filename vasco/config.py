@@ -58,6 +58,12 @@ class YouTubeCfg:
 
 
 @dataclass(frozen=True)
+class WikimediaCfg:
+    username: str = ""
+    password: str = ""
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -66,6 +72,7 @@ class Config:
     tavily: TavilyCfg = field(default_factory=TavilyCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
+    wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -76,6 +83,7 @@ _SECTIONS: dict[str, type] = {
     "tavily": TavilyCfg,
     "logging": LoggingCfg,
     "youtube": YouTubeCfg,
+    "wikimedia": WikimediaCfg,
 }
 
 

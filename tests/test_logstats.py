@@ -41,8 +41,18 @@ def test_summarize_counts_per_tool_and_outcome(tmp_path: Path) -> None:
         log_dir / f"{_today()}.jsonl",
         [
             {"tool": "fetch", "outcome": "ok", "mode_used": "http", "from_cache": True},
-            {"tool": "fetch", "outcome": "ok", "mode_used": "http", "from_cache": False},
-            {"tool": "fetch", "outcome": "ok", "mode_used": "browser", "from_cache": False},
+            {
+                "tool": "fetch",
+                "outcome": "ok",
+                "mode_used": "http",
+                "from_cache": False,
+            },
+            {
+                "tool": "fetch",
+                "outcome": "ok",
+                "mode_used": "browser",
+                "from_cache": False,
+            },
             {"tool": "fetch", "outcome": "fail", "failure_reason": "blocked_bot"},
             {"tool": "search", "outcome": "ok", "result_count": 5},
             {"tool": "extract", "outcome": "empty", "empty_passages": True},
@@ -233,11 +243,11 @@ def test_summarize_tolerates_malformed_lines(tmp_path: Path) -> None:
     log_dir.mkdir(parents=True)
     path = log_dir / f"{_today()}.jsonl"
     path.write_text(
-        '\n'
+        "\n"
         '{"tool": "fetch", "outcome": "ok"}\n'
-        'not json at all\n'
+        "not json at all\n"
         '{"tool": "search", "outcome": "ok"}\n'
-        '\n',
+        "\n",
         encoding="utf-8",
     )
     cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))

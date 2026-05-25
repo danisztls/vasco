@@ -1,15 +1,16 @@
-"""Wikipedia article fetcher via Wikimedia Enterprise On-demand API.
+"""Wikimedia article fetcher via Wikimedia Enterprise On-demand API.
 
-Structured Contents endpoint for the 9 beta languages (parsed sections,
-infoboxes, tables, quality signals).  Standard articles endpoint for all
-other languages (HTML body converted to markdown, plus metadata).
+Covers Wikipedia, Wiktionary, Wikibooks, Wikiquote, Wikisource, Wikivoyage,
+Wikiversity, and Wikinews.  Wikipedia articles in the 9 Structured Contents
+beta languages get parsed sections, infoboxes, and tables.  Everything else
+uses the standard articles endpoint (HTML body + rich metadata).
 
 Redirects are resolved via the free MediaWiki API before calling Enterprise.
 
 When no Enterprise credentials are configured the shortcut is skipped
-entirely — Wikipedia URLs fall through to the normal HTTP fetch pipeline.
+entirely — URLs fall through to the normal HTTP fetch pipeline.
 
-The envelope uses ``mode_used="wikipedia"`` and ``content_type="text/wikipedia"``.
+The envelope uses ``mode_used="wikimedia"`` and ``content_type="text/wikimedia"``.
 """
 
 from __future__ import annotations
@@ -26,10 +27,40 @@ log = logging.getLogger(__name__)
 
 _STRUCTURED_LANGS = frozenset({"en", "de", "fr", "es", "pt", "it", "nl", "cy", "id"})
 
-_WIKIPEDIA_RE = re.compile(
-    r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\.wikipedia\.org/wiki/(?P<title>[^#?]+)",
+_WIKIMEDIA_PROJECTS = frozenset(
+    {
+        "wikipedia",
+        "wiktionary",
+        "wikibooks",
+        "wikiquote",
+        "wikisource",
+        "wikivoyage",
+        "wikiversity",
+        "wikinews",
+    }
+)
+
+# Maps project domain to Enterprise project code suffix.
+# Wikipedia is special: en.wikipedia.org → "enwiki" (not "enwikipedia").
+_PROJECT_CODES: dict[str, str] = {"wikipedia": "wiki"}
+
+_WIKIMEDIA_RE = re.compile(
+    r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\."
+    r"(?P<project>" + "|".join(_WIKIMEDIA_PROJECTS) + r")"
+    r"\.org/wiki/(?P<title>[^#?]+)",
     re.IGNORECASE,
 )
+
+_SITE_NAMES: dict[str, str] = {
+    "wikipedia": "Wikipedia",
+    "wiktionary": "Wiktionary",
+    "wikibooks": "Wikibooks",
+    "wikiquote": "Wikiquote",
+    "wikisource": "Wikisource",
+    "wikivoyage": "Wikivoyage",
+    "wikiversity": "Wikiversity",
+    "wikinews": "Wikinews",
+}
 
 _AUTH_URL = "https://auth.enterprise.wikimedia.com/v1/login"
 _ENTERPRISE_BASE = "https://api.enterprise.wikimedia.com/v2"
@@ -44,20 +75,26 @@ _token_expires_at: float = 0.0
 # ---------------------------------------------------------------------------
 
 
-def is_wikipedia_url(url: str) -> bool:
-    return bool(_WIKIPEDIA_RE.match(url or ""))
+def is_wikimedia_url(url: str) -> bool:
+    return bool(_WIKIMEDIA_RE.match(url or ""))
 
 
-def extract_article_info(url: str) -> tuple[str, str] | None:
-    """Return ``(lang, title)`` from a Wikipedia URL, or ``None``."""
+def extract_article_info(url: str) -> tuple[str, str, str] | None:
+    """Return ``(lang, project, title)`` from a Wikimedia URL, or ``None``."""
     if not url:
         return None
-    m = _WIKIPEDIA_RE.match(url)
+    m = _WIKIMEDIA_RE.match(url)
     if not m:
         return None
     lang = m.group("lang").lower()
+    project = m.group("project").lower()
     title = unquote(m.group("title")).replace(" ", "_")
-    return lang, title
+    return lang, project, title
+
+
+def _enterprise_project_id(lang: str, project: str) -> str:
+    code = _PROJECT_CODES.get(project, project)
+    return f"{lang}{code}"
 
 
 def has_credentials(cfg: Any | None) -> bool:
@@ -123,8 +160,10 @@ def _reset_token_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _resolve_redirect(lang: str, title: str, *, deadline_monotonic: float) -> str:
-    """Resolve a Wikipedia redirect via the MediaWiki API.
+async def _resolve_redirect(
+    lang: str, project: str, title: str, *, deadline_monotonic: float
+) -> str:
+    """Resolve a redirect via the MediaWiki API.
 
     Returns the canonical title (may be the same if not a redirect).
     """
@@ -134,7 +173,7 @@ async def _resolve_redirect(lang: str, title: str, *, deadline_monotonic: float)
     if remaining <= 0:
         return title
 
-    api_url = f"https://{lang}.wikipedia.org/w/api.php"
+    api_url = f"https://{lang}.{project}.org/w/api.php"
     try:
         headers = {"User-Agent": "Vasco/0.1 (web research CLI)"}
         async with httpx.AsyncClient(
@@ -168,7 +207,7 @@ async def _resolve_redirect(lang: str, title: str, *, deadline_monotonic: float)
 async def _enterprise_request(
     endpoint: str,
     title: str,
-    project: str,
+    project_id: str,
     token: str,
     *,
     deadline_monotonic: float,
@@ -187,7 +226,9 @@ async def _enterprise_request(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
                 json={
-                    "filters": [{"field": "is_part_of.identifier", "value": project}],
+                    "filters": [
+                        {"field": "is_part_of.identifier", "value": project_id}
+                    ],
                     "limit": 1,
                 },
             )
@@ -204,7 +245,7 @@ async def _enterprise_request(
 
 
 # ---------------------------------------------------------------------------
-# Structured Contents → markdown (9 beta languages)
+# Structured Contents → markdown (Wikipedia, 9 beta languages)
 # ---------------------------------------------------------------------------
 
 
@@ -273,8 +314,6 @@ def _structured_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]
     parts: list[str] = []
     sections = article.get("sections") or []
 
-    # Skip abstract when sections exist — the first section ("Abstract")
-    # already contains the lead paragraphs.
     if not sections:
         abstract = article.get("abstract") or ""
         if abstract:
@@ -295,7 +334,7 @@ def _structured_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
-# Standard articles → markdown (all languages)
+# Standard articles → markdown (all projects and languages)
 # ---------------------------------------------------------------------------
 
 
@@ -379,17 +418,20 @@ def _word_count(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
+def _base_envelope(
+    url: str, *, http_status: int = 0, site_name: str = "Wikipedia"
+) -> dict[str, Any]:
     return {
         "url_requested": url,
         "url_final": url,
         "url_canonical": url,
         "http_status": http_status,
-        "mode_used": "wikipedia",
+        "mode_used": "wikimedia",
         "fetched_at": int(time.time()),
         "from_cache": False,
         "cache_age_seconds": 0,
-        "content_type": "text/wikipedia",
+        "content_type": "text/wikimedia",
+        "_site_name": site_name,
     }
 
 
@@ -399,8 +441,9 @@ def _failure_envelope(
     message: str,
     *,
     http_status: int = 0,
+    site_name: str = "Wikipedia",
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status)
+    env = _base_envelope(url, http_status=http_status, site_name=site_name)
     env["failure"] = {
         "reason": str(reason),
         "retry_after_seconds": None,
@@ -408,6 +451,7 @@ def _failure_envelope(
     }
     env["markdown"] = ""
     env["warnings"] = []
+    del env["_site_name"]
     return env
 
 
@@ -417,11 +461,12 @@ def _success_envelope(
     meta: dict[str, Any],
     *,
     lang: str,
+    site_name: str = "Wikipedia",
     http_status: int = 200,
 ) -> dict[str, Any]:
     from . import io as io_mod
 
-    env = _base_envelope(url, http_status=http_status)
+    env = _base_envelope(url, http_status=http_status, site_name=site_name)
     env.update(
         {
             "title": meta.get("title"),
@@ -429,7 +474,7 @@ def _success_envelope(
             "published": meta.get("published"),
             "modified": meta.get("modified"),
             "language": meta.get("language") or lang,
-            "site_name": "Wikipedia",
+            "site_name": site_name,
             "word_count": _word_count(markdown),
             "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": meta.get("quality", {}),
@@ -438,6 +483,7 @@ def _success_envelope(
             "warnings": meta.get("warnings", []),
         }
     )
+    env.pop("_site_name", None)
     return env
 
 
@@ -446,60 +492,69 @@ def _success_envelope(
 # ---------------------------------------------------------------------------
 
 
-async def fetch_wikipedia(
+async def fetch_wikimedia(
     url: str,
     *,
     deadline: float = 30.0,
     cfg: Any | None = None,
 ) -> dict[str, Any]:
-    """Fetch a Wikipedia article via Wikimedia Enterprise and return an envelope."""
+    """Fetch a Wikimedia article via Enterprise API and return an envelope."""
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
 
     info = extract_article_info(url)
     if not info:
         return _failure_envelope(
-            url, FailureReason.INVALID_URL, "could not parse Wikipedia article URL"
+            url, FailureReason.INVALID_URL, "could not parse Wikimedia article URL"
         )
-    lang, title = info
+    lang, project, title = info
+    site_name = _SITE_NAMES.get(project, project.title())
 
     token = await _ensure_token(cfg, deadline_monotonic)
     if not token:
         return _failure_envelope(
-            url, FailureReason.LOGIN_REQUIRED, "Wikimedia Enterprise auth failed"
+            url,
+            FailureReason.LOGIN_REQUIRED,
+            "Wikimedia Enterprise auth failed",
+            site_name=site_name,
         )
 
-    # Resolve redirects via the free MediaWiki API before calling Enterprise.
     resolved = await _resolve_redirect(
-        lang, title, deadline_monotonic=deadline_monotonic
+        lang, project, title, deadline_monotonic=deadline_monotonic
     )
 
-    project = f"{lang}wiki"
+    project_id = _enterprise_project_id(lang, project)
 
-    # Structured Contents for the 9 beta languages.
-    if lang in _STRUCTURED_LANGS:
+    # Structured Contents for Wikipedia in the 9 beta languages.
+    if project == "wikipedia" and lang in _STRUCTURED_LANGS:
         article = await _enterprise_request(
             "structured-contents",
             resolved,
-            project,
+            project_id,
             token,
             deadline_monotonic=deadline_monotonic,
         )
         if article:
             markdown, meta = _structured_to_fields(article)
             if markdown:
-                return _success_envelope(url, markdown, meta, lang=lang)
+                return _success_envelope(
+                    url, markdown, meta, lang=lang, site_name=site_name
+                )
 
-    # Standard articles endpoint (all languages, returns HTML body).
+    # Standard articles endpoint (all projects and languages).
     article = await _enterprise_request(
         "articles",
         resolved,
-        project,
+        project_id,
         token,
         deadline_monotonic=deadline_monotonic,
     )
     if not article:
         return _failure_envelope(
-            url, FailureReason.NOT_FOUND, "article not found", http_status=404
+            url,
+            FailureReason.NOT_FOUND,
+            "article not found",
+            http_status=404,
+            site_name=site_name,
         )
 
     markdown, meta = _standard_to_fields(article)
@@ -507,7 +562,8 @@ async def fetch_wikipedia(
         return _failure_envelope(
             url,
             FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            "no text extracted from Wikipedia article",
+            "no text extracted from article",
+            site_name=site_name,
         )
 
-    return _success_envelope(url, markdown, meta, lang=lang)
+    return _success_envelope(url, markdown, meta, lang=lang, site_name=site_name)

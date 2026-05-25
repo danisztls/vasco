@@ -25,7 +25,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
 | `vasco/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
-| `vasco/wikimedia.py` | Wikipedia article fetch — Enterprise Structured Contents (9 beta langs) + REST API fallback; own envelope shape (`mode_used="wikipedia"`, `content_type="text/wikipedia"`) |
+| `vasco/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
 | `vasco/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
 | `vasco/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
 | `vasco/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |

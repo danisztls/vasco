@@ -958,13 +958,13 @@ async def _fetch_one_body(
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases
 
-    # --- Wikipedia shortcut (Enterprise only; no creds → normal HTTP) ------
-    if wikimedia.is_wikipedia_url(url) and wikimedia.has_credentials(cfg):
-        envelope = await wikimedia.fetch_wikipedia(url, deadline=deadline, cfg=cfg)
+    # --- Wikimedia shortcut (Enterprise only; no creds → normal HTTP) ------
+    if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
+        envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
         envelope["url_requested"] = url
         envelope["url_canonical"] = normalized
         if raw:
-            envelope.setdefault("warnings", []).append("raw_unsupported_for_wikipedia")
+            envelope.setdefault("warnings", []).append("raw_unsupported_for_wikimedia")
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases

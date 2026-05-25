@@ -1,1 +1,1 @@
-"""Format converters (HTML → Markdown, PDF → text)."""
+"""Format converters (HTML → Markdown, PDF → text, documents → Markdown via pandoc)."""

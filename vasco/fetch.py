@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
 from . import bot_detect, browser, io as io_mod
-from .converters import convert, pdf
+from .converters import convert, pandoc, pdf
 from .adapters import wayback, wikimedia, youtube
 from .errors import FailureReason
 
@@ -298,6 +298,24 @@ def _is_pdf(url: str, headers: dict[str, str] | None) -> bool:
         if str(k).lower() == "content-type":
             return "application/pdf" in str(v).lower()
     return False
+
+
+def _pandoc_format(url: str, headers: dict[str, str] | None) -> str | None:
+    ext = (
+        urlsplit(url).path.rsplit(".", 1)[-1].lower()
+        if "." in urlsplit(url).path
+        else ""
+    )
+    if ext in pandoc.FORMAT_BY_EXT:
+        return pandoc.FORMAT_BY_EXT[ext]
+    if not headers:
+        return None
+    for k, v in headers.items():
+        if str(k).lower() == "content-type":
+            ct = str(v).split(";", 1)[0].strip().lower()
+            if ct in pandoc.FORMAT_BY_MIME:
+                return pandoc.FORMAT_BY_MIME[ct]
+    return None
 
 
 def _content_type(headers: dict[str, str] | None, default: str) -> str:
@@ -842,6 +860,84 @@ async def _fetch_pdf(
     )
 
 
+async def _fetch_pandoc_doc(
+    url: str,
+    *,
+    fmt: str,
+    base: dict[str, Any],
+    deadline_monotonic: float,
+    cfg: Any | None,
+    phases: _Phases,
+) -> dict[str, Any]:
+    if httpx is None:
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.UNSUPPORTED_CONTENT_TYPE,
+            message="httpx not available for document download",
+        )
+
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.DEADLINE_EXCEEDED,
+            message="deadline elapsed before document download",
+        )
+
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(
+            http2=True,
+            follow_redirects=True,
+            timeout=max(_HTTP_TIMEOUT_FLOOR, remaining),
+        ) as client:
+            resp = await client.get(url)
+            body = resp.content
+            base["url_final"] = str(resp.url)
+            base["http_status"] = int(resp.status_code)
+    except Exception as exc:
+        phases.network_ms += _ms_since(t0)
+        phases.attempts += 1
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.DNS_FAIL,
+            message=f"document fetch error: {type(exc).__name__}",
+        )
+    phases.network_ms += _ms_since(t0)
+    phases.attempts += 1
+
+    t_parse = time.monotonic()
+    try:
+        text, meta = pandoc.pandoc_to_markdown(body, fmt=fmt)
+    except FileNotFoundError as exc:
+        phases.parse_ms += _ms_since(t_parse)
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.UNSUPPORTED_CONTENT_TYPE,
+            message=str(exc),
+        )
+    except Exception as exc:
+        phases.parse_ms += _ms_since(t_parse)
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.UNSUPPORTED_CONTENT_TYPE,
+            message=f"pandoc convert error: {type(exc).__name__}",
+        )
+    phases.parse_ms += _ms_since(t_parse)
+
+    mime = next(
+        (m for m, f in pandoc.FORMAT_BY_MIME.items() if f == fmt),
+        f"application/{fmt}",
+    )
+    base["content_type"] = mime
+    return _success_envelope(
+        base=base,
+        markdown=text,
+        metadata=meta,
+        token_count_estimate=io_mod.estimate_tokens(text),
+    )
+
+
 async def _fetch_one_inner(
     url: str,
     *,
@@ -985,6 +1081,22 @@ async def _fetch_one_body(
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases
 
+    # --- Pandoc document shortcut -------------------------------------------
+    pandoc_fmt = _pandoc_format(url, None)
+    if pandoc_fmt is not None:
+        base["mode_used"] = "pandoc"
+        envelope = await _fetch_pandoc_doc(
+            url,
+            fmt=pandoc_fmt,
+            base=base,
+            deadline_monotonic=deadline_monotonic,
+            cfg=cfg,
+            phases=phases,
+        )
+        if use_cache and cache is not None:
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope, False, phases
+
     # --- HTML auto-mode escalation ------------------------------------------
     browser_started = False
     try:
@@ -1016,6 +1128,22 @@ async def _fetch_one_body(
             base["mode_used"] = "pdf"
             envelope = await _fetch_pdf(
                 base["url_final"],
+                base=base,
+                deadline_monotonic=deadline_monotonic,
+                cfg=cfg,
+                phases=phases,
+            )
+            if use_cache and cache is not None:
+                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+            return envelope, browser_started, phases
+
+        # Same for pandoc-supported document formats behind a redirect.
+        pandoc_fmt = _pandoc_format(base["url_final"], headers)
+        if pandoc_fmt is not None:
+            base["mode_used"] = "pandoc"
+            envelope = await _fetch_pandoc_doc(
+                base["url_final"],
+                fmt=pandoc_fmt,
                 base=base,
                 deadline_monotonic=deadline_monotonic,
                 cfg=cfg,

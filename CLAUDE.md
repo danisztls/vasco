@@ -30,6 +30,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/converters/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
 | `vasco/converters/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
+| `vasco/converters/pandoc.py` | Pandoc shell adapter (DOCX, EPUB, ODT, RTF → Markdown) |
 | `vasco/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
 | `vasco/errors.py` | `FailureReason` enum |
 | `vasco/config.py` | `load_config()` → YAML + `VASCO_*` env vars |

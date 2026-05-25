@@ -366,7 +366,9 @@ def extract(
 @app.command("map")
 def map_(
     url: Annotated[str, typer.Argument(help="Root URL of the site.")],
-    source: Annotated[str, typer.Option(help="sitemap|feeds|spider|all.")] = "all",
+    source: Annotated[
+        str, typer.Option(help="llmstxt|sitemap|feeds|spider|all.")
+    ] = "all",
     limit: Annotated[int, typer.Option(help="Maximum URLs to emit.")] = 1000,
     exclude: Annotated[
         list[str] | None,
@@ -468,9 +470,7 @@ def cache_stats() -> None:
 # ---------------------------------------------------------------------------
 
 
-logs_app = typer.Typer(
-    no_args_is_help=True, help="Inspect the telemetry event log."
-)
+logs_app = typer.Typer(no_args_is_help=True, help="Inspect the telemetry event log.")
 app.add_typer(logs_app, name="logs")
 
 

@@ -16,10 +16,20 @@ from vasco import map as _map
 def _patch_streams(
     monkeypatch: pytest.MonkeyPatch,
     *,
+    llmstxt: str | None = None,
     sitemap: list[str] | None = None,
     feeds: list[str] | None = None,
     spider: list[str] | None = None,
 ) -> None:
+    def _iter_llmstxt(url: str) -> Any:
+        if llmstxt is not None:
+            yield {
+                "url": f"{url}/llms.txt",
+                "source": "llmstxt",
+                "content": llmstxt,
+                "lastmod": None,
+            }
+
     def _iter_sitemap(url: str) -> Any:
         for u in sitemap or []:
             yield {"url": u, "source": "sitemap", "lastmod": None}
@@ -32,6 +42,7 @@ def _patch_streams(
         for u in spider or []:
             yield {"url": u, "source": "spider", "lastmod": None}
 
+    monkeypatch.setattr(_map, "_iter_llmstxt", _iter_llmstxt)
     monkeypatch.setattr(_map, "_iter_sitemap", _iter_sitemap)
     monkeypatch.setattr(_map, "_iter_feeds", _iter_feeds)
     monkeypatch.setattr(_map, "_iter_spider", _iter_spider)
@@ -92,3 +103,37 @@ def test_limit_caps_output(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     records = list(_map.map_site("https://x.test", limit=5))
     assert len(records) == 5
+
+
+def test_llmstxt_appears_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_streams(
+        monkeypatch,
+        llmstxt="# Site\n- [Docs](https://x.test/docs)",
+        sitemap=["https://x.test/a", "https://x.test/b"],
+    )
+    records = list(_map.map_site("https://x.test", source="all"))
+    assert records[0]["source"] == "llmstxt"
+    assert records[0]["content"] == "# Site\n- [Docs](https://x.test/docs)"
+
+
+def test_llmstxt_source_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_streams(
+        monkeypatch,
+        llmstxt="# Docs",
+        sitemap=["https://x.test/a"],
+    )
+    records = list(_map.map_site("https://x.test", source="llmstxt"))
+    assert len(records) == 1
+    assert records[0]["source"] == "llmstxt"
+
+
+def test_llmstxt_dedup_with_sitemap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """llmstxt URL participates in dedup — sitemap won't re-emit it."""
+    _patch_streams(
+        monkeypatch,
+        llmstxt="# Site",
+        sitemap=["https://x.test/llms.txt", "https://x.test/other"],
+    )
+    records = list(_map.map_site("https://x.test", source="all"))
+    urls = [r["url"] for r in records]
+    assert urls.count("https://x.test/llms.txt") == 1

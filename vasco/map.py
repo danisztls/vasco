@@ -1,12 +1,85 @@
 from __future__ import annotations
 
+import os
 import sys
+import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+_MAX_BODY_BYTES = 512 * 1024
+_DISK_TTL_SECONDS = 86400  # 24 h
 
 
 def _warn(message: str) -> None:
     sys.stderr.write(f"vasco map: warning: {message}\n")
+
+
+def _llmstxt_dir() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return Path(base) / "vasco" / "llms.txt"
+
+
+def _fetch_llmstxt(url: str) -> tuple[str | None, str | None]:
+    """Fetch /llms.txt for the given URL's origin.
+
+    Returns (content, llmstxt_url) or (None, None) on failure.
+    Serves from on-disk cache when fresh (< 24h).
+    """
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    llmstxt_url = f"{origin}/llms.txt"
+    domain = parts.hostname or parts.netloc
+
+    cache_path = _llmstxt_dir() / f"{domain}.txt"
+    if cache_path.exists():
+        try:
+            age = time.time() - cache_path.stat().st_mtime
+            if age < _DISK_TTL_SECONDS:
+                return cache_path.read_text(encoding="utf-8"), llmstxt_url
+        except OSError:
+            pass
+
+    try:
+        resp = httpx.get(llmstxt_url, timeout=10, follow_redirects=True)
+    except (httpx.HTTPError, OSError) as exc:
+        _warn(f"llms.txt fetch failed for {llmstxt_url}: {exc}")
+        return None, None
+
+    if resp.status_code != 200:
+        _warn(f"llms.txt returned {resp.status_code} for {llmstxt_url}")
+        return None, None
+
+    if len(resp.content) > _MAX_BODY_BYTES:
+        _warn(f"llms.txt too large ({len(resp.content)} bytes) for {llmstxt_url}")
+        return None, None
+
+    content = resp.text
+    if not content.strip():
+        _warn(f"llms.txt is empty for {llmstxt_url}")
+        return None, None
+
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+    return content, llmstxt_url
+
+
+def _iter_llmstxt(url: str) -> Iterator[dict[str, Any]]:
+    content, llmstxt_url = _fetch_llmstxt(url)
+    if content is not None:
+        yield {
+            "url": llmstxt_url,
+            "source": "llmstxt",
+            "content": content,
+            "lastmod": None,
+        }
 
 
 def _iter_sitemap(url: str) -> Iterator[dict[str, Any]]:
@@ -94,12 +167,14 @@ def map_site(
     if limit <= 0:
         return
 
-    sources = {"sitemap", "feeds", "spider"} if source == "all" else {source}
+    sources = {"llmstxt", "sitemap", "feeds", "spider"} if source == "all" else {source}
     seen: set[str] = set()
     emitted = 0
     patterns = tuple(p for p in (exclude or ()) if p)
 
     streams: list[Iterator[dict[str, Any]]] = []
+    if "llmstxt" in sources:
+        streams.append(_iter_llmstxt(url))
     if "sitemap" in sources:
         streams.append(_iter_sitemap(url))
     if "feeds" in sources:

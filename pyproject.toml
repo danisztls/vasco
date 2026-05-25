@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vasco = "vasco.cli:app"
+vasco = "vasco.interface.cli:app"
 
 [project.optional-dependencies]
 dev = [

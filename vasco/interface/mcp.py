@@ -16,7 +16,6 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from vasco import browser as _browser
 from vasco import cache as _cache_mod
 from vasco import config as _config
 from vasco import extract as _extract_mod
@@ -24,6 +23,7 @@ from vasco import fetch as _fetch
 from vasco import map as _map_mod
 from vasco import search as _search
 from vasco import telemetry as _telemetry
+from vasco.fetch import browser as _browser
 
 log = logging.getLogger("vasco.mcp")
 

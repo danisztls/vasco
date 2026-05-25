@@ -15,10 +15,10 @@ from vasco import config as _config
 from vasco import extract as _extract
 from vasco import fetch as _fetch
 from vasco import io as _io
-from vasco import logstats as _logstats
 from vasco import map as _map
 from vasco import search as _search
 from vasco import telemetry as _telemetry
+from vasco.telemetry import logstats as _logstats
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -500,7 +500,7 @@ def mcp() -> None:
     for agent clients (Claude Desktop, Claude Code). The BrowserPool and any
     loaded semantic model stay warm for the server's lifetime.
     """
-    from vasco import mcp as _mcp
+    from vasco.interface import mcp as _mcp
 
     _mcp.run()
 

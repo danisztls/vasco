@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 import pytest
 
-from vasco import browser as browser_mod
+from vasco.fetch import browser as browser_mod
 from vasco import fetch as fetch_mod
 from vasco.cache import Cache
 from vasco.converters import pandoc

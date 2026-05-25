@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from vasco.bot_detect import classify
+from vasco.fetch.bot_detect import classify
 from vasco.errors import FailureReason
 
 

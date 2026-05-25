@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .errors import FailureReason
+from vasco.errors import FailureReason
 
 # --- Marker sets (lowercase) --------------------------------------------------
 

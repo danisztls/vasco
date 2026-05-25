@@ -24,10 +24,11 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from . import bot_detect, browser, io as io_mod
-from .converters import convert, pandoc, pdf
-from .adapters import wayback, wikimedia, youtube
-from .errors import FailureReason
+from . import bot_detect, browser
+from vasco import io as io_mod
+from vasco.converters import convert, pandoc, pdf
+from vasco.adapters import wayback, wikimedia, youtube
+from vasco.errors import FailureReason
 
 
 # Minimum remaining deadline (seconds) before we'll bother escalating from

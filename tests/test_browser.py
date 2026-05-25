@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from vasco import browser as browser_mod
-from vasco.browser import BrowserPool
+from vasco.fetch import browser as browser_mod
+from vasco.fetch.browser import BrowserPool
 
 
 class _RecordingCM:

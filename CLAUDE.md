@@ -15,8 +15,13 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 
 | File | Role |
 |---|---|
-| `vasco/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `cache` and `logs` sub-apps |
-| `vasco/fetch.py` | `fetch_one` / `fetch_many`, auto chain `http → browser → browser+mobile → wayback`, phase timing, envelope assembly |
+| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `cache` and `logs` sub-apps |
+| `vasco/interface/mcp.py` | MCP server (stdio); opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
+| `vasco/fetch/__init__.py` | `fetch_one` / `fetch_many`, auto chain `http → browser → browser+mobile → wayback`, phase timing, envelope assembly |
+| `vasco/fetch/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
+| `vasco/fetch/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
+| `vasco/telemetry/__init__.py` | JSONL event log; `record_success` / `record_failure` / `record_exception` with `outcome` discriminator |
+| `vasco/telemetry/logstats.py` | `summarize(cfg, days=)` — per-tool counts, cache-hit ratio, mode mix, failure histogram, duration + phase percentiles, escalation rate |
 | `vasco/search.py` | `Searcher` protocol, `SearchResult`, `get_searcher()` factory, `--site` operator |
 | `vasco/adapters/ddgs.py` | DuckDuckGo search backend (`DdgsBackend`) |
 | `vasco/adapters/tavily.py` | Tavily search backend (`TavilyBackend`) |
@@ -27,22 +32,17 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/semantic.py` | Lazy sentence-transformers ranker; raises `SemanticRankerUnavailable` if extra is missing |
 | `vasco/map.py` | sitemap / feeds / spider via trafilatura, `--exclude` filters; llms.txt discovery (disk-cached 24h) |
 | `vasco/cache.py` | SQLite cache + URL normalization (incl. AMP folding, YouTube collapse, Wikimedia mobile→desktop) + per-domain strategy (starting tier only) |
-| `vasco/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/converters/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |
 | `vasco/converters/pdf.py` | `pdftotext` / `pdfinfo` shell adapter |
 | `vasco/converters/pandoc.py` | Pandoc shell adapter (DOCX, EPUB, ODT, RTF → Markdown) |
-| `vasco/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
 | `vasco/errors.py` | `FailureReason` enum |
 | `vasco/config.py` | `load_config()` → YAML + `VASCO_*` env vars |
 | `vasco/io.py` | TTY detection, NDJSON/JSON/markdown writers, token estimator |
-| `vasco/telemetry.py` | JSONL event log; `record_success` / `record_failure` / `record_exception` with `outcome` discriminator |
-| `vasco/logstats.py` | `summarize(cfg, days=)` — per-tool counts, cache-hit ratio, mode mix, failure histogram, duration + phase percentiles, escalation rate |
-| `vasco/mcp.py` | MCP server (stdio); opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
 
 ## Invariants
 
 - **Fetch envelope is the contract.** Same shape across `fetch_one`, `extract`, `cache.get`. Adding/renaming a field requires updating `cache.py` columns + `_hydrate_cache_hit` + the integration test.
-- **`fetch_one` never raises.** Failures are first-class output via a `failure` object whose `reason` is a `FailureReason` enum value. New failure modes go in `errors.py` first, then `bot_detect.classify` learns to produce them.
+- **`fetch_one` never raises.** Failures are first-class output via a `failure` object whose `reason` is a `FailureReason` enum value. New failure modes go in `errors.py` first, then `fetch.bot_detect.classify` learns to produce them.
 - **URL normalization is the cache key.** `cache.normalize_url` is load-bearing — changing it invalidates every cached entry. Besides lowering, sorting params, and stripping tracking params, it folds AMP variants (`?amp=1`, `?output=amp`, `/amp/` path segments) and collapses all YouTube URL forms (`youtu.be`, `m.youtube.com`, local TLDs, `/embed/`, `/shorts/`) to bare `youtube.com/watch?v=<id>`. Tests in `tests/test_normalize.py` are table-driven.
 - **Auto-mode escalation lives in `fetch._do_fetch_html`.** Chain is `http → browser → browser+mobile → wayback`. Per-tier wall-clock caps (`HTTP_MAX_BUDGET` 5s, `BROWSER_MAX_BUDGET` 8s, `MOBILE_MAX_BUDGET` 5s, `WAYBACK_MAX_BUDGET` 6s) are the *primary* budget — the chain naturally takes up to ~24s for a full run. The caller-supplied `deadline` (default 30s) is a kill-switch hard upper bound, not the timing users feel in practice. Each tier's effective deadline is `min(global_deadline, now + tier_cap)`. `cache.bump`'s `failure_count` tracks consecutive failures of the *preferred* mode only; non-preferred-mode bumps don't move the counter. Per-domain strategy picks the *starting* tier only — it never decides whether the chain runs to completion.
 - **Phase timing is part of the envelope contract.** `duration_ms` is always stamped; `network_ms`, `parse_ms`, `cache_write_ms`, `attempts`, and `escalated_from` are populated on real fetches via the `_Phases` accumulator threaded through `_do_fetch_html` / `_fetch_pdf`. Cache hits and short-circuit paths stamp only `duration_ms`; `_hydrate_cache_hit` strips phase fields defensively. `telemetry.fetch_success_fields` surfaces them through the success event so `vasco logs stats` can roll up `phase_percentiles` and `escalation_rate`.

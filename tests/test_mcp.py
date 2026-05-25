@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from vasco import mcp as mcp_mod
+from vasco.interface import mcp as mcp_mod
 from vasco import config as _config
 
 
@@ -445,7 +445,7 @@ async def test_fetch_many_default_strips_markdown(
 async def test_lifespan_prewarms_browser_when_enabled(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from vasco import browser as _browser
+    from vasco.fetch import browser as _browser
 
     _browser._reset_for_tests()
     monkeypatch.setenv("VASCO_BROWSER_PREWARM", "true")
@@ -469,7 +469,7 @@ async def test_lifespan_prewarms_browser_when_enabled(
 async def test_lifespan_prewarm_failure_does_not_kill_server(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from vasco import browser as _browser
+    from vasco.fetch import browser as _browser
 
     _browser._reset_for_tests()
     monkeypatch.setenv("VASCO_BROWSER_PREWARM", "true")

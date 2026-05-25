@@ -91,7 +91,7 @@ def _make_browser(html: str, status: int = 200, headers: dict | None = None):
 
 def _disable_browser_close(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip the real Camoufox singleton close in `fetch_one` finally blocks."""
-    from vasco import browser as browser_mod
+    from vasco.fetch import browser as browser_mod
 
     class _NopPool:
         async def fetch(self, *a: Any, **kw: Any) -> tuple[str, int, dict[str, str]]:
@@ -265,7 +265,7 @@ def test_browser_disconnect_classified_as_blocked_bot(
         async def close(self) -> None:
             return None
 
-    from vasco import browser as browser_mod
+    from vasco.fetch import browser as browser_mod
 
     monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
     monkeypatch.setattr(
@@ -302,7 +302,7 @@ def test_playwright_timeout_classified_as_timeout_not_bot_block(
 
         async def close(self) -> None: ...
 
-    from vasco import browser as browser_mod
+    from vasco.fetch import browser as browser_mod
 
     monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
     monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _Pool())
@@ -332,7 +332,7 @@ def test_browser_unknown_exception_propagates_to_server_error(
         async def close(self) -> None:
             return None
 
-    from vasco import browser as browser_mod
+    from vasco.fetch import browser as browser_mod
 
     monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
     monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _BoomPool())

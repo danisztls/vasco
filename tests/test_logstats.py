@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from vasco import logstats
+from vasco.telemetry import logstats
 from vasco.config import Config, LoggingCfg
 
 

@@ -1,8 +1,10 @@
 """Wikipedia article fetcher via Wikimedia Enterprise On-demand API.
 
 Structured Contents endpoint for the 9 beta languages (parsed sections,
-infoboxes, quality signals).  Standard articles endpoint for all other
-languages (HTML body converted to markdown, plus metadata).
+infoboxes, tables, quality signals).  Standard articles endpoint for all
+other languages (HTML body converted to markdown, plus metadata).
+
+Redirects are resolved via the free MediaWiki API before calling Enterprise.
 
 When no Enterprise credentials are configured the shortcut is skipped
 entirely — Wikipedia URLs fall through to the normal HTTP fetch pipeline.
@@ -117,6 +119,48 @@ def _reset_token_for_tests() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Redirect resolution (free MediaWiki API, no auth needed)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_redirect(lang: str, title: str, *, deadline_monotonic: float) -> str:
+    """Resolve a Wikipedia redirect via the MediaWiki API.
+
+    Returns the canonical title (may be the same if not a redirect).
+    """
+    import httpx
+
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return title
+
+    api_url = f"https://{lang}.wikipedia.org/w/api.php"
+    try:
+        headers = {"User-Agent": "Vasco/0.1 (web research CLI)"}
+        async with httpx.AsyncClient(
+            timeout=min(5.0, remaining), headers=headers
+        ) as client:
+            resp = await client.get(
+                api_url,
+                params={
+                    "action": "query",
+                    "titles": title.replace("_", " "),
+                    "redirects": "1",
+                    "format": "json",
+                    "formatversion": "2",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            redirects = data.get("query", {}).get("redirects") or []
+            if redirects:
+                return redirects[-1].get("to", title).replace(" ", "_")
+    except Exception as exc:
+        log.debug("MediaWiki redirect resolution failed: %s", exc)
+    return title
+
+
+# ---------------------------------------------------------------------------
 # Enterprise API helpers
 # ---------------------------------------------------------------------------
 
@@ -164,7 +208,31 @@ async def _enterprise_request(
 # ---------------------------------------------------------------------------
 
 
-def _render_section(section: dict[str, Any], parts: list[str], depth: int) -> None:
+def _render_table(table: dict[str, Any], parts: list[str]) -> None:
+    headers = table.get("headers") or []
+    rows = table.get("rows") or []
+    if not headers and not rows:
+        return
+
+    if headers:
+        header_row = headers[0] if headers else []
+        cells = [cell.get("value", "") for cell in header_row]
+        parts.append("| " + " | ".join(cells) + " |")
+        parts.append("| " + " | ".join("---" for _ in cells) + " |")
+
+    for row in rows:
+        cells = [cell.get("value", "") for cell in row]
+        parts.append("| " + " | ".join(cells) + " |")
+
+    parts.append("")
+
+
+def _render_section(
+    section: dict[str, Any],
+    parts: list[str],
+    depth: int,
+    tables_by_id: dict[str, dict[str, Any]],
+) -> None:
     name = section.get("name", "")
     if name and name != "Abstract":
         parts.append(f"{'#' * depth} {name}")
@@ -177,27 +245,44 @@ def _render_section(section: dict[str, Any], parts: list[str], depth: int) -> No
             if value:
                 parts.append(value)
                 parts.append("")
-        elif ptype == "list":
+        elif ptype in ("list", "list_item"):
             for item in part.get("values") or part.get("has_parts") or []:
                 if isinstance(item, str):
                     parts.append(f"- {item}")
                 elif isinstance(item, dict):
                     parts.append(f"- {item.get('value', '')}")
             parts.append("")
+        elif ptype == "table":
+            for ref in part.get("table_references") or []:
+                tid = ref.get("identifier", "")
+                if tid in tables_by_id:
+                    _render_table(tables_by_id[tid], parts)
         elif ptype == "section":
-            _render_section(part, parts, depth=min(depth + 1, 6))
+            _render_section(
+                part, parts, depth=min(depth + 1, 6), tables_by_id=tables_by_id
+            )
 
 
 def _structured_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    tables_by_id: dict[str, dict[str, Any]] = {}
+    for table in article.get("tables") or []:
+        tid = table.get("identifier")
+        if tid:
+            tables_by_id[tid] = table
+
     parts: list[str] = []
+    sections = article.get("sections") or []
 
-    abstract = article.get("abstract") or ""
-    if abstract:
-        parts.append(abstract)
-        parts.append("")
+    # Skip abstract when sections exist — the first section ("Abstract")
+    # already contains the lead paragraphs.
+    if not sections:
+        abstract = article.get("abstract") or ""
+        if abstract:
+            parts.append(abstract)
+            parts.append("")
 
-    for section in article.get("sections") or []:
-        _render_section(section, parts, depth=2)
+    for section in sections:
+        _render_section(section, parts, depth=2, tables_by_id=tables_by_id)
 
     markdown = "\n".join(parts).strip()
 
@@ -268,6 +353,28 @@ def _meta(article: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Word counting (CJK-aware)
+# ---------------------------------------------------------------------------
+
+_CJK_RANGES = (
+    "一-鿿"  # CJK Unified Ideographs
+    "㐀-䶿"  # CJK Extension A
+    "぀-ゟ"  # Hiragana
+    "゠-ヿ"  # Katakana
+    "가-힯"  # Hangul Syllables
+)
+_CJK_RE = re.compile(f"[{_CJK_RANGES}]")
+
+
+def _word_count(text: str) -> int:
+    """Count words, treating each CJK character as one word."""
+    cjk_chars = len(_CJK_RE.findall(text))
+    non_cjk = _CJK_RE.sub("", text)
+    space_words = len(non_cjk.split())
+    return cjk_chars + space_words
+
+
+# ---------------------------------------------------------------------------
 # Envelope helpers
 # ---------------------------------------------------------------------------
 
@@ -323,7 +430,7 @@ def _success_envelope(
             "modified": meta.get("modified"),
             "language": meta.get("language") or lang,
             "site_name": "Wikipedia",
-            "word_count": len(markdown.split()),
+            "word_count": _word_count(markdown),
             "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": meta.get("quality", {}),
             "links": meta.get("links", []),
@@ -361,13 +468,18 @@ async def fetch_wikipedia(
             url, FailureReason.LOGIN_REQUIRED, "Wikimedia Enterprise auth failed"
         )
 
+    # Resolve redirects via the free MediaWiki API before calling Enterprise.
+    resolved = await _resolve_redirect(
+        lang, title, deadline_monotonic=deadline_monotonic
+    )
+
     project = f"{lang}wiki"
 
     # Structured Contents for the 9 beta languages.
     if lang in _STRUCTURED_LANGS:
         article = await _enterprise_request(
             "structured-contents",
-            title,
+            resolved,
             project,
             token,
             deadline_monotonic=deadline_monotonic,
@@ -380,7 +492,7 @@ async def fetch_wikipedia(
     # Standard articles endpoint (all languages, returns HTML body).
     article = await _enterprise_request(
         "articles",
-        title,
+        resolved,
         project,
         token,
         deadline_monotonic=deadline_monotonic,

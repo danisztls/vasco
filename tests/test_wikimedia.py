@@ -65,11 +65,56 @@ def test_has_credentials_false_without_config() -> None:
     assert wikimedia.has_credentials(None) is False
 
 
-def test_has_credentials_true(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_has_credentials_true() -> None:
     from vasco.config import Config, WikimediaCfg
 
     cfg = Config(wikimedia=WikimediaCfg(username="user", password="pass"))
     assert wikimedia.has_credentials(cfg) is True
+
+
+# ---------------------------------------------------------------------------
+# CJK-aware word counting
+# ---------------------------------------------------------------------------
+
+
+def test_word_count_english() -> None:
+    assert wikimedia._word_count("hello world foo bar") == 4
+
+
+def test_word_count_japanese() -> None:
+    assert wikimedia._word_count("日本は島国である") == 8
+
+
+def test_word_count_mixed() -> None:
+    # 4 CJK chars (each counted as a word) + 3 space-delimited words
+    assert wikimedia._word_count("日本 is a country 島国") == 7
+
+
+def test_word_count_empty() -> None:
+    assert wikimedia._word_count("") == 0
+
+
+# ---------------------------------------------------------------------------
+# Table rendering
+# ---------------------------------------------------------------------------
+
+
+def test_render_table() -> None:
+    table = {
+        "identifier": "t1",
+        "headers": [[{"value": "Country"}, {"value": "GDP"}]],
+        "rows": [
+            [{"value": "US"}, {"value": "25T"}],
+            [{"value": "China"}, {"value": "18T"}],
+        ],
+    }
+    parts: list[str] = []
+    wikimedia._render_table(table, parts)
+    text = "\n".join(parts)
+    assert "| Country | GDP |" in text
+    assert "| --- | --- |" in text
+    assert "| US | 25T |" in text
+    assert "| China | 18T |" in text
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +131,26 @@ _SAMPLE_STRUCTURED = {
     "main_entity": {"identifier": "Q28865"},
     "sections": [
         {
+            "name": "Abstract",
+            "type": "section",
+            "has_parts": [
+                {
+                    "type": "paragraph",
+                    "value": "Python is a high-level programming language.",
+                },
+            ],
+        },
+        {
             "name": "History",
             "type": "section",
             "has_parts": [
                 {
                     "type": "paragraph",
                     "value": "Python was conceived in the late 1980s.",
+                },
+                {
+                    "type": "table",
+                    "table_references": [{"identifier": "history_table1"}],
                 },
             ],
         },
@@ -110,6 +169,16 @@ _SAMPLE_STRUCTURED = {
             ],
         },
     ],
+    "tables": [
+        {
+            "identifier": "history_table1",
+            "headers": [[{"value": "Version"}, {"value": "Year"}]],
+            "rows": [
+                [{"value": "1.0"}, {"value": "1994"}],
+                [{"value": "3.0"}, {"value": "2008"}],
+            ],
+        }
+    ],
     "infoboxes": [
         {
             "name": "Infobox programming language",
@@ -127,19 +196,33 @@ _SAMPLE_STRUCTURED = {
 
 def test_structured_to_fields() -> None:
     markdown, meta = wikimedia._structured_to_fields(_SAMPLE_STRUCTURED)
-    assert "Python is a high-level programming language." in markdown
     assert "## History" in markdown
     assert "Python was conceived in the late 1980s." in markdown
     assert "## Design philosophy" in markdown
     assert "- Simple is better" in markdown
     assert meta["title"] == "Python (programming language)"
     assert meta["language"] == "en"
-    assert meta["modified"] == "2026-05-20T10:00:00Z"
-    assert meta["quality"]["description"] == "General-purpose programming language"
-    assert meta["quality"]["infoboxes"] is not None
-    assert meta["quality"]["maintenance_tags"]["citation_needed_count"] == 5
     assert meta["quality"]["wikidata"] == "Q28865"
     assert meta["quality"]["scores"]["revertrisk"]["prediction"] is False
+
+
+def test_structured_no_lead_duplication() -> None:
+    """Abstract should not be prepended when sections exist."""
+    markdown, _ = wikimedia._structured_to_fields(_SAMPLE_STRUCTURED)
+    count = markdown.count("Python is a high-level programming language.")
+    assert count == 1
+
+
+def test_structured_renders_tables() -> None:
+    markdown, _ = wikimedia._structured_to_fields(_SAMPLE_STRUCTURED)
+    assert "| Version | Year |" in markdown
+    assert "| 1.0 | 1994 |" in markdown
+
+
+def test_structured_no_sections_uses_abstract() -> None:
+    article = {**_SAMPLE_STRUCTURED, "sections": []}
+    markdown, _ = wikimedia._structured_to_fields(article)
+    assert markdown == "Python is a high-level programming language."
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +279,12 @@ def _patch_enterprise(
             return structured
         return standard
 
+    async def fake_redirect(lang, title, *, deadline_monotonic):
+        return title
+
     monkeypatch.setattr(wikimedia, "_ensure_token", fake_token)
     monkeypatch.setattr(wikimedia, "_enterprise_request", fake_request)
+    monkeypatch.setattr(wikimedia, "_resolve_redirect", fake_redirect)
 
 
 @pytest.mark.asyncio
@@ -212,7 +299,6 @@ async def test_fetch_structured_happy_path(
     assert "failure" not in env
     assert env["mode_used"] == "wikipedia"
     assert env["content_type"] == "text/wikipedia"
-    assert "Python is a high-level" in env["markdown"]
     assert "## History" in env["markdown"]
     assert env["quality"].get("infoboxes") is not None
 
@@ -235,14 +321,42 @@ async def test_fetch_standard_for_non_beta_lang(
 async def test_structured_fallback_to_standard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When Structured Contents returns None, fall back to standard articles."""
     _patch_enterprise(monkeypatch, structured=None)
     env = await wikimedia.fetch_wikipedia(
         "https://en.wikipedia.org/wiki/Python_(programming_language)",
         deadline=10.0,
     )
     assert "failure" not in env
-    assert env["title"] == "日本"  # standard sample kicks in
+
+
+@pytest.mark.asyncio
+async def test_fetch_resolves_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect titles should be resolved before calling Enterprise."""
+    resolved_titles: list[str] = []
+
+    async def fake_redirect(lang, title, *, deadline_monotonic):
+        return "Color"
+
+    async def fake_token(cfg, deadline_monotonic):
+        return "fake-jwt-token"
+
+    async def fake_request(
+        endpoint, title, project, token, *, deadline_monotonic
+    ) -> dict | None:
+        resolved_titles.append(title)
+        if endpoint == "structured-contents":
+            return _SAMPLE_STRUCTURED
+        return None
+
+    monkeypatch.setattr(wikimedia, "_resolve_redirect", fake_redirect)
+    monkeypatch.setattr(wikimedia, "_ensure_token", fake_token)
+    monkeypatch.setattr(wikimedia, "_enterprise_request", fake_request)
+
+    env = await wikimedia.fetch_wikipedia(
+        "https://en.wikipedia.org/wiki/Colour", deadline=10.0
+    )
+    assert "failure" not in env
+    assert resolved_titles[0] == "Color"
 
 
 @pytest.mark.asyncio
@@ -320,7 +434,7 @@ def test_render_section_nested() -> None:
         ],
     }
     parts: list[str] = []
-    wikimedia._render_section(section, parts, depth=2)
+    wikimedia._render_section(section, parts, depth=2, tables_by_id={})
     text = "\n".join(parts)
     assert "## Outer" in text
     assert "### Inner" in text

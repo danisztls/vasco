@@ -60,11 +60,14 @@ class TestHeuristics:
         score = heuristics.composite_score(signals)
         assert score < 0.2, f"Human text scored {score}, expected < 0.2"
 
-    def test_slop_text_high_slop(self):
-        signals = heuristics.compute(SLOP_TEXT)
-        # Text heuristics alone (35% weight) — metadata pushes it higher.
-        score = heuristics.composite_score(signals)
-        assert score > 0.25, f"Slop text scored {score}, expected > 0.25"
+    def test_slop_text_higher_than_human(self):
+        slop_signals = heuristics.compute(SLOP_TEXT)
+        human_signals = heuristics.compute(HUMAN_TEXT)
+        slop_score = heuristics.composite_score(slop_signals)
+        human_score = heuristics.composite_score(human_signals)
+        assert slop_score > human_score, (
+            f"Slop ({slop_score}) should score higher than human ({human_score})"
+        )
 
     def test_slop_vocab_detected(self):
         signals = heuristics.compute(SLOP_TEXT)

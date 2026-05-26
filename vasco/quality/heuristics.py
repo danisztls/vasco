@@ -121,52 +121,58 @@ def composite_score(
 ) -> float:
     """Combine text signals + envelope metadata into a single 0-1 slop score.
 
-    Higher = more likely slop. Metadata signals (boilerplate, byline, date,
-    word count) carry most of the weight because they're harder to fake and
-    more reliable on real-world content than text-level heuristics.
+    Higher = more likely slop. Weights calibrated against ~60 real fetches
+    (scripts/calibrate_quality.py). Metadata signals dominate because text
+    heuristics show near-zero separation on 2026-era content.
     """
     score = 0.0
 
-    # ── Text heuristics (35% weight) ──
-    # These catch blatant AI slop but are weak on polished content farms.
+    # ── Text heuristics (15% weight) ──
+    # Calibration showed slop vocab/phrases are the only text signals with
+    # any separation. Em-dash, transition starts, sentence CV, and TTR
+    # showed no meaningful difference between good and bad groups.
 
-    # Slop vocabulary + phrases: the text signals that actually work.
-    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.12
-    score += min(1.0, signals.slop_phrase_count / 4) * 0.10
+    # Slop vocabulary: good p50=0.0000, bad p50=0.0000 but bad has a
+    # longer tail (bad max=0.0154 vs good max=0.0006). Weak but worth
+    # keeping for the worst offenders.
+    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.05
 
-    # Em-dash overuse: AI ~0.005+; human ~0.001
-    score += min(1.0, signals.em_dash_density / 0.008) * 0.05
+    # Slop phrases: similarly weak on real content but catches the
+    # blatant "let's delve into" style when it appears.
+    score += min(1.0, signals.slop_phrase_count / 3) * 0.05
 
-    # Transition paragraph starts: AI > 0.3; human < 0.1
-    score += min(1.0, signals.transition_start_ratio / 0.4) * 0.05
-
-    # Sentence length uniformity: only fires on very low CV (< 0.25).
+    # Sentence CV: bad group skews low (p50=0.5 vs good p50=1.02).
+    # Only fires on very uniform text.
     cv_signal = max(0.0, 1.0 - (signals.sentence_length_cv / 0.25))
     score += cv_signal * 0.03
 
-    # ── Envelope metadata (65% weight) ──
-    # Structural signals from trafilatura's HTML metadata extraction.
+    # Em-dash/transition: no separation in calibration data, vestigial.
+    score += min(1.0, signals.em_dash_density / 0.008) * 0.01
+    score += min(1.0, signals.transition_start_ratio / 0.4) * 0.01
 
-    # High boilerplate: thin content wrapped in heavy page chrome.
-    # 0.7+ is almost always a content farm or ad wrapper.
-    score += min(1.0, boilerplate_ratio / 0.6) * 0.25
+    # ── Envelope metadata (85% weight) ──
+    # Calibration showed these are the real separators.
 
-    # No byline: legitimate journalism and technical writing almost always
-    # has an author. Content farms and AI generators often skip it.
-    if not has_byline:
+    # Boilerplate ratio: strongest signal. Good p50=0.00, bad p50=0.96.
+    # Threshold at 0.5 catches most bad content cleanly.
+    score += min(1.0, boilerplate_ratio / 0.5) * 0.35
+
+    # Thin content: good p50=4338 words, bad p50=57.
+    # Graduated scale for the range that matters.
+    if word_count < 50:
+        score += 0.25
+    elif word_count < 150:
         score += 0.15
-
-    # No publication date: SEO filler and AI content is often undated to
-    # appear "evergreen". Real articles have dates.
-    if not has_date:
-        score += 0.10
-
-    # Thin content: very little text after extraction.
-    if word_count < 100:
-        score += 0.15
-    elif word_count < 200:
-        score += 0.10
     elif word_count < 400:
-        score += 0.05
+        score += 0.08
+
+    # No publication date: good 93% have dates, bad only 52%.
+    if not has_date:
+        score += 0.15
+
+    # No byline: weak signal (good 31% vs bad 23%) but still
+    # directionally correct. Low weight.
+    if not has_byline:
+        score += 0.10
 
     return round(min(1.0, score), 4)

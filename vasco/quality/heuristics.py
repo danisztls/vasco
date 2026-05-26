@@ -111,35 +111,62 @@ def compute(text: str) -> HeuristicSignals:
     )
 
 
-def composite_score(signals: HeuristicSignals) -> float:
-    """Combine signals into a single 0-1 slop score. Higher = more likely slop.
+def composite_score(
+    signals: HeuristicSignals,
+    *,
+    boilerplate_ratio: float = 0.0,
+    has_byline: bool = True,
+    has_date: bool = True,
+    word_count: int = 500,
+) -> float:
+    """Combine text signals + envelope metadata into a single 0-1 slop score.
 
-    Weights are calibrated so that a typical human-written page scores < 0.2
-    and obvious AI slop scores > 0.6.
+    Higher = more likely slop. Metadata signals (boilerplate, byline, date,
+    word count) carry most of the weight because they're harder to fake and
+    more reliable on real-world content than text-level heuristics.
     """
     score = 0.0
 
-    # Slop vocabulary: strongest single signal.
-    # Human baseline: ~0.001; AI slop: 0.01-0.05+
-    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.30
+    # ── Text heuristics (35% weight) ──
+    # These catch blatant AI slop but are weak on polished content farms.
 
-    # Slop phrases: even one is suspicious, 3+ is damning.
-    score += min(1.0, signals.slop_phrase_count / 4) * 0.25
-
-    # Sentence length uniformity: AI < 0.25 CV; human > 0.4
-    # Invert: low CV = high slop signal
-    cv_signal = max(0.0, 1.0 - (signals.sentence_length_cv / 0.5))
-    score += cv_signal * 0.15
+    # Slop vocabulary + phrases: the text signals that actually work.
+    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.12
+    score += min(1.0, signals.slop_phrase_count / 4) * 0.10
 
     # Em-dash overuse: AI ~0.005+; human ~0.001
-    score += min(1.0, signals.em_dash_density / 0.008) * 0.10
+    score += min(1.0, signals.em_dash_density / 0.008) * 0.05
 
     # Transition paragraph starts: AI > 0.3; human < 0.1
-    score += min(1.0, signals.transition_start_ratio / 0.4) * 0.10
+    score += min(1.0, signals.transition_start_ratio / 0.4) * 0.05
 
-    # Low type-token ratio (repetitive vocabulary)
-    # Human ~0.75+; AI slop ~0.55-0.65
-    ttr_signal = max(0.0, 1.0 - (signals.type_token_ratio / 0.8))
-    score += ttr_signal * 0.10
+    # Sentence length uniformity: only fires on very low CV (< 0.25).
+    cv_signal = max(0.0, 1.0 - (signals.sentence_length_cv / 0.25))
+    score += cv_signal * 0.03
+
+    # ── Envelope metadata (65% weight) ──
+    # Structural signals from trafilatura's HTML metadata extraction.
+
+    # High boilerplate: thin content wrapped in heavy page chrome.
+    # 0.7+ is almost always a content farm or ad wrapper.
+    score += min(1.0, boilerplate_ratio / 0.6) * 0.25
+
+    # No byline: legitimate journalism and technical writing almost always
+    # has an author. Content farms and AI generators often skip it.
+    if not has_byline:
+        score += 0.15
+
+    # No publication date: SEO filler and AI content is often undated to
+    # appear "evergreen". Real articles have dates.
+    if not has_date:
+        score += 0.10
+
+    # Thin content: very little text after extraction.
+    if word_count < 100:
+        score += 0.15
+    elif word_count < 200:
+        score += 0.10
+    elif word_count < 400:
+        score += 0.05
 
     return round(min(1.0, score), 4)

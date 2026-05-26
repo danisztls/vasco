@@ -66,7 +66,6 @@ class WikimediaCfg:
 @dataclass(frozen=True)
 class QualityCfg:
     blocklist_paths: tuple[str, ...] = ()
-    classifier_model_path: str = ""  # non-empty enables the classifier
 
 
 @dataclass(frozen=True)

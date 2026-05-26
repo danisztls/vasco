@@ -1204,7 +1204,11 @@ async def _fetch_one_body(
             quality_cfg = cfg.quality if cfg is not None else QualityCfg()
             if quality_cfg is not None:
                 quality_scores = quality_mod.score(
-                    markdown, url=base["url_final"], cfg=quality_cfg
+                    markdown,
+                    url=base["url_final"],
+                    cfg=quality_cfg,
+                    existing_quality=meta.get("quality", {}),
+                    metadata=meta,
                 )
                 meta["quality"].update(quality_scores)
             envelope = _success_envelope(

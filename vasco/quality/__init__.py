@@ -1,9 +1,11 @@
 """Content quality scoring for fetch envelopes.
 
-Three layers:
+Two layers:
 1. Domain blocklist — community-curated lists of known slop/farm domains.
-2. Text heuristics — lightweight slop vocabulary and structural analysis.
-3. Optional classifier — fastText model for higher accuracy (opt-in dep).
+2. Text heuristics — lightweight slop vocabulary and structural analysis,
+   plus envelope metadata signals (boilerplate, byline, date, word count).
+
+Skipped for sources with their own quality signals (Wikimedia, YouTube).
 
 The main entry point is `score()`, which returns a dict to merge into the
 envelope's `quality` field alongside existing trafilatura signals.
@@ -15,10 +17,15 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import blocklist, classifier, heuristics
+from vasco.adapters import wikimedia, youtube
+
+from . import blocklist, heuristics
 
 if TYPE_CHECKING:
     from vasco.config import QualityCfg
+
+# Sources with their own quality signals — heuristics would add noise.
+_SKIP_HEURISTICS_CHECKERS = (wikimedia.is_wikimedia_url, youtube.is_youtube_url)
 
 
 def score(
@@ -26,11 +33,13 @@ def score(
     *,
     url: str | None = None,
     cfg: "QualityCfg | None" = None,
+    existing_quality: dict | None = None,
+    metadata: dict | None = None,
 ) -> dict:
     """Score content quality. Returns dict with slop_score, domain_flagged, signals.
 
-    Designed to run in <10ms for typical pages (no I/O, no model loading on
-    the hot path unless classifier is enabled).
+    existing_quality: the quality dict from html_to_markdown (has boilerplate_ratio).
+    metadata: the full metadata dict (has byline, published, word_count).
     """
     result: dict = {}
 
@@ -47,19 +56,25 @@ def score(
         domain_flagged = blocklist.is_blocked(url, bl)
     result["domain_flagged"] = domain_flagged
 
-    # Layer 2: text heuristics.
+    # Skip heuristics for sources with their own quality signals.
+    if url and any(check(url) for check in _SKIP_HEURISTICS_CHECKERS):
+        return result
+
+    # Layer 2: text heuristics + envelope metadata signals.
+    boilerplate_ratio = (existing_quality or {}).get("boilerplate_ratio", 0.0)
+    has_byline = bool((metadata or {}).get("byline"))
+    has_date = bool((metadata or {}).get("published"))
+    word_count = (metadata or {}).get("word_count", 0)
+
     signals = heuristics.compute(markdown)
-    slop_score = heuristics.composite_score(signals)
+    slop_score = heuristics.composite_score(
+        signals,
+        boilerplate_ratio=boilerplate_ratio,
+        has_byline=has_byline,
+        has_date=has_date,
+        word_count=word_count,
+    )
     result["slop_score"] = slop_score
     result["signals"] = asdict(signals)
-
-    # Layer 3: classifier (enabled when model path is set).
-    model_path = cfg.classifier_model_path if cfg else ""
-    if model_path:
-        result["classifier_quality"] = classifier.classify(
-            markdown, model_path=model_path
-        )
-    else:
-        result["classifier_quality"] = None
 
     return result

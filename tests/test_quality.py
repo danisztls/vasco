@@ -62,8 +62,9 @@ class TestHeuristics:
 
     def test_slop_text_high_slop(self):
         signals = heuristics.compute(SLOP_TEXT)
+        # Text heuristics alone (35% weight) — metadata pushes it higher.
         score = heuristics.composite_score(signals)
-        assert score > 0.5, f"Slop text scored {score}, expected > 0.5"
+        assert score > 0.25, f"Slop text scored {score}, expected > 0.25"
 
     def test_slop_vocab_detected(self):
         signals = heuristics.compute(SLOP_TEXT)
@@ -278,11 +279,10 @@ class TestScore:
         blocklist.reset()
 
     def test_score_returns_all_fields(self):
-        result = score("Some text here. " * 50)
+        result = score("Some text here. " * 50, metadata={"word_count": 200})
         assert "slop_score" in result
         assert "domain_flagged" in result
         assert "signals" in result
-        assert "classifier_quality" in result
         assert isinstance(result["slop_score"], float)
         assert isinstance(result["domain_flagged"], bool)
 
@@ -300,11 +300,64 @@ class TestScore:
         assert result["domain_flagged"] is True
 
     def test_score_no_config(self):
-        result = score(HUMAN_TEXT)
+        result = score(
+            HUMAN_TEXT,
+            metadata={"byline": "Author", "published": "2025-01-01", "word_count": 500},
+        )
         assert result["slop_score"] < 0.2
         assert result["domain_flagged"] is False
-        assert result["classifier_quality"] is None
 
     def test_slop_detection_end_to_end(self):
-        result = score(SLOP_TEXT)
-        assert result["slop_score"] > 0.5
+        result = score(SLOP_TEXT, metadata={"word_count": 500})
+        assert result["slop_score"] > 0.25
+
+    def test_slop_with_bad_metadata(self):
+        result = score(
+            SLOP_TEXT,
+            existing_quality={"boilerplate_ratio": 0.7},
+            metadata={"word_count": 150},
+        )
+        assert result["slop_score"] > 0.6
+
+    def test_skip_heuristics_for_wikimedia(self):
+        result = score(
+            SLOP_TEXT,
+            url="https://en.wikipedia.org/wiki/Test",
+            metadata={"word_count": 500},
+        )
+        assert "slop_score" not in result
+        assert "domain_flagged" in result
+
+    def test_skip_heuristics_for_youtube(self):
+        result = score(
+            SLOP_TEXT,
+            url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            metadata={"word_count": 500},
+        )
+        assert "slop_score" not in result
+
+    def test_metadata_signals_boost_score(self):
+        text = "Some generic content here. " * 20
+        with_meta = score(
+            text,
+            metadata={"byline": "Author", "published": "2025-01-01", "word_count": 500},
+        )
+        without_meta = score(
+            text,
+            metadata={"word_count": 100},
+        )
+        assert without_meta["slop_score"] > with_meta["slop_score"]
+
+    def test_boilerplate_ratio_boosts_score(self):
+        text = "Some content here. " * 20
+        low_bp = score(
+            text,
+            existing_quality={"boilerplate_ratio": 0.1},
+            metadata={"word_count": 500},
+        )
+        high_bp = score(
+            text,
+            existing_quality={"boilerplate_ratio": 0.8},
+            metadata={"word_count": 500},
+        )
+        assert high_bp["slop_score"] > low_bp["slop_score"]

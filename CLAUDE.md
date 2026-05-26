@@ -28,10 +28,9 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/adapters/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
 | `vasco/adapters/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
 | `vasco/adapters/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
-| `vasco/quality/__init__.py` | `score(markdown, url, cfg)` → composite quality dict merged into envelope; orchestrates all three layers |
+| `vasco/quality/__init__.py` | `score(markdown, url, cfg)` → composite quality dict merged into envelope; orchestrates both layers |
 | `vasco/quality/heuristics.py` | Text-level slop detection: vocab ratio, phrase count, sentence CV, em-dash density, transition starts, TTR |
 | `vasco/quality/blocklist.py` | Domain blocklist loader (plain + uBlacklist formats); lazy singleton; `is_blocked(url)` |
-| `vasco/quality/classifier.py` | Optional fastText wrapper; graceful `None` when model/dep unavailable |
 | `vasco/quality/wordlists.py` | Slop vocabulary data (tier-1 words, phrases, transition starters) |
 | `vasco/extract.py` | Passage segmentation + BM25 / semantic ranking |
 | `vasco/semantic.py` | Lazy sentence-transformers ranker; raises `SemanticRankerUnavailable` if extra is missing |
@@ -56,7 +55,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 - **HTTP tier sends modern-Chrome headers.** `_http_fetch` sends `Sec-Fetch-*`, `Accept-Language`, `Accept-Encoding`, and `Upgrade-Insecure-Requests` alongside the configurable `User-Agent` to avoid WAF short-circuits that reject bare-UA requests before the browser tier can help.
 - **Browser is a process singleton.** `get_browser(cfg)` reads `BrowserCfg` only on first construction; subsequent calls return the same instance regardless of cfg. Reset in tests via `browser._reset_for_tests()`. MCP can opt into a lifespan prewarm with `VASCO_BROWSER_PREWARM=true` so the first browser-tier fetch isn't the one paying Firefox cold-start cost — prewarm failures (e.g. camoufox missing) are swallowed. Setting `browser.user_data_dir` (opt-in, empty by default) flips Camoufox into persistent_context mode so Cloudflare/login cookies survive across runs; in that mode `AsyncCamoufox` yields a `BrowserContext` (no `.new_context()`), so the mobile recovery tier falls back to per-page UA + viewport overrides.
 - **Config precedence**: CLI flag > `VASCO_*` env var > `~/.config/vasco/config.yaml` > dataclass default. `cfg=None` is allowed everywhere internal — code falls back to defaults.
-- **Quality scoring is three layers.** (1) Domain blocklist from community-curated files (uBlacklist + plain-domain formats); (2) text heuristics (slop vocab, sentence CV, em-dash density, transition starts, TTR); (3) optional fastText classifier behind `classifier` extra. All three produce signals merged into the envelope's `quality` dict alongside existing `trafilatura_confidence` and `boilerplate_ratio`. The composite `slop_score` (0-1, higher=worse) uses fixed weights; the raw `signals` dict lets consumers apply their own thresholds. Blocklist is a lazy singleton (`quality.blocklist.get_blocklist`); reset in tests via `blocklist.reset()`. Quality scoring is enabled when `cfg.quality` is not None (the default); disable via `quality: false` in YAML or `VASCO_QUALITY_ENABLED=false`. Classifier activates when `classifier_model_path` is set. Blocklist paths configured via `quality.blocklist_paths` (YAML list) or `VASCO_QUALITY_BLOCKLIST_PATHS` (colon-separated); accepts both local files and HTTP(S) URLs, consolidated to `$XDG_CACHE_HOME/vasco/blocklist.txt` with 7-day refresh.
+- **Quality scoring is two layers.** (1) Domain blocklist from community-curated files (uBlacklist + plain-domain formats); (2) text heuristics (slop vocab, sentence CV, em-dash density, transition starts, TTR) plus envelope metadata signals (boilerplate ratio, missing byline/date, thin content). Both produce signals merged into the envelope's `quality` dict alongside existing `trafilatura_confidence` and `boilerplate_ratio`. The composite `slop_score` (0-1, higher=worse) uses fixed weights (60% text heuristics, 40% metadata); the raw `signals` dict lets consumers apply their own thresholds. Blocklist is a lazy singleton (`quality.blocklist.get_blocklist`); reset in tests via `blocklist.reset()`. Quality scoring is enabled when `cfg.quality` is not None (the default); disable via `quality: false` in YAML or `VASCO_QUALITY_ENABLED=false`. Blocklist paths configured via `quality.blocklist_paths` (YAML list) or `VASCO_QUALITY_BLOCKLIST_PATHS` (colon-separated); accepts both local files and HTTP(S) URLs, consolidated to `$XDG_CACHE_HOME/vasco/blocklist.txt` with 7-day refresh.
 
 ## Testing
 
@@ -95,5 +94,5 @@ VASCO_FETCH_WORKERS=7 uv run python -c "from vasco.config import load_config; pr
 # → 7
 
 uv run vasco fetch https://example.com | jq '.quality.slop_score, .quality.domain_flagged, .quality.signals'
-# quality scoring: slop_score 0-1, domain blocklist check, raw signal breakdown
+# quality scoring: slop_score 0-1 (60% text heuristics, 40% metadata), domain blocklist check, raw signal breakdown
 ```

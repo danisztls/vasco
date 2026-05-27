@@ -1,15 +1,21 @@
-"""Camoufox singleton browser pool.
+"""Camoufox browser pool with optional remote server connection.
 
-Lazy-starts a single Firefox (Camoufox) instance on first `.fetch()`. Pages
-are created per URL and closed after content extraction. Shutdown is the
-caller's responsibility — `fetch.fetch_one` / `fetch_many` call `.close()`
-in a `finally` block.
+If a browser server is running (UNIX socket at $XDG_RUNTIME_DIR/vasco/browser.sock),
+fetch requests are proxied to it — zero cold start, shared browser instance across
+all consumers. Otherwise, falls back to launching a local Camoufox instance.
+
+Lazy-starts on first `.fetch()`. Pages are created per URL and closed after content
+extraction. Shutdown is the caller's responsibility — `fetch.fetch_one` / `fetch_many`
+call `.close()` in a `finally` block.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
+import struct
 import time
 from typing import Any
 
@@ -18,6 +24,7 @@ try:  # pragma: no cover - camoufox is an optional dep at import time.
 except Exception:  # pragma: no cover
     AsyncCamoufox = None  # type: ignore[assignment]
 
+log = logging.getLogger(__name__)
 
 _MOBILE_USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) "
@@ -26,9 +33,32 @@ _MOBILE_USER_AGENT = (
 )
 _MOBILE_VIEWPORT = {"width": 393, "height": 852}
 
+_HEADER = struct.Struct("!I")
+
+
+def _socket_path() -> str:
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return os.path.join(runtime, "vasco", "browser.sock")
+
+
+async def _send_request(sock_path: str, request: dict) -> dict:
+    reader, writer = await asyncio.open_unix_connection(sock_path)
+    try:
+        payload = json.dumps(request, ensure_ascii=False).encode()
+        writer.write(_HEADER.pack(len(payload)) + payload)
+        await writer.drain()
+
+        header = await reader.readexactly(_HEADER.size)
+        (length,) = _HEADER.unpack(header)
+        data = await reader.readexactly(length)
+        return json.loads(data)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
 
 class BrowserPool:
-    """Owns one Camoufox browser context for an invocation."""
+    """Owns one Camoufox browser context, or proxies to a remote server."""
 
     def __init__(
         self,
@@ -39,24 +69,33 @@ class BrowserPool:
     ) -> None:
         self._headless = headless
         self._locale = locale
-        # Persistent profile dir: when non-empty, Camoufox runs in
-        # persistent_context mode so cookies (Cloudflare clearance, login
-        # sessions, etc.) survive across Vasco runs. In that mode
-        # AsyncCamoufox.__aenter__ yields a BrowserContext rather than a
-        # Browser — we lose `.new_context()`, so the mobile recovery tier
-        # falls back to UA/viewport overrides on a context page.
         self._user_data_dir = _expand_profile_dir(user_data_dir)
         self._is_persistent = bool(self._user_data_dir)
         self._lock = asyncio.Lock()
         self._cm: Any | None = None
         self._browser: Any | None = None
+        self._remote: bool = False
 
     async def _ensure_started(self) -> None:
-        if self._browser is not None:
+        if self._browser is not None or self._remote:
             return
         async with self._lock:
-            if self._browser is not None:
+            if self._browser is not None or self._remote:
                 return
+
+            sock = _socket_path()
+            if os.path.exists(sock):
+                try:
+                    resp = await _send_request(
+                        sock, {"url": "about:blank", "timeout": 5.0}
+                    )
+                    if "error" not in resp:
+                        self._remote = True
+                        log.info("connected to browser server at %s", sock)
+                        return
+                except Exception:
+                    pass
+
             if AsyncCamoufox is None:
                 raise RuntimeError(
                     "camoufox is not installed; cannot start browser tier"
@@ -74,9 +113,7 @@ class BrowserPool:
                 self._browser = await self._cm.__aenter__()
             except Exception as exc:
                 if self._is_persistent and "already running" in str(exc):
-                    import logging
-
-                    logging.getLogger(__name__).warning(
+                    log.warning(
                         "persistent profile locked, falling back to ephemeral browser"
                     )
                     self._cm = None
@@ -97,10 +134,6 @@ class BrowserPool:
 
         Returns (html, status, headers). Raises asyncio.TimeoutError if the
         deadline has already passed.
-
-        When `mobile=True`, the page is created in a fresh context with iOS
-        Safari UA, mobile viewport, and touch — used as a recovery tier
-        when desktop Camoufox is blocked.
         """
         remaining = deadline_monotonic - time.monotonic()
         if remaining <= 0:
@@ -109,15 +142,20 @@ class BrowserPool:
             )
 
         await self._ensure_started()
+
+        if self._remote:
+            resp = await _send_request(
+                _socket_path(),
+                {"url": url, "mobile": mobile, "timeout": remaining},
+            )
+            if "error" in resp:
+                raise RuntimeError(resp["error"])
+            return resp.get("html", ""), resp.get("status", 0), resp.get("headers", {})
+
         assert self._browser is not None
 
         context = None
         if mobile and not self._is_persistent:
-            # NOTE: `is_mobile` and `has_touch` are Chromium-only in Playwright;
-            # Camoufox is Firefox-based, so we stick to UA + viewport +
-            # device_scale_factor — the three signals most server-side mobile
-            # routers actually inspect. The site never sees the missing touch
-            # capability since we don't dispatch events here.
             context = await self._browser.new_context(
                 user_agent=_MOBILE_USER_AGENT,
                 viewport=_MOBILE_VIEWPORT,
@@ -125,10 +163,6 @@ class BrowserPool:
             )
             page = await context.new_page()
         else:
-            # Persistent mode: AsyncCamoufox yields a BrowserContext, which has
-            # `.new_page()` but no `.new_context()`. Mobile recovery applies UA
-            # + viewport per-page; device_scale_factor isn't settable here, but
-            # most mobile routing checks UA + viewport.
             page = await self._browser.new_page()
             if mobile:
                 await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
@@ -179,6 +213,9 @@ class BrowserPool:
                     pass
 
     async def close(self) -> None:
+        if self._remote:
+            self._remote = False
+            return
         if self._cm is None:
             return
         try:

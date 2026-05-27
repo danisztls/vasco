@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sys
 from dataclasses import asdict, is_dataclass
@@ -503,6 +504,36 @@ def mcp() -> None:
     from vasco.interface import mcp as _mcp
 
     _mcp.run()
+
+
+@app.command("browser-server")
+def browser_server() -> None:
+    """Run a persistent Camoufox browser server on a UNIX socket.
+
+    Other vasco consumers (MCP, CLI, library callers like claudinho) connect
+    to the shared browser automatically — zero cold start, one Firefox process.
+    Reads browser config (locale, persistent profile) from ~/.config/vasco/config.yaml.
+    """
+    import signal
+
+    from vasco.config import load_config
+    from vasco.fetch.browser_server import run_server
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    cfg = load_config()
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(run_server(cfg))
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, task.cancel)
+    try:
+        loop.run_until_complete(task)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":  # pragma: no cover

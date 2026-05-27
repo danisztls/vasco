@@ -69,8 +69,26 @@ class BrowserPool:
                 os.makedirs(self._user_data_dir, exist_ok=True)
                 kwargs["persistent_context"] = True
                 kwargs["user_data_dir"] = self._user_data_dir
-            self._cm = AsyncCamoufox(**kwargs)
-            self._browser = await self._cm.__aenter__()
+            try:
+                self._cm = AsyncCamoufox(**kwargs)
+                self._browser = await self._cm.__aenter__()
+            except Exception as exc:
+                if self._is_persistent and "already running" in str(exc):
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "persistent profile locked, falling back to ephemeral browser"
+                    )
+                    self._cm = None
+                    self._is_persistent = False
+                    fallback = {
+                        "headless": self._headless,
+                        "locale": (self._locale,),
+                    }
+                    self._cm = AsyncCamoufox(**fallback)
+                    self._browser = await self._cm.__aenter__()
+                else:
+                    raise
 
     async def fetch(
         self, url: str, *, deadline_monotonic: float, mobile: bool = False

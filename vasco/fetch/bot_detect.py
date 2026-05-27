@@ -90,6 +90,11 @@ _WS_RE = re.compile(r"\s+")
 # pre-modal text is classified hard rather than soft.
 _SOFT_PAYWALL_MIN_VISIBLE_CHARS = 400
 
+# Real CF challenge pages have almost no visible text (just "Just a moment..."
+# or "Attention Required!"). Pages with CF monitoring JS but substantial
+# content are legitimate.
+_CF_CHALLENGE_MAX_VISIBLE_CHARS = 2000
+
 
 def _visible_text(html: str) -> str:
     stripped = _SCRIPT_STYLE_RE.sub(" ", html)
@@ -164,9 +169,13 @@ def classify(
 
     # --- 2xx / 3xx: examine body ---------------------------------------------
     if 200 <= status < 400:
-        # Cloudflare challenge served with a 200 status is common.
+        # Cloudflare challenge served with a 200 status is common, but CF
+        # monitoring JS (challenge-platform, cf_chl_opt) also appears on
+        # legitimate pages. Only classify as blocked if the page is thin —
+        # real challenge pages are <20KB with minimal visible text.
         if _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc:
-            return FailureReason.BLOCKED_CLOUDFLARE
+            if len(_visible_text(body)) < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
+                return FailureReason.BLOCKED_CLOUDFLARE
 
         if _has_any(body_lc, _CAPTCHA_MARKERS):
             return FailureReason.BLOCKED_CAPTCHA

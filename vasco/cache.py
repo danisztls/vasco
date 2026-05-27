@@ -307,7 +307,7 @@ class Cache:
             db_path = Path(path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = db_path
-        self._conn = sqlite3.connect(str(db_path))
+        self._conn = sqlite3.connect(str(db_path), timeout=5.0)
         self._conn.row_factory = sqlite3.Row
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")

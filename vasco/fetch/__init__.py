@@ -400,6 +400,7 @@ def _success_envelope(
             "modified": metadata.get("modified"),
             "language": metadata.get("language"),
             "site_name": metadata.get("site_name"),
+            "image": metadata.get("image"),
             "word_count": metadata.get("word_count", 0),
             "token_count_estimate": token_count_estimate,
             "quality": metadata.get("quality", {}),

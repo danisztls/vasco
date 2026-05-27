@@ -117,6 +117,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
             "modified": None,
             "language": None,
             "site_name": None,
+            "image": None,
             "word_count": 0,
             "links": _extract_links(html, url),
             "quality": {"trafilatura_confidence": 0.0, "boilerplate_ratio": 1.0},
@@ -139,7 +140,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     except Exception:
         warnings.append("trafilatura_extract_failed")
 
-    title = byline = published = modified = language = site_name = None
+    title = byline = published = modified = language = site_name = image = None
     try:
         if extract_metadata is not None:
             md = extract_metadata(html)
@@ -156,6 +157,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
                 site_name = getattr(md, "sitename", None) or getattr(
                     md, "site_name", None
                 )
+                image = getattr(md, "image", None)
     except Exception:
         warnings.append("trafilatura_metadata_failed")
 
@@ -178,6 +180,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
         "modified": modified,
         "language": language,
         "site_name": site_name,
+        "image": image,
         "word_count": wc,
         "links": _extract_links(html, url),
         "quality": {

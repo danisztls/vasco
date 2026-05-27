@@ -17,6 +17,16 @@ from urllib.parse import urlparse
 
 _FETCH_TOOLS = {"fetch", "fetch_many"}
 
+
+def _domain_from(url: Any) -> str:
+    if not isinstance(url, str):
+        return ""
+    try:
+        return urlparse(url).hostname or ""
+    except Exception:
+        return ""
+
+
 # Phase fields the summarizer turns into per-tool percentiles. `duration_ms`
 # is kept at the top level (back-compat with v1 of the rollup); the others
 # go under `phase_percentiles`. Only present on envelopes that came from a
@@ -101,7 +111,8 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
     durations: dict[str, list[int]] = {}
     phase_values: dict[str, dict[str, list[int]]] = {}
     escalations: dict[str, int] = {}
-    escalation_domains: Counter[str] = Counter()
+    escalation_domains: dict[str, dict[str, Any]] = {}
+    failure_domains: dict[str, Counter[str]] = {}
     fetch_ok_total: dict[str, int] = {}
     total = 0
 
@@ -117,6 +128,10 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             reason = rec.get("failure_reason")
             if isinstance(reason, str):
                 failures[reason] += 1
+                if tool in _FETCH_TOOLS:
+                    domain = _domain_from(rec.get("url"))
+                    if domain:
+                        failure_domains.setdefault(domain, Counter())[reason] += 1
 
         if tool in _FETCH_TOOLS:
             mode = rec.get("mode_used")
@@ -129,14 +144,14 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                 fetch_ok_total[tool] = fetch_ok_total.get(tool, 0) + 1
                 if rec.get("escalated_from") is not None:
                     escalations[tool] = escalations.get(tool, 0) + 1
-                    url = rec.get("url")
-                    if isinstance(url, str):
-                        try:
-                            domain = urlparse(url).hostname or ""
-                        except Exception:
-                            domain = ""
-                        if domain:
-                            escalation_domains[domain] += 1
+                    domain = _domain_from(rec.get("url"))
+                    if domain:
+                        entry = escalation_domains.setdefault(
+                            domain, {"count": 0, "paths": Counter()}
+                        )
+                        entry["count"] += 1
+                        path = f"{rec.get('escalated_from')}→{mode}"
+                        entry["paths"][path] += 1
 
         ms = rec.get("duration_ms")
         if isinstance(ms, (int, float)) and outcome in ("ok", "empty"):
@@ -186,7 +201,18 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
         "cache_hit_ratio": round(cache_hits / cache_total, 4) if cache_total else 0.0,
         "cache_observations": cache_total,
         "escalation_rate": escalation_rate,
-        "escalation_by_domain": dict(escalation_domains.most_common()),
+        "escalation_by_domain": {
+            d: {"count": v["count"], "paths": dict(v["paths"].most_common())}
+            for d, v in sorted(
+                escalation_domains.items(), key=lambda kv: kv[1]["count"], reverse=True
+            )
+        },
+        "failure_by_domain": {
+            d: dict(c.most_common())
+            for d, c in sorted(
+                failure_domains.items(), key=lambda kv: kv[1].total(), reverse=True
+            )
+        },
         "failures": dict(failures.most_common()),
         "duration_ms": duration_stats,
         "phase_percentiles": phase_percentiles,

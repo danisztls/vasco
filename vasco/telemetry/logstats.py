@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 
 _FETCH_TOOLS = {"fetch", "fetch_many"}
@@ -100,6 +101,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
     durations: dict[str, list[int]] = {}
     phase_values: dict[str, dict[str, list[int]]] = {}
     escalations: dict[str, int] = {}
+    escalation_domains: Counter[str] = Counter()
     fetch_ok_total: dict[str, int] = {}
     total = 0
 
@@ -127,6 +129,14 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                 fetch_ok_total[tool] = fetch_ok_total.get(tool, 0) + 1
                 if rec.get("escalated_from") is not None:
                     escalations[tool] = escalations.get(tool, 0) + 1
+                    url = rec.get("url")
+                    if isinstance(url, str):
+                        try:
+                            domain = urlparse(url).hostname or ""
+                        except Exception:
+                            domain = ""
+                        if domain:
+                            escalation_domains[domain] += 1
 
         ms = rec.get("duration_ms")
         if isinstance(ms, (int, float)) and outcome in ("ok", "empty"):
@@ -176,6 +186,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
         "cache_hit_ratio": round(cache_hits / cache_total, 4) if cache_total else 0.0,
         "cache_observations": cache_total,
         "escalation_rate": escalation_rate,
+        "escalation_by_domain": dict(escalation_domains.most_common()),
         "failures": dict(failures.most_common()),
         "duration_ms": duration_stats,
         "phase_percentiles": phase_percentiles,

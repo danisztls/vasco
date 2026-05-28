@@ -42,9 +42,15 @@ class _RecordingCM:
 
 
 @pytest.fixture(autouse=True)
-def _reset_recordings(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _RecordingCM.instances = []
     monkeypatch.setattr(browser_mod, "AsyncCamoufox", _RecordingCM)
+    # Point the socket path at a guaranteed-missing file so a real browser
+    # server running on the dev machine doesn't divert `_ensure_started`
+    # away from the recording mock.
+    monkeypatch.setattr(
+        browser_mod, "_socket_path", lambda: str(tmp_path / "nonexistent.sock")
+    )
     browser_mod._reset_for_tests()
 
 

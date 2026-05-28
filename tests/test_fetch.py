@@ -51,6 +51,40 @@ async def test_http_fetch_sends_browser_shaped_headers(
     # The default UA must still flow through; cfg=None means we keep the
     # built-in placeholder.
     assert "vasco" in seen["user-agent"].lower()
+    # Accept-Encoding must only advertise what we can decode (see below).
+    assert seen["accept-encoding"] == fetch_mod._ACCEPT_ENCODING
+
+
+def test_accept_encoding_only_advertises_decodable() -> None:
+    """Regression: advertising zstd/br without the decoder package makes httpx
+    return undecoded bytes, silently corrupting .text → empty extraction.
+
+    gzip+deflate are always safe (stdlib zlib); br/zstd only when their
+    packages are importable.
+    """
+    import importlib.util as _ilu
+
+    real = _ilu.find_spec
+
+    def fake(name: str, *a: object, **k: object):  # type: ignore[no-untyped-def]
+        if name in ("brotli", "brotlicffi", "zstandard"):
+            return None
+        return real(name, *a, **k)
+
+    # No optional decoders available → only gzip/deflate.
+    import importlib
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(importlib.util, "find_spec", fake)
+    try:
+        assert fetch_mod._supported_accept_encoding() == "gzip, deflate"
+    finally:
+        monkey.undo()
+
+    # With the decoders installed (declared deps), the full Chrome set appears.
+    enc = fetch_mod._supported_accept_encoding()
+    assert enc.startswith("gzip, deflate")
+    assert "zstd" in enc  # zstandard is a declared dependency
 
 
 @pytest.mark.asyncio

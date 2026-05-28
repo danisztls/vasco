@@ -13,6 +13,7 @@ module-level so tests can monkeypatch them.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -30,6 +31,27 @@ from vasco.config import QualityCfg
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import google_shopping, wayback, wikimedia, youtube
 from vasco.errors import FailureReason
+
+
+def _supported_accept_encoding() -> str:
+    """Build an ``Accept-Encoding`` value from encodings we can actually decode.
+
+    Advertising an encoding httpx can't decode (e.g. ``zstd`` without the
+    ``zstandard`` package) makes the server send it and httpx hand back the
+    raw compressed bytes — silently corrupting ``.text`` so extraction yields
+    nothing. gzip/deflate are always available via stdlib zlib; br and zstd
+    depend on optional packages (declared as deps, but probed here so a
+    minimal env degrades gracefully instead of corrupting).
+    """
+    encodings = ["gzip", "deflate"]
+    if importlib.util.find_spec("brotli") or importlib.util.find_spec("brotlicffi"):
+        encodings.append("br")
+    if importlib.util.find_spec("zstandard"):
+        encodings.append("zstd")
+    return ", ".join(encodings)
+
+
+_ACCEPT_ENCODING = _supported_accept_encoding()
 
 
 # Minimum remaining deadline (seconds) before we'll bother escalating from
@@ -164,7 +186,7 @@ async def _http_fetch(
             "image/avif,image/webp,image/apng,*/*;q=0.8"
         ),
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Encoding": _ACCEPT_ENCODING,
         "Upgrade-Insecure-Requests": "1",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-Mode": "navigate",

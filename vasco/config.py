@@ -78,6 +78,15 @@ class AnswerCfg:
 
 
 @dataclass(frozen=True)
+class ShoppingCfg:
+    """Labels stamped on the Google Shopping envelope. The parser itself only
+    understands PT-BR pages; these just control how the result is labelled."""
+
+    currency: str = "BRL"
+    language: str = "pt-BR"
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -89,6 +98,7 @@ class Config:
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
     quality: QualityCfg | None = field(default_factory=QualityCfg)
     answer: AnswerCfg = field(default_factory=AnswerCfg)
+    shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -102,6 +112,7 @@ _SECTIONS: dict[str, type] = {
     "wikimedia": WikimediaCfg,
     "quality": QualityCfg,
     "answer": AnswerCfg,
+    "shopping": ShoppingCfg,
 }
 
 

@@ -93,8 +93,8 @@ def test_parse_product_full_label() -> None:
         == "Amazon Kindle Paperwhite 16GB 2024 O Kindle mais rápido já lançado"
     )
     assert p["price_brl"] == 949.00
-    assert p["rating"] == 4.8
-    assert p["review_count"] == 871
+    assert p["product_rating"] == 4.8
+    assert p["product_review_count"] == 871
     assert p["store"] == "Amazon.com.br - Retail"
     assert p["other_stores"] is True
     assert "was_price_brl" not in p
@@ -127,7 +127,7 @@ def test_parse_product_promo_with_was_price() -> None:
 def test_parse_product_review_mil_suffix() -> None:
     p = google_shopping._parse_product(_MIL_LABEL)
     assert p is not None
-    assert p["review_count"] == 5800
+    assert p["product_review_count"] == 5800
     assert p["price_brl"] == 1043.25
 
 
@@ -138,8 +138,8 @@ def test_parse_product_omits_null_fields() -> None:
     assert p["price_brl"] == 500.0
     assert p["store"] == "Some Store"
     for missing in (
-        "rating",
-        "review_count",
+        "product_rating",
+        "product_review_count",
         "was_price_brl",
         "discount_pct",
         "badges",
@@ -190,24 +190,121 @@ def test_outlier_filter_zero_iqr_passthrough() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_products_from_fixture() -> None:
+def test_extract_offers_from_fixture() -> None:
     html_src = FIXTURE_PATH.read_text()
-    products, filter_counts = google_shopping._extract_products(html_src)
+    offers, filter_counts = google_shopping._extract_offers(html_src)
 
-    # All kept products are new + Brazilian + non-outlier.
-    assert all("Usado" not in p.get("store", "") for p in products)
-    assert all("Preço no exterior" not in p.get("store", "") for p in products)
+    # All kept offers are new + Brazilian + non-outlier.
+    assert all("Usado" not in o.get("store", "") for o in offers)
+    assert all("Preço no exterior" not in o.get("store", "") for o in offers)
 
-    # Sorted ascending by price.
-    prices = [p["price_brl"] for p in products]
-    assert prices == sorted(prices)
+    # Offers are in source order, each carrying a 1-based position.
+    positions = [o["position"] for o in offers]
+    assert positions == sorted(positions)
+    assert positions[0] >= 1
 
     # Filter counts include used + international (outliers depend on data).
     assert filter_counts.get("used", 0) >= 1
     assert filter_counts.get("international", 0) >= 1
 
-    # At least one product with a rating extracted.
-    assert any("rating" in p for p in products)
+    # Product-level aggregate + thumbnail extracted on at least one offer.
+    assert any("product_rating" in o for o in offers)
+    assert any(
+        "gstatic" in o.get("image", "") or "encrypted-tbn" in o.get("image", "")
+        for o in offers
+    )
+
+
+# ---------------------------------------------------------------------------
+# Grouping (same product across multiple sellers)
+# ---------------------------------------------------------------------------
+
+
+def test_norm_title_conservative() -> None:
+    # Whitespace + case + trailing punctuation are normalized away...
+    assert google_shopping._norm_title(
+        "Kindle  Paperwhite ."
+    ) == google_shopping._norm_title("kindle paperwhite")
+    # ...but distinct SKUs are NOT merged.
+    assert google_shopping._norm_title(
+        "iPhone 15 128GB"
+    ) != google_shopping._norm_title("iPhone 15 256GB")
+
+
+def test_group_by_product_multi_seller() -> None:
+    offers = [
+        {
+            "title": "Soundcore P40i",
+            "price_brl": 361.0,
+            "store": "Magalu",
+            "position": 2,
+            "was_price_brl": 399.0,
+            "discount_pct": 9.5,
+            "product_rating": 4.6,
+            "product_review_count": 4800,
+        },
+        {
+            "title": "Soundcore P40i",
+            "price_brl": 354.9,
+            "store": "Amazon",
+            "position": 4,
+            "product_rating": 4.6,
+            "product_review_count": 4800,
+            "image": "https://encrypted-tbn0.gstatic.com/x",
+        },
+    ]
+    products = google_shopping._group_by_product(offers)
+    assert len(products) == 1
+    p = products[0]
+    assert len(p["sellers"]) == 2
+    # Sellers sorted by price asc; product price is the cheapest.
+    assert [s["price_brl"] for s in p["sellers"]] == [354.9, 361.0]
+    assert p["price_brl"] == 354.9
+    assert p["price_range"] == [354.9, 361.0]
+    # Position is the best (min) rank in the group.
+    assert p["position"] == 2
+    # Aggregate fields hoisted to the product level (not per-seller).
+    assert p["product_rating"] == 4.6
+    assert p["product_review_count"] == 4800
+    assert "product_rating" not in p["sellers"][0]
+    # Per-offer fields stay on the seller.
+    magalu = next(s for s in p["sellers"] if s["store"] == "Magalu")
+    assert magalu["discount_pct"] == 9.5
+    # Image hoisted from the offer that carries one.
+    assert p["image"].endswith("/x")
+
+
+def test_group_by_product_collapses_exact_dups() -> None:
+    offers = [
+        {"title": "P40i", "price_brl": 354.9, "store": "Amazon Seller", "position": 1},
+        {"title": "P40i", "price_brl": 354.9, "store": "Amazon Seller", "position": 2},
+        {"title": "P40i", "price_brl": 354.9, "store": "Amazon Seller", "position": 3},
+    ]
+    products = google_shopping._group_by_product(offers)
+    assert len(products) == 1
+    assert len(products[0]["sellers"]) == 1  # 3 identical listings -> 1
+    assert "price_range" not in products[0]  # single price
+
+
+def test_group_by_product_orders_by_position() -> None:
+    offers = [
+        {
+            "title": "Cheap But Lower Ranked",
+            "price_brl": 10.0,
+            "store": "A",
+            "position": 5,
+        },
+        {
+            "title": "Pricey But Top Ranked",
+            "price_brl": 999.0,
+            "store": "B",
+            "position": 1,
+        },
+    ]
+    products = google_shopping._group_by_product(offers)
+    # Google order preserved: position 1 first, despite higher price.
+    assert [p["position"] for p in products] == [1, 5]
+    assert products[0]["title"] == "Pricey But Top Ranked"
 
 
 # ---------------------------------------------------------------------------
@@ -241,15 +338,47 @@ async def test_fetch_google_shopping_happy_path(
 
     products = env["quality"]["products"]
     assert env["quality"]["result_count"] == len(products)
+    assert env["quality"]["offer_count"] >= len(products)  # grouping can only shrink
     assert len(products) >= 5  # something useful came out of the fixture
-    # Sorted asc
-    assert [p["price_brl"] for p in products] == sorted(
-        p["price_brl"] for p in products
-    )
-    # No used / international leaked through
+
+    # Default ordering preserves Google's source order (by position, not price).
+    assert [p["position"] for p in products] == sorted(p["position"] for p in products)
+
     for p in products:
-        assert "Usado" not in p.get("store", "")
-        assert "Preço no exterior" not in p.get("store", "")
+        # Each product carries a sellers list; product price is the cheapest seller.
+        assert p["sellers"]
+        assert p["price_brl"] == min(s["price_brl"] for s in p["sellers"])
+        # No used / international leaked through.
+        for s in p["sellers"]:
+            assert "Usado" not in s.get("store", "")
+            assert "Preço no exterior" not in s.get("store", "")
+
+    # Top-level image is sourced from the first product's thumbnail when present.
+    if products[0].get("image"):
+        assert env["image"] == products[0]["image"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_shopping_currency_from_cfg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vasco.config import Config, ShoppingCfg
+
+    html_src = FIXTURE_PATH.read_text()
+
+    async def fake_browser(url, *, deadline_monotonic, cfg):
+        return html_src, 200, {}
+
+    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+
+    cfg = Config(shopping=ShoppingCfg(currency="USD", language="en-US"))
+    env = await google_shopping.fetch_google_shopping(
+        "https://www.google.com/search?udm=28&q=kindle",
+        deadline=10.0,
+        cfg=cfg,
+    )
+    assert env["quality"]["currency"] == "USD"
+    assert env["language"] == "en-US"
 
 
 @pytest.mark.asyncio

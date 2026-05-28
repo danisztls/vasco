@@ -172,10 +172,14 @@ def _parse_product(label: str) -> dict[str, Any] | None:
             product["was_price_brl"] = was
             product["discount_pct"] = round((was - price) / was * 100, 1)
 
+    # Rating/reviews are a Google product-cluster aggregate (identical across
+    # every seller of the same product), NOT per-seller. Named with a
+    # ``product_`` prefix so consumers don't mistake them for per-offer trust
+    # signals; hoisted to the product group during _group_by_product.
     rating_match = re.search(r"Avaliado com (\d[,.]\d)\s+de\s+5", label)
     if rating_match:
         try:
-            product["rating"] = float(rating_match.group(1).replace(",", "."))
+            product["product_rating"] = float(rating_match.group(1).replace(",", "."))
         except ValueError:
             pass
 
@@ -183,7 +187,7 @@ def _parse_product(label: str) -> dict[str, Any] | None:
     if review_match:
         rc = _parse_review_count(review_match.group(1), bool(review_match.group(2)))
         if rc is not None:
-            product["review_count"] = rc
+            product["product_review_count"] = rc
 
     # Store: find the segment that isn't a known structured field. The label
     # is a dot-separated sentence; the store is the only free-form text.
@@ -250,20 +254,31 @@ def _filter_outliers(
 # ---------------------------------------------------------------------------
 
 
-def _extract_products(html_src: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Parse rendered Google Shopping HTML into (products, filter_counts).
+def _card_image(card: Any) -> str | None:
+    """First Google thumbnail (encrypted-tbn.gstatic.com) inside a card."""
+    for src in card.xpath(".//img/@src"):
+        if "gstatic" in src or "encrypted-tbn" in src:
+            return str(src)
+    return None
 
-    ``filter_counts`` reports drops per reason: ``used``, ``international``,
-    ``outlier``. Keys with zero counts are omitted from the returned dict.
+
+def _extract_offers(html_src: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Parse rendered Google Shopping HTML into (offers, filter_counts).
+
+    Each offer is a single seller listing carrying ``position`` (1-based rank in
+    Google's source order) and, when present, an ``image`` thumbnail. Offers are
+    returned in source order — no price sort. ``filter_counts`` reports drops per
+    reason: ``used``, ``international``, ``outlier`` (zero counts omitted).
     """
     from lxml import html as lxml_html  # local import: lxml is heavy
 
     tree = lxml_html.fromstring(html_src)
     cards = tree.xpath(".//product-viewer-entrypoint")
 
-    products: list[dict[str, Any]] = []
+    offers: list[dict[str, Any]] = []
     used_dropped = 0
     intl_dropped = 0
+    position = 0
 
     for card in cards:
         full_label: str | None = None
@@ -286,10 +301,14 @@ def _extract_products(html_src: str) -> tuple[list[dict[str, Any]], dict[str, in
             continue
         parsed = _parse_product(full_label)
         if parsed is not None:
-            products.append(parsed)
+            position += 1
+            parsed["position"] = position
+            image = _card_image(card)
+            if image:
+                parsed["image"] = image
+            offers.append(parsed)
 
-    products, outlier_dropped = _filter_outliers(products)
-    products.sort(key=lambda p: p["price_brl"])
+    offers, outlier_dropped = _filter_outliers(offers)
 
     counts: dict[str, int] = {}
     if used_dropped:
@@ -299,7 +318,75 @@ def _extract_products(html_src: str) -> tuple[list[dict[str, Any]], dict[str, in
     if outlier_dropped:
         counts["outlier"] = outlier_dropped
 
-    return products, counts
+    return offers, counts
+
+
+# ---------------------------------------------------------------------------
+# Grouping (same product across multiple sellers)
+# ---------------------------------------------------------------------------
+
+
+_SELLER_FIELDS = ("was_price_brl", "discount_pct", "badges", "other_stores")
+_AGGREGATE_FIELDS = ("product_rating", "product_review_count", "image")
+
+
+def _norm_title(title: str) -> str:
+    """Normalization key for grouping. Conservative on purpose: lowercase +
+    whitespace-collapse + trailing-punctuation strip, exact match only. This
+    under-merges (distinct SKUs like "128GB"/"256GB" or seller title variants
+    stay separate) — preferred over fuzzy matching, which risks merging
+    genuinely different products."""
+    return re.sub(r"\s+", " ", title.lower()).strip().rstrip(".,;:!?-–— ")
+
+
+def _group_by_product(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse offers of the same product into one entry with a ``sellers``
+    list, preserving Google's source order via ``position`` (min rank in group).
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for off in offers:
+        groups.setdefault(_norm_title(off["title"]), []).append(off)
+
+    products: list[dict[str, Any]] = []
+    for group in groups.values():
+        by_pos = sorted(group, key=lambda o: o["position"])
+
+        seen: set[tuple[str | None, float]] = set()
+        sellers: list[dict[str, Any]] = []
+        for o in group:
+            store = o.get("store")
+            key = (store, o["price_brl"])
+            if key in seen:
+                continue
+            seen.add(key)
+            seller: dict[str, Any] = {}
+            if store is not None:
+                seller["store"] = store
+            seller["price_brl"] = o["price_brl"]
+            for f in _SELLER_FIELDS:
+                if f in o:
+                    seller[f] = o[f]
+            sellers.append(seller)
+        sellers.sort(key=lambda s: s["price_brl"])
+
+        prices = [s["price_brl"] for s in sellers]
+        product: dict[str, Any] = {
+            "title": by_pos[0]["title"],
+            "position": by_pos[0]["position"],
+            "price_brl": min(prices),
+            "sellers": sellers,
+        }
+        if min(prices) != max(prices):
+            product["price_range"] = [min(prices), max(prices)]
+        for f in _AGGREGATE_FIELDS:
+            for o in by_pos:
+                if f in o:
+                    product[f] = o[f]
+                    break
+        products.append(product)
+
+    products.sort(key=lambda p: p["position"])
+    return products
 
 
 # ---------------------------------------------------------------------------
@@ -321,28 +408,26 @@ def _render_markdown(products: list[dict[str, Any]], *, query: str | None) -> st
     else:
         parts.append("# Google Shopping")
     parts.append("")
-    parts.append(f"{len(products)} products (sorted by price)")
+    parts.append(f"{len(products)} products (Google order)")
     parts.append("")
     for i, p in enumerate(products, 1):
         title = p["title"]
         price = f"R$ {p['price_brl']:.2f}".replace(".", ",")
-        line = f"{i}. **{title}** — {price}"
+        line = f"{i}. **{title}** — from {price}"
         extras: list[str] = []
-        if p.get("was_price_brl"):
-            was = f"R$ {p['was_price_brl']:.2f}".replace(".", ",")
-            extras.append(f"was {was} (-{p.get('discount_pct', 0)}%)")
-        if p.get("store"):
-            store_bit = p["store"]
-            if p.get("other_stores"):
-                store_bit += " (+ more)"
-            extras.append(store_bit)
-        if p.get("rating") is not None:
-            rating_bit = f"{p['rating']}/5"
-            if p.get("review_count"):
-                rating_bit += f" ({p['review_count']} reviews)"
+        if p.get("price_range"):
+            hi = f"R$ {p['price_range'][1]:.2f}".replace(".", ",")
+            extras.append(f"up to {hi}")
+        sellers = p.get("sellers", [])
+        if sellers:
+            names = ", ".join(s["store"] for s in sellers if s.get("store"))
+            if names:
+                extras.append(f"{len(sellers)} sellers: {names}")
+        if p.get("product_rating") is not None:
+            rating_bit = f"{p['product_rating']}/5"
+            if p.get("product_review_count"):
+                rating_bit += f" ({p['product_review_count']} product reviews)"
             extras.append(rating_bit)
-        if p.get("badges"):
-            extras.append(", ".join(p["badges"]))
         if extras:
             line += " — " + " — ".join(extras)
         parts.append(line)
@@ -443,7 +528,8 @@ async def fetch_google_shopping(
         )
 
     try:
-        products, filter_counts = _extract_products(html_src)
+        offers, filter_counts = _extract_offers(html_src)
+        products = _group_by_product(offers)
     except Exception as exc:
         log.warning("Google Shopping HTML parse failed: %s", exc)
         return _failure_envelope(
@@ -458,11 +544,15 @@ async def fetch_google_shopping(
 
     from .. import io as io_mod
 
+    currency = getattr(getattr(cfg, "shopping", None), "currency", None) or "BRL"
+    language = getattr(getattr(cfg, "shopping", None), "language", None) or "pt-BR"
+
     env = _base_envelope(url, http_status=status or 200)
     quality: dict[str, Any] = {
         "products": products,
-        "currency": "BRL",
+        "currency": currency,
         "result_count": len(products),
+        "offer_count": len(offers),
     }
     if query:
         quality["search_query"] = query
@@ -475,9 +565,9 @@ async def fetch_google_shopping(
             "byline": None,
             "published": None,
             "modified": None,
-            "language": "pt-BR",
+            "language": language,
             "site_name": "Google Shopping",
-            "image": None,
+            "image": products[0].get("image") if products else None,
             "word_count": len(markdown.split()),
             "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": quality,

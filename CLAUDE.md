@@ -15,8 +15,8 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 
 | File | Role |
 |---|---|
-| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `cache` and `logs` sub-apps |
-| `vasco/interface/mcp.py` | MCP server (stdio); opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
+| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `search`/`fetch`/`extract`/`answer`/`map`/`normalize` commands + `cache` and `logs` sub-apps |
+| `vasco/interface/mcp.py` | MCP server (stdio); tools `search`/`fetch`/`fetch_many`/`extract`/`answer`/`map`; opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
 | `vasco/fetch/__init__.py` | `fetch_one` / `fetch_many`, auto chain `http → browser → browser+mobile → wayback`, phase timing, envelope assembly |
 | `vasco/fetch/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/fetch/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
@@ -35,6 +35,8 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/quality/wordlists.py` | Slop vocabulary data (tier-1 words, phrases, transition starters) |
 | `vasco/extract.py` | Passage segmentation + BM25 / semantic ranking |
 | `vasco/semantic.py` | Lazy sentence-transformers ranker; raises `SemanticRankerUnavailable` if extra is missing |
+| `vasco/summarize.py` | Powers the `answer` command: `answer(url, question=)` fetches then asks an LLM (DeepSeek default); `summarize()` does the LLM call. Returns `None`/`error` on failure, never raises. Page is cached via `fetch_one`; the answer is not cached |
+| `vasco/adapters/deepseek.py` | Async OpenAI-compatible chat client (`DeepSeekClient`) for the `answer` command; raises on HTTP error |
 | `vasco/map.py` | sitemap / feeds / spider via trafilatura, `--exclude` filters; llms.txt discovery (disk-cached 24h) |
 | `vasco/cache.py` | SQLite cache + URL normalization (incl. AMP folding, YouTube collapse, Wikimedia mobile→desktop) + per-domain strategy (starting tier only) |
 | `vasco/converters/convert.py` | `html_to_markdown` (trafilatura wrapper + link extraction) |

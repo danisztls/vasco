@@ -18,6 +18,7 @@ from vasco import fetch as _fetch
 from vasco import io as _io
 from vasco import map as _map
 from vasco import search as _search
+from vasco import summarize as _summarize
 from vasco import telemetry as _telemetry
 from vasco.telemetry import logstats as _logstats
 
@@ -360,6 +361,80 @@ def extract(
 
 
 # ---------------------------------------------------------------------------
+# answer
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def answer(
+    url: Annotated[str, typer.Argument(help="URL to answer over.")],
+    question: Annotated[
+        str | None,
+        typer.Option(
+            "--question", "-q", help="Question to answer; omit for a generic summary."
+        ),
+    ] = None,
+    mode: Annotated[
+        str, typer.Option(help="Fetch mode: auto|http|browser|mobile|wayback.")
+    ] = "auto",
+    deadline: Annotated[str | None, typer.Option(help="Deadline e.g. 15s, 1m.")] = None,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Ignore cache on read; still write.")
+    ] = False,
+) -> None:
+    """Fetch a URL and print an LLM answer/summary over its content as JSON."""
+    cfg = _config.load_config()
+    deadline_seconds = (
+        parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
+    )
+    cache = _open_cache(cfg)
+    try:
+        started = _monotonic()
+        try:
+            result = asyncio.run(
+                _summarize.answer(
+                    url,
+                    question=question,
+                    mode=mode,
+                    deadline=deadline_seconds,
+                    refresh=refresh,
+                    cache=cache,
+                    cfg=cfg,
+                )
+            )
+        except Exception as exc:
+            _telemetry.record_exception(cfg, "answer", exc, url=url, question=question)
+            raise
+        duration_ms = int((_monotonic() - started) * 1000)
+        if "failure" in result:
+            _telemetry.record_failure(cfg, "answer", result)
+        elif result.get("error"):
+            _telemetry.log_event(
+                cfg,
+                {
+                    "tool": "answer",
+                    "outcome": "fail",
+                    "url": url,
+                    "error": result["error"],
+                    "duration_ms": duration_ms,
+                },
+            )
+        else:
+            _telemetry.record_success(
+                cfg,
+                "answer",
+                url=url,
+                question=question,
+                from_cache=result.get("from_cache"),
+                duration_ms=duration_ms,
+            )
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+    finally:
+        cache.close()
+
+
+# ---------------------------------------------------------------------------
 # map
 # ---------------------------------------------------------------------------
 
@@ -497,7 +572,7 @@ def logs_stats(
 def mcp() -> None:
     """Run the MCP server on stdio.
 
-    Exposes search, fetch, fetch_many, extract, map, and normalize as MCP tools
+    Exposes search, fetch, fetch_many, extract, answer, and map as MCP tools
     for agent clients (Claude Desktop, Claude Code). The BrowserPool and any
     loaded semantic model stay warm for the server's lifetime.
     """

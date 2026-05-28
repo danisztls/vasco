@@ -22,6 +22,7 @@ from vasco import extract as _extract_mod
 from vasco import fetch as _fetch
 from vasco import map as _map_mod
 from vasco import search as _search
+from vasco import summarize as _summarize_mod
 from vasco import telemetry as _telemetry
 from vasco.fetch import browser as _browser
 
@@ -164,12 +165,13 @@ def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
     description=(
         "Fetch a single URL and return its envelope: clean Markdown plus "
         "metadata (title, byline, published, word_count, links, etc.) or a "
-        "typed failure object. YouTube URLs return a transcript; PDFs are "
-        "rendered to text; Wikipedia/Wikimedia URLs use the Enterprise API "
-        "when configured. Set refresh=true to bypass the cache and re-fetch "
-        "from the source. Set metadata_only=true to omit the `markdown` "
-        "field (useful when triaging many URLs before deciding what to read "
-        "in full)."
+        "typed failure object. Always returns the full content. YouTube URLs "
+        "return a transcript; PDFs are rendered to text; Wikipedia/Wikimedia "
+        "URLs use the Enterprise API when configured. Set refresh=true to "
+        "bypass the cache and re-fetch from the source. Set metadata_only=true "
+        "to omit the `markdown` field (useful when triaging many URLs before "
+        "deciding what to read in full). To get an LLM answer/summary over a "
+        "page instead of its full text, use the `answer` tool."
     ),
 )
 async def fetch(
@@ -293,6 +295,63 @@ async def extract(
             query=query,
             rank=rank,
             passage_count=len(passages),
+            duration_ms=duration_ms,
+        )
+    return result
+
+
+@server.tool(
+    description=(
+        "Fetch a URL and return a short LLM answer over its content instead of "
+        "the full page — saves context tokens. Pass a `question` to get a "
+        "directed answer; omit it for a generic summary. Returns {url, title, "
+        "answer, model, ...}. Use this when you only need what a page says about "
+        "something; use `fetch` when you need the full verbatim Markdown. "
+        "Requires an answer API key (DEEPSEEK_API_KEY or answer.api_key); "
+        "without one it returns an `error` field."
+    ),
+)
+async def answer(
+    url: str,
+    question: str | None = None,
+    mode: str = "auto",
+    deadline: float = 30.0,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    started = _monotonic()
+    try:
+        result = await _summarize_mod.answer(
+            url,
+            question=question,
+            mode=mode,
+            deadline=deadline,
+            refresh=refresh,
+            cache=_cache,
+            cfg=_cfg,
+        )
+    except Exception as exc:
+        _record_exception("answer", exc, url=url, question=question)
+        raise
+    duration_ms = int((_monotonic() - started) * 1000)
+    if "failure" in result:
+        _record_failure("answer", result)
+    elif result.get("error"):
+        _telemetry.log_event(
+            _cfg,
+            {
+                "tool": "answer",
+                "outcome": "fail",
+                "url": url,
+                "error": result["error"],
+                "duration_ms": duration_ms,
+            },
+        )
+    else:
+        _record_success(
+            "answer",
+            url=url,
+            question=question,
+            from_cache=result.get("from_cache"),
             duration_ms=duration_ms,
         )
     return result

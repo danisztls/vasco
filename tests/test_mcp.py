@@ -17,7 +17,7 @@ from vasco.interface import mcp as mcp_mod
 from vasco import config as _config
 
 
-EXPECTED_TOOL_NAMES = {"search", "fetch", "fetch_many", "extract", "map"}
+EXPECTED_TOOL_NAMES = {"search", "fetch", "fetch_many", "extract", "answer", "map"}
 
 
 @pytest.mark.asyncio
@@ -439,6 +439,107 @@ async def test_fetch_many_default_strips_markdown(
     text = _text(result)
     assert "BODY_https://a" not in text
     assert "BODY_https://b" not in text
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_returns_answer(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import summarize as _sum
+
+    captured: dict[str, Any] = {}
+
+    async def fake_answer(url: str, **kwargs: Any) -> dict[str, Any]:
+        captured["url"] = url
+        captured["question"] = kwargs.get("question")
+        return {"url": url, "title": "T", "answer": "THE ANSWER", "from_cache": False}
+
+    monkeypatch.setattr(_sum, "answer", fake_answer)
+
+    result = await mcp_mod.server.call_tool(
+        "answer", {"url": "https://example.com", "question": "what is X?"}
+    )
+    text = _text(result)
+    assert captured["url"] == "https://example.com"
+    assert captured["question"] == "what is X?"
+    assert "THE ANSWER" in text
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_logs_success(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import summarize as _sum
+    from vasco import telemetry as _telemetry
+
+    async def fake_answer(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {"url": url, "answer": "A", "from_cache": True}
+
+    monkeypatch.setattr(_sum, "answer", fake_answer)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("answer", {"url": "https://ok.test"})
+    assert len(captured) == 1
+    assert captured[0]["tool"] == "answer"
+    assert captured[0]["outcome"] == "ok"
+    assert captured[0]["from_cache"] is True
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_logs_fetch_failure(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import summarize as _sum
+    from vasco import telemetry as _telemetry
+
+    async def fake_answer(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "url_requested": url,
+            "mode_used": "http",
+            "http_status": 404,
+            "failure": {"reason": "not_found", "message": "404"},
+        }
+
+    monkeypatch.setattr(_sum, "answer", fake_answer)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("answer", {"url": "https://missing.test"})
+    assert len(captured) == 1
+    assert captured[0]["tool"] == "answer"
+    assert captured[0]["failure_reason"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_logs_error_outcome(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import summarize as _sum
+    from vasco import telemetry as _telemetry
+
+    async def fake_answer(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {"url": url, "answer": None, "error": "no_api_key", "message": "..."}
+
+    monkeypatch.setattr(_sum, "answer", fake_answer)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    result = await mcp_mod.server.call_tool("answer", {"url": "https://x"})
+    assert _text(result)  # error result still returned to caller
+    assert len(captured) == 1
+    assert captured[0]["tool"] == "answer"
+    assert captured[0]["outcome"] == "fail"
+    assert captured[0]["error"] == "no_api_key"
 
 
 @pytest.mark.asyncio

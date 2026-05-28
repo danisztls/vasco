@@ -69,6 +69,15 @@ class QualityCfg:
 
 
 @dataclass(frozen=True)
+class AnswerCfg:
+    """LLM endpoint used by the `answer` command (fetch + LLM answer over a page)."""
+
+    model: str = "deepseek-v4-flash"
+    base_url: str = "https://api.deepseek.com/v1"  # any OpenAI-compatible endpoint
+    api_key: str = ""  # or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -79,6 +88,7 @@ class Config:
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
     quality: QualityCfg | None = field(default_factory=QualityCfg)
+    answer: AnswerCfg = field(default_factory=AnswerCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -91,6 +101,7 @@ _SECTIONS: dict[str, type] = {
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,
     "quality": QualityCfg,
+    "answer": AnswerCfg,
 }
 
 

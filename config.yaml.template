@@ -45,3 +45,8 @@
 #   blocklist_paths:            # local files or remote URLs (plain-domain or uBlacklist format)
 #     - ~/.config/vasco/blocklist.txt
 #     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt
+
+# answer:                        # LLM endpoint for the `answer` command (fetch + LLM answer over a page)
+#   model: deepseek-v4-flash
+#   base_url: https://api.deepseek.com/v1   # any OpenAI-compatible chat endpoint
+#   api_key: ""                 # or set DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY

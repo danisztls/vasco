@@ -78,6 +78,26 @@ def test_unknown_section_is_ignored(tmp_path: Path) -> None:
     assert cfg.fetch.workers == 3
 
 
+def test_answer_defaults() -> None:
+    cfg = load_config()
+    assert cfg.answer.model == "deepseek-v4-flash"
+    assert cfg.answer.base_url == "https://api.deepseek.com/v1"
+    assert cfg.answer.api_key == ""
+
+
+def test_answer_yaml_overrides(tmp_path: Path) -> None:
+    _write_yaml(tmp_path, "answer:\n  model: my-model\n  api_key: sk-123\n")
+    cfg = load_config()
+    assert cfg.answer.model == "my-model"
+    assert cfg.answer.api_key == "sk-123"
+
+
+def test_answer_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VASCO_ANSWER_MODEL", "env-model")
+    cfg = load_config()
+    assert cfg.answer.model == "env-model"
+
+
 def test_browser_user_data_dir_from_yaml(tmp_path: Path) -> None:
     _write_yaml(tmp_path, "browser:\n  user_data_dir: /var/lib/vasco/profile\n")
     cfg = load_config()

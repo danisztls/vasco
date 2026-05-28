@@ -28,7 +28,7 @@ from . import bot_detect, browser
 from vasco import io as io_mod, quality as quality_mod
 from vasco.config import QualityCfg
 from vasco.converters import convert, pandoc, pdf
-from vasco.adapters import wayback, wikimedia, youtube
+from vasco.adapters import google_shopping, wayback, wikimedia, youtube
 from vasco.errors import FailureReason
 
 
@@ -1060,6 +1060,22 @@ async def _fetch_one_body(
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases
+
+    # --- Google Shopping shortcut (always uses the browser singleton) ------
+    if google_shopping.is_google_shopping_url(url):
+        envelope = await google_shopping.fetch_google_shopping(
+            url, deadline=deadline, cfg=cfg
+        )
+        envelope["url_requested"] = url
+        envelope["url_canonical"] = normalized
+        if raw:
+            envelope.setdefault("warnings", []).append(
+                "raw_unsupported_for_google_shopping"
+            )
+        if use_cache and cache is not None:
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        # browser_started=True so fetch_one / fetch_many close the pool.
+        return envelope, True, phases
 
     base = _base_envelope(
         url_requested=url,

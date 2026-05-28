@@ -28,6 +28,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/adapters/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
 | `vasco/adapters/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
 | `vasco/adapters/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
+| `vasco/adapters/google_shopping.py` | Google Shopping BR results (search + homepage) — browser-rendered HTML parsed via `<product-viewer-entrypoint>` aria-labels into structured products (title, price, store, rating, discount, badges) in `quality.products`; filters used/refurb + international sellers + IQR outliers; own envelope shape (`mode_used="google_shopping"`, `content_type="application/x-google-shopping"`) |
 | `vasco/quality/__init__.py` | `score(markdown, url, cfg)` → composite quality dict merged into envelope; orchestrates both layers |
 | `vasco/quality/heuristics.py` | Text-level slop detection: vocab ratio, phrase count, sentence CV, em-dash density, transition starts, TTR |
 | `vasco/quality/blocklist.py` | Domain blocklist loader (plain + uBlacklist formats); lazy singleton; `is_blocked(url)` |
@@ -95,4 +96,8 @@ VASCO_FETCH_WORKERS=7 uv run python -c "from vasco.config import load_config; pr
 
 uv run vasco fetch https://example.com | jq '.quality.slop_score, .quality.domain_flagged, .quality.signals'
 # quality scoring: slop_score 0-1 (15% text heuristics, 85% metadata), domain blocklist check, raw signal breakdown
+
+uv run vasco fetch "https://www.google.com/search?udm=28&q=kindle+paperwhite" \
+  | jq '.mode_used, .quality.result_count, .quality.filtered, .quality.products[0:3]'
+# Google Shopping adapter: structured products in quality.products, drops by reason in quality.filtered
 ```

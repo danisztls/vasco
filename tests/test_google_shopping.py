@@ -50,6 +50,44 @@ def test_extract_query() -> None:
     assert google_shopping._extract_query("https://www.google.com/shopping") is None
 
 
+@pytest.mark.parametrize(
+    "url, expected_url, expected_rewritten",
+    [
+        # Deprecated /shopping?q= search form is rewritten to /search?...&udm=28.
+        (
+            "https://www.google.com/shopping?q=fone+bluetooth",
+            "https://www.google.com/search?q=fone+bluetooth&udm=28",
+            True,
+        ),
+        # gl/hl locale params are carried over.
+        (
+            "https://www.google.com/shopping?q=fone&gl=br&hl=pt-BR",
+            "https://www.google.com/search?q=fone&udm=28&gl=br&hl=pt-BR",
+            True,
+        ),
+        # Homepage / category-browse form (no q) is left untouched.
+        ("https://www.google.com/shopping", "https://www.google.com/shopping", False),
+        # Already the canonical search form: unchanged.
+        (
+            "https://www.google.com/search?q=fone&udm=28",
+            "https://www.google.com/search?q=fone&udm=28",
+            False,
+        ),
+    ],
+)
+def test_canonicalize_shopping_url(
+    url: str, expected_url: str, expected_rewritten: bool
+) -> None:
+    new_url, rewritten = google_shopping._canonicalize_shopping_url(url)
+    assert rewritten is expected_rewritten
+    # Compare on parsed query to be order-insensitive.
+    from urllib.parse import parse_qs, urlsplit
+
+    got, want = urlsplit(new_url), urlsplit(expected_url)
+    assert (got.scheme, got.netloc, got.path) == (want.scheme, want.netloc, want.path)
+    assert parse_qs(got.query) == parse_qs(want.query)
+
+
 # ---------------------------------------------------------------------------
 # Aria-label parser
 # ---------------------------------------------------------------------------
@@ -356,6 +394,74 @@ async def test_fetch_google_shopping_happy_path(
     # Top-level image is sourced from the first product's thumbnail when present.
     if products[0].get("image"):
         assert env["image"] == products[0]["image"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_shopping_rewrites_shopping_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html_src = FIXTURE_PATH.read_text()
+    fetched: list[str] = []
+
+    async def fake_browser(url, *, deadline_monotonic, cfg):
+        fetched.append(url)
+        return html_src, 200, {}
+
+    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+
+    env = await google_shopping.fetch_google_shopping(
+        "https://www.google.com/shopping?q=fone+bluetooth",
+        deadline=10.0,
+    )
+
+    # The browser is handed the rewritten /search?...&udm=28 URL, not /shopping.
+    assert fetched == ["https://www.google.com/search?q=fone+bluetooth&udm=28"]
+    # Original URL is preserved as requested; final/canonical reflect the rewrite.
+    assert env["url_requested"] == "https://www.google.com/shopping?q=fone+bluetooth"
+    assert "udm=28" in env["url_final"]
+    assert "/search" in env["url_final"]
+    assert "rewrote_shopping_search_to_udm28" in env["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_shopping_rewrite_survives_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    async def fake_browser(url, *, deadline_monotonic, cfg):
+        raise asyncio.TimeoutError("simulated")
+
+    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+
+    env = await google_shopping.fetch_google_shopping(
+        "https://www.google.com/shopping?q=fone",
+        deadline=1.0,
+    )
+    # Even on failure, the envelope reflects the rewritten target, not the
+    # deprecated /shopping endpoint.
+    assert env["failure"]["reason"] == str(FailureReason.TIMEOUT)
+    assert env["url_requested"] == "https://www.google.com/shopping?q=fone"
+    assert "udm=28" in env["url_final"]
+    assert "rewrote_shopping_search_to_udm28" in env["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_shopping_no_rewrite_warning_for_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html_src = FIXTURE_PATH.read_text()
+
+    async def fake_browser(url, *, deadline_monotonic, cfg):
+        return html_src, 200, {}
+
+    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+
+    env = await google_shopping.fetch_google_shopping(
+        "https://www.google.com/search?udm=28&q=kindle",
+        deadline=10.0,
+    )
+    assert "rewrote_shopping_search_to_udm28" not in env["warnings"]
 
 
 @pytest.mark.asyncio

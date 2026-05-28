@@ -33,7 +33,7 @@ import re
 import statistics
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlsplit, unquote_plus
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
 from ..errors import FailureReason
 from ..fetch import browser
@@ -86,6 +86,32 @@ def is_google_shopping_url(url: str) -> bool:
         qs = parse_qs(parts.query)
         return "28" in qs.get("udm", [])
     return False
+
+
+def _canonicalize_shopping_url(url: str) -> tuple[str, bool]:
+    """Rewrite the deprecated ``/shopping?q=`` search form to ``/search?...&udm=28``.
+
+    Google's ``/shopping?q=`` endpoint now serves an empty "Nothing to see here"
+    page; the working Shopping-tab form is ``/search?q=...&udm=28``. Returns
+    ``(new_url, True)`` when a rewrite happened, else ``(url, False)``. The
+    ``/shopping`` homepage / category-browse form (no ``q``) is left untouched.
+    """
+    parts = urlsplit(url)
+    if not (parts.path or "/").startswith("/shopping"):
+        return url, False
+    qs = parse_qs(parts.query)
+    q = qs.get("q", [""])[0]
+    if not q:
+        return url, False
+    new_query: list[tuple[str, str]] = [("q", q), ("udm", "28")]
+    for key in ("gl", "hl"):
+        val = qs.get(key, [""])[0]
+        if val:
+            new_query.append((key, val))
+    new_url = urlunsplit(
+        (parts.scheme, parts.netloc, "/search", urlencode(new_query), "")
+    )
+    return new_url, True
 
 
 def _extract_query(url: str) -> str | None:
@@ -504,24 +530,34 @@ async def fetch_google_shopping(
     cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch a Google Shopping page and return a structured envelope."""
+    fetch_url, rewritten = _canonicalize_shopping_url(url)
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
     tier_deadline = min(deadline_monotonic, time.monotonic() + _BROWSER_TIER_CAP)
 
+    def _fail(
+        reason: FailureReason, message: str, *, http_status: int = 0
+    ) -> dict[str, Any]:
+        # Keep url_requested as the original; reflect the rewrite on failures too
+        # so callers see we actually fetched the working /search?udm=28 endpoint.
+        env = _failure_envelope(url, reason, message, http_status=http_status)
+        if rewritten:
+            env["url_final"] = fetch_url
+            env["url_canonical"] = fetch_url
+            env["warnings"] = ["rewrote_shopping_search_to_udm28"]
+        return env
+
     try:
         html_src, status, _headers = await _browser_fetch_html(
-            url, deadline_monotonic=tier_deadline, cfg=cfg
+            fetch_url, deadline_monotonic=tier_deadline, cfg=cfg
         )
     except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "browser deadline elapsed")
+        return _fail(FailureReason.TIMEOUT, "browser deadline elapsed")
     except Exception as exc:
         reason = _classify_browser_error(exc)
-        return _failure_envelope(
-            url, reason, f"browser fetch failed: {type(exc).__name__}: {exc}"
-        )
+        return _fail(reason, f"browser fetch failed: {type(exc).__name__}: {exc}")
 
     if not html_src:
-        return _failure_envelope(
-            url,
+        return _fail(
             FailureReason.SERVER_ERROR,
             "browser returned empty body",
             http_status=status,
@@ -532,14 +568,13 @@ async def fetch_google_shopping(
         products = _group_by_product(offers)
     except Exception as exc:
         log.warning("Google Shopping HTML parse failed: %s", exc)
-        return _failure_envelope(
-            url,
+        return _fail(
             FailureReason.UNSUPPORTED_CONTENT_TYPE,
             f"parse failed: {type(exc).__name__}: {exc}",
             http_status=status,
         )
 
-    query = _extract_query(url)
+    query = _extract_query(fetch_url)
     markdown = _render_markdown(products, query=query)
 
     from .. import io as io_mod
@@ -573,7 +608,10 @@ async def fetch_google_shopping(
             "quality": quality,
             "links": [],
             "markdown": markdown,
-            "warnings": [],
+            "warnings": ["rewrote_shopping_search_to_udm28"] if rewritten else [],
         }
     )
+    if rewritten:
+        env["url_final"] = fetch_url
+        env["url_canonical"] = fetch_url
     return env

@@ -26,6 +26,10 @@ from vasco.errors import FailureReason
         ("https://en.wikivoyage.org/wiki/Paris", True),
         ("https://en.wikiversity.org/wiki/Topic:Physics", True),
         ("https://en.wikinews.org/wiki/Main_Page", True),
+        ("https://simple.wikipedia.org/wiki/Dog", True),
+        ("https://simple.m.wikipedia.org/wiki/Dog", True),
+        ("https://zh-min-nan.wikipedia.org/wiki/T东西", True),
+        ("https://be-tarask.wikipedia.org/wiki/Минск", True),
         # Not matched:
         ("https://en.wikipedia.org/w/index.php?title=Foo", False),
         ("https://commons.wikimedia.org/wiki/File:Foo.jpg", False),
@@ -54,6 +58,14 @@ def test_is_wikimedia_url(url: str, matches: bool) -> None:
             ("en", "wiktionary", "hello"),
         ),
         (
+            "https://simple.wikipedia.org/wiki/Dog",
+            ("simple", "wikipedia", "Dog"),
+        ),
+        (
+            "https://zh-min-nan.wikipedia.org/wiki/Tang",
+            ("zh-min-nan", "wikipedia", "Tang"),
+        ),
+        (
             "https://fr.wikisource.org/wiki/Les%20Fleurs",
             ("fr", "wikisource", "Les_Fleurs"),
         ),
@@ -78,6 +90,7 @@ def test_extract_article_info(url: str, expected: tuple[str, str, str] | None) -
         ("en", "wiktionary", "enwiktionary"),
         ("fr", "wikisource", "frwikisource"),
         ("en", "wikibooks", "enwikibooks"),
+        ("simple", "wikipedia", "simplewiki"),
     ],
 )
 def test_enterprise_project_id(lang: str, project: str, expected: str) -> None:

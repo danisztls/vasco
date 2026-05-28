@@ -122,6 +122,15 @@ from vasco.cache import normalize_url, registered_domain
             "https://de.m.wikipedia.org/wiki/Berlin",
             "https://de.wikipedia.org/wiki/Berlin",
         ),
+        # Multi-char and hyphenated language editions fold mobile -> desktop too.
+        (
+            "https://simple.m.wikipedia.org/wiki/Dog",
+            "https://simple.wikipedia.org/wiki/Dog",
+        ),
+        (
+            "https://zh-min-nan.m.wikipedia.org/wiki/Tang",
+            "https://zh-min-nan.wikipedia.org/wiki/Tang",
+        ),
         # Percent-encoded spaces become underscores, first char uppercased.
         (
             "https://en.wikipedia.org/wiki/new%20york%20city",

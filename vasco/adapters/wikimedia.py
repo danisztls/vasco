@@ -31,7 +31,7 @@ _STRUCTURED_LANGS = frozenset({"en", "de", "fr", "es", "pt", "it", "nl", "cy", "
 _PROJECT_CODES: dict[str, str] = {"wikipedia": "wiki"}
 
 _WIKIMEDIA_RE = re.compile(
-    r"^https?://(?P<lang>[a-z]{2,3})(?:\.m)?\."
+    r"^https?://(?P<lang>[a-z]{2,3}(?:-[a-z0-9]+)*|simple)(?:\.m)?\."
     r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")"
     r"\.org/wiki/(?P<title>[^#?]+)",
     re.IGNORECASE,

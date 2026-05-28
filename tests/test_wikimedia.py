@@ -30,8 +30,17 @@ from vasco.errors import FailureReason
         ("https://simple.m.wikipedia.org/wiki/Dog", True),
         ("https://zh-min-nan.wikipedia.org/wiki/T东西", True),
         ("https://be-tarask.wikipedia.org/wiki/Минск", True),
+        # Plain index.php?title= article views are matched (folded to /wiki/).
+        ("https://en.wikipedia.org/w/index.php?title=Foo", True),
+        ("https://en.wikipedia.org/w/index.php?title=Foo&redirect=no", True),
+        # Non-article index.php variants stay unmatched (HTTP fallback):
+        ("https://en.wikipedia.org/w/index.php?title=Foo&action=edit", False),
+        ("https://en.wikipedia.org/w/index.php?title=Foo&action=history", False),
+        ("https://en.wikipedia.org/w/index.php?title=Foo&oldid=12345", False),
+        ("https://en.wikipedia.org/w/index.php?title=Foo&diff=prev&oldid=9", False),
+        ("https://en.wikipedia.org/w/index.php?curid=12345", False),
+        ("https://en.wikipedia.org/w/index.php", False),  # no title
         # Not matched:
-        ("https://en.wikipedia.org/w/index.php?title=Foo", False),
         ("https://commons.wikimedia.org/wiki/File:Foo.jpg", False),
         ("https://www.wikidata.org/wiki/Q42", False),
         ("https://example.com/wiki/Foo", False),
@@ -65,6 +74,16 @@ def test_is_wikimedia_url(url: str, matches: bool) -> None:
             "https://zh-min-nan.wikipedia.org/wiki/Tang",
             ("zh-min-nan", "wikipedia", "Tang"),
         ),
+        (
+            "https://en.wikipedia.org/w/index.php?title=New_York_City",
+            ("en", "wikipedia", "New_York_City"),
+        ),
+        (
+            "https://en.wikipedia.org/w/index.php?title=New%20York&redirect=no",
+            ("en", "wikipedia", "New_York"),
+        ),
+        # action=edit disqualifies → not an article URL.
+        ("https://en.wikipedia.org/w/index.php?title=Foo&action=edit", None),
         (
             "https://fr.wikisource.org/wiki/Les%20Fleurs",
             ("fr", "wikisource", "Les_Fleurs"),

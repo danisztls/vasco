@@ -131,6 +131,16 @@ from vasco.cache import normalize_url, registered_domain
             "https://zh-min-nan.m.wikipedia.org/wiki/Tang",
             "https://zh-min-nan.wikipedia.org/wiki/Tang",
         ),
+        # Plain index.php?title= folds to the canonical /wiki/ form (same row).
+        (
+            "https://en.wikipedia.org/w/index.php?title=new%20york%20city",
+            "https://en.wikipedia.org/wiki/New_york_city",
+        ),
+        # Revision/diff/edit variants are NOT folded — they keep distinct rows.
+        (
+            "https://en.wikipedia.org/w/index.php?oldid=12345&title=Foo",
+            "https://en.wikipedia.org/w/index.php?oldid=12345&title=Foo",
+        ),
         # Percent-encoded spaces become underscores, first char uppercased.
         (
             "https://en.wikipedia.org/wiki/new%20york%20city",

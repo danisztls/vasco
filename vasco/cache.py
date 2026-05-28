@@ -7,7 +7,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
@@ -37,6 +37,18 @@ _WIKIMEDIA_RE = re.compile(
     r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")"
     r"\.org/wiki/(?P<title>.+)",
     re.IGNORECASE,
+)
+
+# Plain `/w/index.php?title=Foo` views fold to `/wiki/Foo`; revision/diff/edit
+# variants (see _INDEX_NON_ARTICLE_PARAMS) are left untouched so they keep
+# their own cache rows. Mirrors vasco.adapters.wikimedia._parse_index_php.
+_WIKIMEDIA_INDEX_RE = re.compile(
+    r"^https?://(?P<lang>[a-z]{2,3}(?:-[a-z0-9]+)*|simple)(?:\.m)?\."
+    r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")\.org/w/index\.php",
+    re.IGNORECASE,
+)
+_INDEX_NON_ARTICLE_PARAMS = frozenset(
+    {"action", "veaction", "oldid", "diff", "curid", "diffonly", "undo", "undoafter"}
 )
 
 # Matches any YouTube URL that points to a specific video, capturing the
@@ -133,6 +145,20 @@ def _canonicalize_youtube_host(raw: str) -> str:
     return raw
 
 
+def _index_php_article(raw: str) -> tuple[str, str, str] | None:
+    """``(lang, project, title)`` for a plain ``/w/index.php?title=`` view, else None."""
+    m = _WIKIMEDIA_INDEX_RE.match(raw)
+    if not m:
+        return None
+    qs = parse_qs(urlsplit(raw).query)
+    if _INDEX_NON_ARTICLE_PARAMS & qs.keys():
+        return None
+    title = (qs.get("title") or [""])[0]
+    if not title:
+        return None
+    return m.group("lang").lower(), m.group("project").lower(), title.replace(" ", "_")
+
+
 def _canonicalize_wikimedia(raw: str) -> str:
     """Collapse Wikimedia project URL variants to a canonical form.
 
@@ -141,12 +167,16 @@ def _canonicalize_wikimedia(raw: str) -> str:
     Works for all Wikimedia projects: wikipedia, wiktionary, wikibooks, etc.
     """
     m = _WIKIMEDIA_RE.match(raw)
-    if not m:
-        return raw
-    lang = m.group("lang").lower()
-    project = m.group("project").lower()
-    title_raw = m.group("title").split("#")[0].split("?")[0]
-    title = unquote(title_raw).replace(" ", "_")
+    if m:
+        lang = m.group("lang").lower()
+        project = m.group("project").lower()
+        title_raw = m.group("title").split("#")[0].split("?")[0]
+        title = unquote(title_raw).replace(" ", "_")
+    else:
+        info = _index_php_article(raw)
+        if info is None:
+            return raw
+        lang, project, title = info
     if title:
         title = title[0].upper() + title[1:]
     return (

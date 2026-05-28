@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from ..cache import WIKIMEDIA_PROJECTS
 from ..errors import FailureReason
@@ -36,6 +36,37 @@ _WIKIMEDIA_RE = re.compile(
     r"\.org/wiki/(?P<title>[^#?]+)",
     re.IGNORECASE,
 )
+
+# The MediaWiki `/w/index.php?title=Foo` endpoint also serves articles, but is
+# overloaded for edits, diffs, history, and specific revisions. We only treat
+# it as an article when the query is a plain `title=` lookup with none of the
+# params below — otherwise folding it to `/wiki/Foo` would silently return the
+# current article instead of the requested revision/diff/edit page.
+_WIKIMEDIA_INDEX_RE = re.compile(
+    r"^https?://(?P<lang>[a-z]{2,3}(?:-[a-z0-9]+)*|simple)(?:\.m)?\."
+    r"(?P<project>" + "|".join(WIKIMEDIA_PROJECTS) + r")\.org/w/index\.php",
+    re.IGNORECASE,
+)
+_INDEX_NON_ARTICLE_PARAMS = frozenset(
+    {"action", "veaction", "oldid", "diff", "curid", "diffonly", "undo", "undoafter"}
+)
+
+
+def _parse_index_php(url: str) -> tuple[str, str, str] | None:
+    """Return ``(lang, project, title)`` for a plain ``/w/index.php?title=`` view."""
+    if not url:
+        return None
+    m = _WIKIMEDIA_INDEX_RE.match(url)
+    if not m:
+        return None
+    qs = parse_qs(urlsplit(url).query)
+    if _INDEX_NON_ARTICLE_PARAMS & qs.keys():
+        return None
+    title = (qs.get("title") or [""])[0]
+    if not title:
+        return None
+    return m.group("lang").lower(), m.group("project").lower(), title.replace(" ", "_")
+
 
 _SITE_NAMES: dict[str, str] = {
     "wikipedia": "Wikipedia",
@@ -62,7 +93,7 @@ _token_expires_at: float = 0.0
 
 
 def is_wikimedia_url(url: str) -> bool:
-    return bool(_WIKIMEDIA_RE.match(url or ""))
+    return bool(_WIKIMEDIA_RE.match(url or "")) or _parse_index_php(url) is not None
 
 
 def extract_article_info(url: str) -> tuple[str, str, str] | None:
@@ -70,12 +101,12 @@ def extract_article_info(url: str) -> tuple[str, str, str] | None:
     if not url:
         return None
     m = _WIKIMEDIA_RE.match(url)
-    if not m:
-        return None
-    lang = m.group("lang").lower()
-    project = m.group("project").lower()
-    title = unquote(m.group("title")).replace(" ", "_")
-    return lang, project, title
+    if m:
+        lang = m.group("lang").lower()
+        project = m.group("project").lower()
+        title = unquote(m.group("title")).replace(" ", "_")
+        return lang, project, title
+    return _parse_index_php(url)
 
 
 def _enterprise_project_id(lang: str, project: str) -> str:

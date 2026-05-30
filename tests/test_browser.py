@@ -95,3 +95,16 @@ async def test_user_data_dir_expands_env_and_user(
     await pool._ensure_started()
     [cm] = _RecordingCM.instances
     assert cm.kwargs["user_data_dir"] == str(tmp_path / "p")
+
+
+@pytest.mark.asyncio
+async def test_user_data_dir_expands_xdg_data_home_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """$XDG_DATA_HOME must expand even when the env var is absent (MCP subprocess env)."""
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    pool = BrowserPool(user_data_dir="$XDG_DATA_HOME/vasco/profile")
+    await pool._ensure_started()
+    [cm] = _RecordingCM.instances
+    expected = str(Path.home() / ".local" / "share" / "vasco" / "profile")
+    assert cm.kwargs["user_data_dir"] == expected

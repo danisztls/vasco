@@ -170,6 +170,11 @@ async def run_server(cfg: Any | None = None) -> None:
             pass
 
     if user_data_dir:
+        if "XDG_DATA_HOME" not in os.environ:
+            xdg = str(Path.home() / ".local" / "share")
+            user_data_dir = user_data_dir.replace("${XDG_DATA_HOME}", xdg).replace(
+                "$XDG_DATA_HOME", xdg
+            )
         user_data_dir = os.path.abspath(
             os.path.expanduser(os.path.expandvars(user_data_dir))
         )

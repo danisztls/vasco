@@ -17,6 +17,7 @@ import logging
 import os
 import struct
 import time
+from pathlib import Path
 from typing import Any
 
 try:  # pragma: no cover - camoufox is an optional dep at import time.
@@ -234,6 +235,11 @@ def _expand_profile_dir(raw: str) -> str:
     raw = (raw or "").strip()
     if not raw:
         return ""
+    # expandvars leaves unknown vars as literals; provide XDG fallback so that
+    # "$XDG_DATA_HOME/..." works even in subprocess envs that strip XDG vars.
+    if "XDG_DATA_HOME" not in os.environ:
+        xdg = str(Path.home() / ".local" / "share")
+        raw = raw.replace("${XDG_DATA_HOME}", xdg).replace("$XDG_DATA_HOME", xdg)
     return os.path.abspath(os.path.expanduser(os.path.expandvars(raw)))
 
 

@@ -140,6 +140,31 @@ def test_purge_expired(cache: Cache, fake_time) -> None:
     assert deleted == 1
 
 
+def test_purge_domain(cache: Cache, fake_time) -> None:
+    cache.put(
+        _success_envelope("https://www.vivareal.com.br/aluguel/x"), ttl_seconds=10_000
+    )
+    cache.put(
+        _success_envelope("https://vivareal.com.br/imovel/y-id-1/"), ttl_seconds=10_000
+    )
+    cache.put(_success_envelope("https://example.com/keep"), ttl_seconds=10_000)
+
+    # Matches the registered domain across www + bare host, leaves others.
+    deleted = cache.purge_domain("vivareal.com.br")
+    assert deleted == 2
+    assert cache.get("https://example.com/keep") is not None
+    assert cache.get("https://www.vivareal.com.br/aluguel/x") is None
+    # Accepts a full URL or subdomain form too.
+    assert cache.purge_domain("https://www.example.com/whatever") == 1
+    assert cache.get("https://example.com/keep") is None
+
+
+def test_purge_domain_no_match_returns_zero(cache: Cache, fake_time) -> None:
+    cache.put(_success_envelope("https://example.com/a"), ttl_seconds=10_000)
+    assert cache.purge_domain("nope.com") == 0
+    assert cache.get("https://example.com/a") is not None
+
+
 def test_stats_reports_entries(cache: Cache, fake_time) -> None:
     assert cache.stats()["entries"] == 0
     cache.put(_success_envelope("https://example.com/a"), ttl_seconds=10)

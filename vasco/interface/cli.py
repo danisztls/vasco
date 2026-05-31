@@ -517,16 +517,29 @@ def cache_purge(
         str | None,
         typer.Option("--older-than", help="Drop entries older than e.g. 7d, 24h, 30m."),
     ] = None,
+    domain: Annotated[
+        str | None,
+        typer.Option(
+            "--domain",
+            help="Drop all entries for a domain (e.g. vivareal.com.br); matches subdomains.",
+        ),
+    ] = None,
 ) -> None:
-    """Delete cached entries, optionally older than a duration."""
+    """Delete cached entries, by domain and/or older than a duration."""
     cfg = _config.load_config()
-    seconds = parse_duration(older_than) if older_than is not None else None
     c = _open_cache(cfg)
     try:
-        n = c.purge(older_than_seconds=int(seconds) if seconds is not None else None)
+        if domain is not None:
+            n = c.purge_domain(domain)
+            print(f"Deleted {n} entries for {domain}")
+        else:
+            seconds = parse_duration(older_than) if older_than is not None else None
+            n = c.purge(
+                older_than_seconds=int(seconds) if seconds is not None else None
+            )
+            print(f"Deleted {n} entries")
     finally:
         c.close()
-    print(f"Deleted {n} entries")
 
 
 @cache_app.command("stats")

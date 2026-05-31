@@ -340,8 +340,10 @@ CREATE TABLE IF NOT EXISTS fetch_cache (
   title          TEXT,
   byline         TEXT,
   published      TEXT,
+  modified       TEXT,
   language       TEXT,
   site_name      TEXT,
+  image          TEXT,
   word_count     INTEGER,
   token_count    INTEGER,
   quality_json   TEXT,
@@ -368,6 +370,16 @@ CREATE TABLE IF NOT EXISTS fetch_strategy (
 );
 """
 
+# Columns added to fetch_cache after the initial release. `CREATE TABLE IF NOT
+# EXISTS` never alters an existing table, so these are ALTERed onto older
+# on-disk DBs at open time. Only ever add new, nullable columns here (with the
+# matching column in _SCHEMA above) — the round-trip guard test in
+# tests/test_cache_roundtrip.py fails CI if an envelope field has no column.
+_FETCH_CACHE_ADDED_COLUMNS: dict[str, str] = {
+    "modified": "TEXT",
+    "image": "TEXT",
+}
+
 
 def _default_cache_path() -> Path:
     xdg = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
@@ -389,7 +401,17 @@ class Cache:
         except sqlite3.DatabaseError:
             pass
         self._conn.executescript(_SCHEMA)
+        self._ensure_columns()
         self._conn.commit()
+
+    def _ensure_columns(self) -> None:
+        """Back-fill columns added after a DB was first created."""
+        existing = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(fetch_cache)")
+        }
+        for name, decl in _FETCH_CACHE_ADDED_COLUMNS.items():
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE fetch_cache ADD COLUMN {name} {decl}")
 
     def get(self, url: str) -> dict | None:
         normalized = normalize_url(url)
@@ -416,8 +438,10 @@ class Cache:
             "title": row["title"],
             "byline": row["byline"],
             "published": row["published"],
+            "modified": row["modified"],
             "language": row["language"],
             "site_name": row["site_name"],
+            "image": row["image"],
             "word_count": row["word_count"],
             "token_count_estimate": row["token_count"],
             "quality": json.loads(row["quality_json"]) if row["quality_json"] else {},
@@ -454,11 +478,11 @@ class Cache:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO fetch_cache (
-                url, final_url, canonical_url, title, byline, published, language,
-                site_name, word_count, token_count, quality_json, links_json,
-                markdown, warnings_json, status, failure_reason, failure_json,
-                mode_used, fetched_at, ttl_expires, content_type, html_gz
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                url, final_url, canonical_url, title, byline, published, modified,
+                language, site_name, image, word_count, token_count, quality_json,
+                links_json, markdown, warnings_json, status, failure_reason,
+                failure_json, mode_used, fetched_at, ttl_expires, content_type, html_gz
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized,
@@ -467,8 +491,10 @@ class Cache:
                 envelope.get("title"),
                 envelope.get("byline"),
                 envelope.get("published"),
+                envelope.get("modified"),
                 envelope.get("language"),
                 envelope.get("site_name"),
+                envelope.get("image"),
                 envelope.get("word_count"),
                 envelope.get("token_count_estimate"),
                 json.dumps(envelope.get("quality", {}))
@@ -578,16 +604,17 @@ class Cache:
         target = registered_domain(domain)
         if not target:
             return 0
-        urls = [
-            row["url"]
-            for row in self._conn.execute("SELECT url FROM fetch_cache").fetchall()
-            if registered_domain(row["url"]) == target
-        ]
-        self._conn.executemany(
-            "DELETE FROM fetch_cache WHERE url = ?", [(u,) for u in urls]
+        # registered_domain() as a SQL function lets a single DELETE do the
+        # matching (including subdomains) instead of pulling every URL into
+        # Python and filtering there.
+        self._conn.create_function(
+            "_registered_domain", 1, registered_domain, deterministic=True
+        )
+        cur = self._conn.execute(
+            "DELETE FROM fetch_cache WHERE _registered_domain(url) = ?", (target,)
         )
         self._conn.commit()
-        return len(urls)
+        return cur.rowcount
 
     def stats(self) -> dict:
         entries = self._conn.execute(

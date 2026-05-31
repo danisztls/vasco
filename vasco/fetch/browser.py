@@ -58,6 +58,78 @@ async def _send_request(sock_path: str, request: dict) -> dict:
         await writer.wait_closed()
 
 
+async def _extract_headers(response: Any) -> dict[str, str]:
+    """Best-effort response header extraction, with a fallback path."""
+    if response is None:
+        return {}
+    try:
+        raw = await response.all_headers()
+        return {str(k): str(v) for k, v in raw.items()}
+    except Exception:
+        try:
+            return {str(k): str(v) for k, v in (response.headers or {}).items()}
+        except Exception:
+            return {}
+
+
+async def fetch_page(
+    browser_or_context: Any,
+    url: str,
+    *,
+    deadline_monotonic: float,
+    mobile: bool = False,
+    is_persistent: bool = False,
+) -> tuple[str, int, dict[str, str]]:
+    """Open a page, navigate to `url`, and return (html, status, headers).
+
+    Honours `deadline_monotonic` (an absolute ``time.monotonic()`` value) for
+    both the navigation and the networkidle settle. Shared by the in-process
+    `BrowserPool` and the socket `browser_server` so the two behave identically.
+    """
+    context = None
+    if mobile and not is_persistent:
+        context = await browser_or_context.new_context(
+            user_agent=_MOBILE_USER_AGENT,
+            viewport=_MOBILE_VIEWPORT,
+            device_scale_factor=3,
+        )
+        page = await context.new_page()
+    else:
+        page = await browser_or_context.new_page()
+        if mobile:
+            await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
+            await page.set_viewport_size(_MOBILE_VIEWPORT)
+    try:
+        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
+        response = await page.goto(
+            url, wait_until="domcontentloaded", timeout=remaining_ms
+        )
+
+        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
+        if remaining_ms > 0:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=remaining_ms)
+            except Exception:
+                pass
+
+        html = await page.content()
+        status = int(response.status) if response is not None else 0
+        headers = await _extract_headers(response)
+        return html, status, headers
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:
+                pass
+
+
 class BrowserPool:
     """Owns one Camoufox browser context, or proxies to a remote server."""
 
@@ -154,64 +226,13 @@ class BrowserPool:
             return resp.get("html", ""), resp.get("status", 0), resp.get("headers", {})
 
         assert self._browser is not None
-
-        context = None
-        if mobile and not self._is_persistent:
-            context = await self._browser.new_context(
-                user_agent=_MOBILE_USER_AGENT,
-                viewport=_MOBILE_VIEWPORT,
-                device_scale_factor=3,
-            )
-            page = await context.new_page()
-        else:
-            page = await self._browser.new_page()
-            if mobile:
-                await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
-                await page.set_viewport_size(_MOBILE_VIEWPORT)
-        try:
-            remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
-            if remaining_ms <= 0:
-                raise asyncio.TimeoutError(
-                    "deadline elapsed before page.goto could start"
-                )
-            response = await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=remaining_ms,
-            )
-
-            remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
-            if remaining_ms > 0:
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=remaining_ms)
-                except Exception:
-                    pass
-
-            html = await page.content()
-            status = int(response.status) if response is not None else 0
-            headers: dict[str, str] = {}
-            if response is not None:
-                try:
-                    raw = await response.all_headers()
-                    headers = {str(k): str(v) for k, v in raw.items()}
-                except Exception:
-                    try:
-                        headers = {
-                            str(k): str(v) for k, v in (response.headers or {}).items()
-                        }
-                    except Exception:
-                        headers = {}
-            return html, status, headers
-        finally:
-            try:
-                await page.close()
-            except Exception:
-                pass
-            if context is not None:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
+        return await fetch_page(
+            self._browser,
+            url,
+            deadline_monotonic=deadline_monotonic,
+            mobile=mobile,
+            is_persistent=self._is_persistent,
+        )
 
     async def close(self) -> None:
         if self._remote:

@@ -115,6 +115,18 @@ def _is_disconnect(exc: BaseException) -> bool:
     return any(m in s for m in _DISCONNECT_MARKERS)
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    return type(exc).__name__ == "TimeoutError" or "timeout" in str(exc).lower()
+
+
+# A wedged browser (renderer hung after suspend/resume or a bad tab) stays
+# `is_connected()`-alive but every `page.goto` times out — so `_alive()` never
+# trips and the server serves nothing but timeouts until manually restarted.
+# After this many *consecutive* goto timeouts we treat the browser as wedged
+# and force a relaunch. One slow page is normal; a streak across requests is not.
+_TIMEOUT_RELAUNCH_THRESHOLD = 3
+
+
 async def _serve_fetch(
     supervisor: _BrowserSupervisor,
     *,
@@ -132,7 +144,7 @@ async def _serve_fetch(
     for attempt in (0, 1):
         browser = await supervisor.get_browser()
         try:
-            return await _fetch_page(
+            result = await _fetch_page(
                 browser,
                 url,
                 mobile=mobile,
@@ -145,7 +157,20 @@ async def _serve_fetch(
                 log.warning("browser fetch failed (%s) — relaunching browser", exc)
                 await supervisor.mark_dead()
                 continue
+            if attempt == 0 and _is_timeout(exc):
+                streak = supervisor.note_timeout()
+                if streak >= _TIMEOUT_RELAUNCH_THRESHOLD:
+                    log.warning(
+                        "browser timed out %d× consecutively — wedged, relaunching",
+                        streak,
+                    )
+                    await supervisor.mark_dead()
+                    supervisor.reset_timeouts()
+                    continue
             raise
+        else:
+            supervisor.reset_timeouts()
+            return result
     assert last_exc is not None
     raise last_exc
 
@@ -296,6 +321,15 @@ class _BrowserSupervisor:
         self._cm: Any | None = None
         self._browser: Any | None = None
         self._lock = asyncio.Lock()
+        self._consecutive_timeouts = 0
+
+    def note_timeout(self) -> int:
+        """Record a goto timeout; return the current consecutive-timeout streak."""
+        self._consecutive_timeouts += 1
+        return self._consecutive_timeouts
+
+    def reset_timeouts(self) -> None:
+        self._consecutive_timeouts = 0
 
     def _alive(self) -> bool:
         b = self._browser

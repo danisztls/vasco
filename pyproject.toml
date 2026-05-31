@@ -20,6 +20,9 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "tiktoken>=0.7",
     "yt-dlp>=2024.10",
+    # yt-dlp needs secretstorage to decrypt Chromium-family (e.g. Brave) cookies
+    # via the Secret Service API when youtube.cookies_from_browser is set; Linux-only.
+    "secretstorage>=3.3; sys_platform == 'linux'",
     "mcp>=1.0",
     "pyyaml>=6.0",
 ]

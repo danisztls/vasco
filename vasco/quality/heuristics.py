@@ -129,26 +129,24 @@ def composite_score(
 
     # ── Text heuristics (15% weight) ──
     # Calibration showed slop vocab/phrases are the only text signals with
-    # any separation. Em-dash, transition starts, sentence CV, and TTR
-    # showed no meaningful difference between good and bad groups.
+    # meaningful separation; sentence CV fires weakly on very uniform text.
+    # Em-dash density and transition starts showed no separation at all, so
+    # they're left out of the composite (the raw signals are still computed
+    # and exposed in HeuristicSignals for consumers that want them).
 
     # Slop vocabulary: good p50=0.0000, bad p50=0.0000 but bad has a
     # longer tail (bad max=0.0154 vs good max=0.0006). Weak but worth
     # keeping for the worst offenders.
-    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.05
+    score += min(1.0, signals.slop_vocab_ratio * 30) * 0.06
 
     # Slop phrases: similarly weak on real content but catches the
     # blatant "let's delve into" style when it appears.
-    score += min(1.0, signals.slop_phrase_count / 3) * 0.05
+    score += min(1.0, signals.slop_phrase_count / 3) * 0.06
 
     # Sentence CV: bad group skews low (p50=0.5 vs good p50=1.02).
     # Only fires on very uniform text.
     cv_signal = max(0.0, 1.0 - (signals.sentence_length_cv / 0.25))
     score += cv_signal * 0.03
-
-    # Em-dash/transition: no separation in calibration data, vestigial.
-    score += min(1.0, signals.em_dash_density / 0.008) * 0.01
-    score += min(1.0, signals.transition_start_ratio / 0.4) * 0.01
 
     # ── Envelope metadata (85% weight) ──
     # Calibration showed these are the real separators.

@@ -36,6 +36,7 @@ from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
+from .. import envelope
 from ..errors import FailureReason
 from ..fetch import browser
 
@@ -350,31 +351,24 @@ def _render_markdown(listings: list[dict]) -> str:
 
 
 def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return {
-        "url_requested": url,
-        "url_final": url,
-        "url_canonical": url,
-        "http_status": http_status,
-        "mode_used": "realestate",
-        "fetched_at": int(time.time()),
-        "from_cache": False,
-        "cache_age_seconds": 0,
-        "content_type": "application/x-realestate",
-    }
+    return envelope.base_envelope(
+        url_requested=url,
+        url_normalized=url,
+        url_final=url,
+        http_status=http_status,
+        mode_used="realestate",
+        content_type="application/x-realestate",
+    )
 
 
 def _failure_envelope(
     url: str, reason: FailureReason, message: str, *, http_status: int = 0
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status)
-    env["failure"] = {
-        "reason": str(reason),
-        "retry_after_seconds": None,
-        "message": message,
-    }
-    env["markdown"] = ""
-    env["warnings"] = []
-    return env
+    return envelope.failure_envelope(
+        base=_base_envelope(url, http_status=http_status),
+        reason=reason,
+        message=message,
+    )
 
 
 def _classify_browser_error(exc: BaseException) -> FailureReason:
@@ -485,9 +479,10 @@ async def fetch_realestate(
     from .. import io as io_mod
 
     markdown = _render_markdown(listings)
-    env = _base_envelope(url, http_status=status or 200)
-    env.update(
-        {
+    return envelope.success_envelope(
+        base=_base_envelope(url, http_status=status or 200),
+        markdown=markdown,
+        metadata={
             "title": f"{display}: {len(listings)} imóveis"
             if page_type == "list"
             else display,
@@ -498,16 +493,13 @@ async def fetch_realestate(
             "site_name": display,
             "image": listings[0].get("image") if listings else None,
             "word_count": len(markdown.split()),
-            "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": {
                 "provider": provider,
                 "page_type": page_type,
                 "result_count": len(listings),
                 "listings": listings,
             },
-            "links": [],
-            "markdown": markdown,
             "warnings": [],
-        }
+        },
+        token_count_estimate=io_mod.estimate_tokens(markdown),
     )
-    return env

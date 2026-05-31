@@ -22,6 +22,7 @@ import tempfile
 import time
 from typing import Any
 
+from .. import envelope
 from ..cache import YT_VIDEO_ID_RE
 from ..errors import FailureReason
 
@@ -278,32 +279,24 @@ def _select_language(
 
 
 def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    fetched_at = int(time.time())
-    return {
-        "url_requested": url,
-        "url_final": url,
-        "url_canonical": url,
-        "http_status": http_status,
-        "mode_used": "youtube",
-        "fetched_at": fetched_at,
-        "from_cache": False,
-        "cache_age_seconds": 0,
-        "content_type": "text/youtube",
-    }
+    return envelope.base_envelope(
+        url_requested=url,
+        url_normalized=url,
+        url_final=url,
+        http_status=http_status,
+        mode_used="youtube",
+        content_type="text/youtube",
+    )
 
 
 def _failure_envelope(
     url: str, reason: FailureReason, message: str, *, http_status: int = 0
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status)
-    env["failure"] = {
-        "reason": str(reason),
-        "retry_after_seconds": None,
-        "message": message,
-    }
-    env["markdown"] = ""
-    env["warnings"] = []
-    return env
+    return envelope.failure_envelope(
+        base=_base_envelope(url, http_status=http_status),
+        reason=reason,
+        message=message,
+    )
 
 
 def _classify_ytdlp_error(exc: BaseException) -> FailureReason:
@@ -420,9 +413,10 @@ async def fetch_youtube(
 
     from .. import io as io_mod
 
-    env = _base_envelope(url, http_status=200)
-    env.update(
-        {
+    return envelope.success_envelope(
+        base=_base_envelope(url, http_status=200),
+        markdown=transcript,
+        metadata={
             "title": title,
             "byline": uploader,
             "published": published,
@@ -430,11 +424,8 @@ async def fetch_youtube(
             "language": selected_lang,
             "site_name": "YouTube",
             "word_count": len(transcript.split()),
-            "token_count_estimate": io_mod.estimate_tokens(transcript),
             "quality": {"video_duration_seconds": int(duration)} if duration else {},
-            "links": [],
-            "markdown": transcript,
             "warnings": warnings,
-        }
+        },
+        token_count_estimate=io_mod.estimate_tokens(transcript),
     )
-    return env

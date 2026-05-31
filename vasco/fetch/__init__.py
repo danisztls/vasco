@@ -28,6 +28,12 @@ except Exception:  # pragma: no cover
 from . import bot_detect, browser
 from vasco import io as io_mod, quality as quality_mod, strategy as seed_strategies
 from vasco.config import QualityCfg
+from vasco.envelope import (
+    base_envelope as _base_envelope,
+    failure_envelope as _failure_envelope,
+    now_epoch as _now_epoch,
+    success_envelope as _success_envelope,
+)
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import google_shopping, realestate, wayback, wikimedia, youtube
 from vasco.errors import FailureReason
@@ -308,10 +314,6 @@ def _parse_retry_after(headers: dict[str, str] | None) -> int | None:
     return None
 
 
-def _now_epoch() -> int:
-    return int(time.time())
-
-
 def _is_pdf(url: str, headers: dict[str, str] | None) -> bool:
     path = urlsplit(url).path.lower()
     if path.endswith(".pdf"):
@@ -394,79 +396,9 @@ def _route_key(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Envelope construction
+# Envelope TTL + cache-hit hydration
+# (the base/success/failure builders live in vasco.envelope)
 # ---------------------------------------------------------------------------
-
-
-def _base_envelope(
-    *,
-    url_requested: str,
-    url_normalized: str | None,
-    url_final: str | None,
-    http_status: int,
-    mode_used: str,
-    content_type: str,
-) -> dict[str, Any]:
-    return {
-        "url_requested": url_requested,
-        "url_final": url_final or url_requested,
-        "url_canonical": url_normalized or url_requested,
-        "http_status": http_status,
-        "mode_used": mode_used,
-        "fetched_at": _now_epoch(),
-        "from_cache": False,
-        "cache_age_seconds": 0,
-        "content_type": content_type,
-    }
-
-
-def _success_envelope(
-    *,
-    base: dict[str, Any],
-    markdown: str,
-    metadata: dict[str, Any],
-    token_count_estimate: int,
-) -> dict[str, Any]:
-    env = dict(base)
-    env.update(
-        {
-            "title": metadata.get("title"),
-            "byline": metadata.get("byline"),
-            "published": metadata.get("published"),
-            "modified": metadata.get("modified"),
-            "language": metadata.get("language"),
-            "site_name": metadata.get("site_name"),
-            "image": metadata.get("image"),
-            "word_count": metadata.get("word_count", 0),
-            "token_count_estimate": token_count_estimate,
-            "quality": metadata.get("quality", {}),
-            "links": metadata.get("links", []),
-            "markdown": markdown,
-            "warnings": list(metadata.get("warnings", [])),
-        }
-    )
-    return env
-
-
-def _failure_envelope(
-    *,
-    base: dict[str, Any],
-    reason: FailureReason,
-    message: str,
-    retry_after: int | None = None,
-    partial_html: str | None = None,
-    partial_markdown: str | None = None,
-    warnings: list[str] | None = None,
-) -> dict[str, Any]:
-    env = dict(base)
-    env["failure"] = {
-        "reason": str(reason),
-        "retry_after_seconds": retry_after,
-        "message": message,
-    }
-    env["markdown"] = partial_markdown or partial_html or ""
-    env["warnings"] = list(warnings or [])
-    return env
 
 
 # Negative-cache TTL multipliers, keyed by failure reason. Some failures
@@ -1073,6 +1005,30 @@ def _cache_put(
     phases.cache_write_ms += _ms_since(t0)
 
 
+def _finalize_adapter_envelope(
+    envelope: dict[str, Any],
+    *,
+    url: str,
+    normalized: str,
+    raw: bool,
+    service: str,
+    use_cache: bool,
+    cache: Any | None,
+    cfg: Any | None,
+    phases: _Phases | None,
+) -> dict[str, Any]:
+    """Stamp the caller's URLs onto an adapter-built envelope, add the raw-mode
+    warning, and write it to cache. Shared by the youtube / wikimedia /
+    google_shopping / realestate dispatch branches in `_fetch_one_body`."""
+    envelope["url_requested"] = url
+    envelope["url_canonical"] = normalized
+    if raw:
+        envelope.setdefault("warnings", []).append(f"raw_unsupported_for_{service}")
+    if use_cache and cache is not None:
+        _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+    return envelope
+
+
 async def _fetch_one_body(
     url: str,
     *,
@@ -1126,23 +1082,33 @@ async def _fetch_one_body(
     # content_type="text/youtube"); skip HTTP/browser tier entirely.
     if youtube.is_youtube_url(url):
         envelope = await youtube.fetch_youtube(url, deadline=deadline, cfg=cfg)
-        envelope["url_requested"] = url
-        envelope["url_canonical"] = normalized
-        if raw:
-            envelope.setdefault("warnings", []).append("raw_unsupported_for_youtube")
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="youtube",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
         return envelope, False, phases
 
     # --- Wikimedia shortcut (Enterprise only; no creds → normal HTTP) ------
     if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
         envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
-        envelope["url_requested"] = url
-        envelope["url_canonical"] = normalized
-        if raw:
-            envelope.setdefault("warnings", []).append("raw_unsupported_for_wikimedia")
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="wikimedia",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
         return envelope, False, phases
 
     # --- Google Shopping route (HTML via the shared escalation chain) -------
@@ -1159,14 +1125,17 @@ async def _fetch_one_body(
         envelope = await google_shopping.fetch_google_shopping(
             url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
         )
-        envelope["url_requested"] = url
-        envelope["url_canonical"] = normalized
-        if raw:
-            envelope.setdefault("warnings", []).append(
-                "raw_unsupported_for_google_shopping"
-            )
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="google_shopping",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
         return envelope, state["browser_started"], phases
 
     # --- Real-estate route (HTML via the shared escalation chain) -----------
@@ -1183,12 +1152,17 @@ async def _fetch_one_body(
         envelope = await realestate.fetch_realestate(
             url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
         )
-        envelope["url_requested"] = url
-        envelope["url_canonical"] = normalized
-        if raw:
-            envelope.setdefault("warnings", []).append("raw_unsupported_for_realestate")
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="realestate",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
         return envelope, state["browser_started"], phases
 
     base = _base_envelope(

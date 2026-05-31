@@ -21,6 +21,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from .. import envelope
 from ..cache import WIKIMEDIA_PROJECTS
 from ..errors import FailureReason
 
@@ -439,17 +440,14 @@ def _word_count(text: str) -> int:
 
 
 def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return {
-        "url_requested": url,
-        "url_final": url,
-        "url_canonical": url,
-        "http_status": http_status,
-        "mode_used": "wikimedia",
-        "fetched_at": int(time.time()),
-        "from_cache": False,
-        "cache_age_seconds": 0,
-        "content_type": "text/wikimedia",
-    }
+    return envelope.base_envelope(
+        url_requested=url,
+        url_normalized=url,
+        url_final=url,
+        http_status=http_status,
+        mode_used="wikimedia",
+        content_type="text/wikimedia",
+    )
 
 
 def _failure_envelope(
@@ -459,15 +457,11 @@ def _failure_envelope(
     *,
     http_status: int = 0,
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status)
-    env["failure"] = {
-        "reason": str(reason),
-        "retry_after_seconds": None,
-        "message": message,
-    }
-    env["markdown"] = ""
-    env["warnings"] = []
-    return env
+    return envelope.failure_envelope(
+        base=_base_envelope(url, http_status=http_status),
+        reason=reason,
+        message=message,
+    )
 
 
 def _success_envelope(
@@ -481,9 +475,10 @@ def _success_envelope(
 ) -> dict[str, Any]:
     from .. import io as io_mod
 
-    env = _base_envelope(url, http_status=http_status)
-    env.update(
-        {
+    return envelope.success_envelope(
+        base=_base_envelope(url, http_status=http_status),
+        markdown=markdown,
+        metadata={
             "title": meta.get("title"),
             "byline": None,
             "published": meta.get("published"),
@@ -491,14 +486,12 @@ def _success_envelope(
             "language": meta.get("language") or lang,
             "site_name": site_name,
             "word_count": _word_count(markdown),
-            "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": meta.get("quality", {}),
             "links": meta.get("links", []),
-            "markdown": markdown,
             "warnings": meta.get("warnings", []),
-        }
+        },
+        token_count_estimate=io_mod.estimate_tokens(markdown),
     )
-    return env
 
 
 # ---------------------------------------------------------------------------

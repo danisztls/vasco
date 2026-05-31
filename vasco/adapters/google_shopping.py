@@ -36,6 +36,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
+from .. import envelope
 from ..errors import FailureReason
 from ..fetch import browser
 
@@ -463,31 +464,24 @@ def _render_markdown(products: list[dict[str, Any]], *, query: str | None) -> st
 
 
 def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return {
-        "url_requested": url,
-        "url_final": url,
-        "url_canonical": url,
-        "http_status": http_status,
-        "mode_used": "google_shopping",
-        "fetched_at": int(time.time()),
-        "from_cache": False,
-        "cache_age_seconds": 0,
-        "content_type": "application/x-google-shopping",
-    }
+    return envelope.base_envelope(
+        url_requested=url,
+        url_normalized=url,
+        url_final=url,
+        http_status=http_status,
+        mode_used="google_shopping",
+        content_type="application/x-google-shopping",
+    )
 
 
 def _failure_envelope(
     url: str, reason: FailureReason, message: str, *, http_status: int = 0
 ) -> dict[str, Any]:
-    env = _base_envelope(url, http_status=http_status)
-    env["failure"] = {
-        "reason": str(reason),
-        "retry_after_seconds": None,
-        "message": message,
-    }
-    env["markdown"] = ""
-    env["warnings"] = []
-    return env
+    return envelope.failure_envelope(
+        base=_base_envelope(url, http_status=http_status),
+        reason=reason,
+        message=message,
+    )
 
 
 def _classify_browser_error(exc: BaseException) -> FailureReason:
@@ -609,7 +603,6 @@ async def fetch_google_shopping(
     currency = getattr(getattr(cfg, "shopping", None), "currency", None) or "BRL"
     language = getattr(getattr(cfg, "shopping", None), "language", None) or "pt-BR"
 
-    env = _base_envelope(url, http_status=status or 200)
     quality: dict[str, Any] = {
         "products": products,
         "currency": currency,
@@ -621,8 +614,10 @@ async def fetch_google_shopping(
     if filter_counts:
         quality["filtered"] = filter_counts
 
-    env.update(
-        {
+    env = envelope.success_envelope(
+        base=_base_envelope(url, http_status=status or 200),
+        markdown=markdown,
+        metadata={
             "title": f"Google Shopping: {query}" if query else "Google Shopping",
             "byline": None,
             "published": None,
@@ -631,12 +626,10 @@ async def fetch_google_shopping(
             "site_name": "Google Shopping",
             "image": products[0].get("image") if products else None,
             "word_count": len(markdown.split()),
-            "token_count_estimate": io_mod.estimate_tokens(markdown),
             "quality": quality,
-            "links": [],
-            "markdown": markdown,
             "warnings": ["rewrote_shopping_search_to_udm28"] if rewritten else [],
-        }
+        },
+        token_count_estimate=io_mod.estimate_tokens(markdown),
     )
     if rewritten:
         env["url_final"] = fetch_url

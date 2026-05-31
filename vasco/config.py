@@ -137,49 +137,40 @@ def _coerce(value: Any, target_type: type) -> Any:
     return value
 
 
-def _apply_dict(section: Any, data: dict[str, Any]) -> Any:
-    overrides: dict[str, Any] = {}
+def _coerce_value(current: Any, ftype: Any, raw: Any) -> Any:
+    """Coerce one override value to a field's type.
+
+    `raw` is a parsed YAML value or an env-var string. Tuple fields accept a
+    list (from YAML) or a colon-separated string (from an env var)."""
+    if isinstance(current, tuple):
+        if isinstance(raw, str):
+            return tuple(s.strip() for s in raw.split(":") if s.strip())
+        return tuple(raw)
+    if isinstance(ftype, str):  # forward-ref (PEP 563) — resolve the common scalars
+        ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(ftype, str)
+    return _coerce(raw, ftype)
+
+
+def _apply_overrides(section: Any, raw_values: dict[str, Any]) -> Any:
+    """Apply a {field_name: raw_value} mapping onto a config section. Shared by
+    the YAML and env-var paths — they differ only in how they gather the map."""
     field_types = {f.name: f.type for f in fields(section)}
-    for key, val in data.items():
-        if key in field_types:
-            current = getattr(section, key)
-            if isinstance(current, tuple) and isinstance(val, list):
-                overrides[key] = tuple(val)
-            else:
-                ftype = field_types[key]
-                if isinstance(ftype, str):
-                    ftype = {"str": str, "int": int, "float": float, "bool": bool}.get(
-                        ftype, str
-                    )
-                overrides[key] = _coerce(val, ftype)
+    overrides = {
+        name: _coerce_value(getattr(section, name), field_types[name], raw)
+        for name, raw in raw_values.items()
+        if name in field_types
+    }
     return replace(section, **overrides) if overrides else section
 
 
 def _apply_env(section: Any, section_name: str) -> Any:
     prefix = f"VASCO_{section_name.upper()}_"
-    overrides: dict[str, Any] = {}
-    field_types = {f.name: f.type for f in fields(section)}
-    for env_key, env_val in os.environ.items():
-        if not env_key.startswith(prefix):
-            continue
-        field_name = env_key[len(prefix) :].lower()
-        if field_name in field_types:
-            current = getattr(section, field_name)
-            if isinstance(current, tuple):
-                overrides[field_name] = tuple(
-                    s.strip() for s in env_val.split(":") if s.strip()
-                )
-            else:
-                ftype = field_types[field_name]
-                if isinstance(ftype, str):
-                    ftype = {
-                        "str": str,
-                        "int": int,
-                        "float": float,
-                        "bool": bool,
-                    }.get(ftype, str)
-                overrides[field_name] = _coerce(env_val, ftype)
-    return replace(section, **overrides) if overrides else section
+    raw_values = {
+        env_key[len(prefix) :].lower(): env_val
+        for env_key, env_val in os.environ.items()
+        if env_key.startswith(prefix)
+    }
+    return _apply_overrides(section, raw_values)
 
 
 def load_config() -> Config:
@@ -205,7 +196,7 @@ def load_config() -> Config:
         current = getattr(cfg, name)
         section_data = data.get(name, {})
         if isinstance(section_data, dict) and section_data:
-            current = _apply_dict(current, section_data)
+            current = _apply_overrides(current, section_data)
         current = _apply_env(current, name)
         sections[name] = current
 

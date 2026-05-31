@@ -555,6 +555,23 @@ def cache_stats() -> None:
 
 
 # ---------------------------------------------------------------------------
+# config subcommands
+# ---------------------------------------------------------------------------
+
+
+config_app = typer.Typer(no_args_is_help=True, help="Inspect Vasco configuration.")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Print the effective config (defaults + YAML + env overrides) as JSON."""
+    cfg = _config.load_config()
+    json.dump(asdict(cfg), sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+# ---------------------------------------------------------------------------
 # logs subcommands
 # ---------------------------------------------------------------------------
 

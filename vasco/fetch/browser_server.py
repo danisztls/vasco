@@ -28,6 +28,55 @@ log = logging.getLogger(__name__)
 _HEADER = struct.Struct("!I")
 
 
+# --- Playwright Firefox driver patch -------------------------------------
+# Playwright's Firefox PageError dispatcher reads `pageError.location.url`
+# (and .lineNumber/.columnNumber) with no null guard. Firefox can report an
+# uncaught page error whose `location` is undefined; the deref then throws a
+# TypeError *inside the Node driver process*, killing the driver connection.
+# Because our browser is long-lived and shared, that one crash takes down every
+# subsequent fetch until restart. The bug is generic — any page that emits a
+# locationless uncaught error triggers it — so we patch the bundled driver with
+# optional-chaining + protocol-valid fallbacks. Idempotent; failures are
+# swallowed (the supervisor still recovers from any crash that slips through).
+_PATCH_REPLACEMENTS = (
+    ("url: pageError.location.url,", 'url: pageError.location?.url ?? "",'),
+    (
+        "line: pageError.location.lineNumber,",
+        "line: pageError.location?.lineNumber ?? 0,",
+    ),
+    (
+        "column: pageError.location.columnNumber",
+        "column: pageError.location?.columnNumber ?? 0",
+    ),
+)
+
+
+def _patch_playwright_driver() -> None:
+    try:
+        import playwright
+
+        bundle = (
+            Path(playwright.__file__).parent
+            / "driver"
+            / "package"
+            / "lib"
+            / "coreBundle.js"
+        )
+        if not bundle.is_file():
+            return
+        text = bundle.read_text(encoding="utf-8")
+        if "pageError.location?.url" in text:
+            return  # already patched
+        if "pageError.location.url" not in text:
+            return  # upstream changed shape — don't guess
+        for old, new in _PATCH_REPLACEMENTS:
+            text = text.replace(old, new)
+        bundle.write_text(text, encoding="utf-8")
+        log.info("patched Playwright Firefox driver pageError null-deref (%s)", bundle)
+    except Exception as exc:  # never block server startup
+        log.warning("could not patch Playwright driver: %s", exc)
+
+
 def _socket_path() -> Path:
     runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     return Path(runtime) / "vasco" / "browser.sock"
@@ -327,6 +376,7 @@ async def run_server(cfg: Any | None = None) -> None:
         log.error("camoufox is not installed")
         return
 
+    _patch_playwright_driver()
     kwargs, is_persistent = _build_launch_kwargs(cfg)
 
     sock = _socket_path()

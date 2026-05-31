@@ -97,3 +97,11 @@ def test_vivareal_list_returns_empty_without_itemlist() -> None:
 # --- markdown rendering ----------------------------------------------------
 
 
+
+
+# --- fetch via injected escalating fetcher ---------------------------------
+
+
+
+
+

@@ -30,6 +30,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -40,8 +41,6 @@ from ..fetch import browser
 
 log = logging.getLogger(__name__)
 
-# Browser tier cap; these portals are JS-heavy and take a few seconds to render.
-_BROWSER_TIER_CAP: float = 8.0
 _GALLERY_CAP: int = 4
 
 # host suffix → (provider key, display name)
@@ -397,13 +396,44 @@ async def _browser_fetch_html(
     return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
 
 
+# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
+# The main fetch flow passes one backed by the shared escalation chain
+# (http → browser → mobile → wayback); see fetch._do_fetch.
+HtmlFetcher = Callable[
+    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
+]
+
+
+async def _browser_only_fetch(
+    url: str, *, deadline: float, cfg: Any | None
+) -> tuple[str, int, dict[str, str], FailureReason, str]:
+    """Standalone fallback when no escalating fetcher is injected.
+
+    Used when the adapter is called directly (e.g. in tests); the production
+    path injects the shared escalation chain instead.
+    """
+    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+    html, status, headers = await _browser_fetch_html(
+        url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    )
+    return html, status, headers, FailureReason.OK, "browser"
+
+
 async def fetch_realestate(
     url: str,
     *,
     deadline: float = 30.0,
     cfg: Any | None = None,
+    fetch_html: HtmlFetcher | None = None,
 ) -> dict[str, Any]:
-    """Fetch a real-estate list/detail page and return a structured envelope."""
+    """Fetch a real-estate list/detail page and return a structured envelope.
+
+    HTML is obtained via ``fetch_html`` — the main flow injects the shared
+    ``http → browser → mobile → wayback`` escalation so server-rendered portals
+    resolve at the cheap http tier and never depend on
+    the browser. Without an injected fetcher it falls back to a browser-only
+    fetch.
+    """
     info = _provider_for(url)
     if info is None:  # pragma: no cover - routing guards this
         return _failure_envelope(
@@ -412,27 +442,32 @@ async def fetch_realestate(
     provider, display = info
     page_type = _page_type(url, provider)
 
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    tier_deadline = min(deadline_monotonic, time.monotonic() + _BROWSER_TIER_CAP)
+    async def _fetch(target: str):
+        if fetch_html is not None:
+            return await fetch_html(target)
+        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
 
     try:
-        html_src, status, _headers = await _browser_fetch_html(
-            url, deadline_monotonic=tier_deadline, cfg=cfg
-        )
+        html_src, status, _headers, reason, mode_used = await _fetch(url)
     except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "browser deadline elapsed")
+        return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         return _failure_envelope(
             url,
             _classify_browser_error(exc),
-            f"browser fetch failed: {type(exc).__name__}: {exc}",
+            f"fetch failed: {type(exc).__name__}: {exc}",
+        )
+
+    if reason != FailureReason.OK:
+        return _failure_envelope(
+            url, reason, f"fetch failed via {mode_used} tier", http_status=status
         )
 
     if not html_src:
         return _failure_envelope(
             url,
             FailureReason.SERVER_ERROR,
-            "browser returned empty body",
+            f"empty body from {mode_used} tier",
             http_status=status,
         )
 

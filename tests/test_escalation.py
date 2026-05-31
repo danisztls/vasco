@@ -36,12 +36,18 @@ def setup_module(module: Any) -> None:  # noqa: ARG001
 
 
 class FakeCache:
-    """Minimal Cache stub: get, put, get_domain_strategy, bump, normalize_url."""
+    """Minimal Cache stub: get, put, get_strategy, bump, normalize_url."""
 
-    def __init__(self, *, strategy: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        strategy: str | None = None,
+        strategies: dict[str, str] | None = None,
+    ) -> None:
         self.store: dict[str, dict] = {}
         self.bumps: list[dict] = []
         self.preferred = strategy
+        self.strategies = strategies or {}
 
     def normalize_url(self, url: str) -> str:
         return url
@@ -60,11 +66,11 @@ class FakeCache:
             envelope
         )
 
-    def get_domain_strategy(self, domain: str) -> str | None:
-        return self.preferred
+    def get_strategy(self, route_key: str) -> str | None:
+        return self.strategies.get(route_key, self.preferred)
 
-    def bump(self, domain: str, *, mode: str, success: bool) -> None:
-        self.bumps.append({"domain": domain, "mode": mode, "success": success})
+    def bump(self, route_key: str, *, mode: str, success: bool) -> None:
+        self.bumps.append({"route_key": route_key, "mode": mode, "success": success})
 
 
 def _make_http(html: str, status: int = 200, headers: dict | None = None):
@@ -148,7 +154,9 @@ def test_unknown_domain_http_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert env["mode_used"] == "http"
     assert "failure" not in env
-    assert cache.bumps == [{"domain": "example.com", "mode": "http", "success": True}]
+    assert cache.bumps == [
+        {"route_key": "example.com/article", "mode": "http", "success": True}
+    ]
 
 
 def test_http_cloudflare_escalates_to_browser_ok(
@@ -205,6 +213,81 @@ def test_preferred_browser_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(cache.bumps) == 1
     assert cache.bumps[0]["mode"] == "browser"
     assert cache.bumps[0]["success"] is True
+
+
+def test_routes_under_one_domain_have_independent_strategies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two route classes on one domain learn separate starting tiers: a
+    `browser`-pinned detail route skips http while a list route still probes it."""
+    # detail route pinned to browser; list route unknown (defaults to http).
+    cache = FakeCache(strategies={"example.com/item/*": "browser"})
+
+    http_calls: list[str] = []
+
+    async def _http(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        http_calls.append(url)
+        return CLEAN_HTML, 200, {}
+
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _http)
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+
+    detail = run(
+        fetch_mod.fetch_one(
+            "https://shop.example.com/item/widget-id-9/",
+            cache=cache,
+            use_cache=False,
+            deadline=20.0,
+        )
+    )
+    assert detail["mode_used"] == "browser"
+    assert http_calls == []  # detail route skipped the http tier
+
+    listpage = run(
+        fetch_mod.fetch_one(
+            "https://shop.example.com/list/all/",
+            cache=cache,
+            use_cache=False,
+            deadline=20.0,
+        )
+    )
+    assert listpage["mode_used"] == "http"  # list route started at http
+    assert http_calls == ["https://shop.example.com/list/all/"]
+
+
+def test_seed_strategy_sets_starting_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no learned row, a declarative seed (vasco/strategy.py) picks the
+    starting tier: a browser-seeded route skips the http tier entirely."""
+    from vasco import strategy as strat
+
+    monkeypatch.setitem(strat.SEED_STRATEGIES, "seededsite.com/page", "browser")
+    cache = FakeCache()  # empty: no learned strategy rows
+
+    http_calls: list[str] = []
+
+    async def _http_should_not_be_called(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        http_calls.append(url)
+        return "", 0, {}
+
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://seededsite.com/page/x",
+            cache=cache,
+            use_cache=False,
+            deadline=20.0,
+        )
+    )
+    assert env["mode_used"] == "browser"
+    assert http_calls == []  # seed made the chain start at the browser tier
 
 
 def test_deadline_exceeded_before_escalation(

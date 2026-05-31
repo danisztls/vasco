@@ -100,36 +100,46 @@ def test_get_missing_returns_none(cache: Cache) -> None:
     assert cache.get("https://nope.example.com/x") is None
 
 
-def test_domain_strategy_three_failures_flips_mode(cache: Cache) -> None:
-    domain = "example.com"
-    assert cache.get_domain_strategy(domain) is None
+def test_strategy_three_failures_flips_mode(cache: Cache) -> None:
+    route = "example.com/a"
+    assert cache.get_strategy(route) is None
 
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=False)
-    assert cache.get_domain_strategy(domain) == "http"
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=False)
+    assert cache.get_strategy(route) == "http"
 
-    cache.bump(domain, mode="http", success=False)
-    assert cache.get_domain_strategy(domain) == "browser"
-
-
-def test_domain_strategy_success_resets_consecutive_failures(cache: Cache) -> None:
-    domain = "example.com"
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=True)
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=False)
-    assert cache.get_domain_strategy(domain) == "http"
+    cache.bump(route, mode="http", success=False)
+    assert cache.get_strategy(route) == "browser"
 
 
-def test_domain_strategy_success_on_browser_keeps_browser(cache: Cache) -> None:
-    domain = "example.com"
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=False)
-    cache.bump(domain, mode="http", success=False)
-    assert cache.get_domain_strategy(domain) == "browser"
-    cache.bump(domain, mode="browser", success=True)
-    assert cache.get_domain_strategy(domain) == "browser"
+def test_strategy_success_resets_consecutive_failures(cache: Cache) -> None:
+    route = "example.com/a"
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=True)
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=False)
+    assert cache.get_strategy(route) == "http"
+
+
+def test_strategy_success_on_browser_keeps_browser(cache: Cache) -> None:
+    route = "example.com/a"
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=False)
+    cache.bump(route, mode="http", success=False)
+    assert cache.get_strategy(route) == "browser"
+    cache.bump(route, mode="browser", success=True)
+    assert cache.get_strategy(route) == "browser"
+
+
+def test_strategy_keys_are_independent(cache: Cache) -> None:
+    """Two route keys under the same domain learn separate starting tiers."""
+    a, b = "d.com/a", "d.com/b"
+    for _ in range(3):
+        cache.bump(a, mode="http", success=False)
+    cache.bump(b, mode="http", success=True)
+    assert cache.get_strategy(a) == "browser"  # flipped after 3 failures
+    assert cache.get_strategy(b) == "http"  # untouched by a's failures
 
 
 def test_purge_expired(cache: Cache, fake_time) -> None:

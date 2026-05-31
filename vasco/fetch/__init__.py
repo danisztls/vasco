@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
 from . import bot_detect, browser
-from vasco import io as io_mod, quality as quality_mod
+from vasco import io as io_mod, quality as quality_mod, strategy as seed_strategies
 from vasco.config import QualityCfg
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import google_shopping, realestate, wayback, wikimedia, youtube
@@ -367,7 +367,7 @@ def _normalize_url(url: str, cache: Any | None) -> str | None:
 
 def _registered_domain(url: str) -> str:
     try:
-        from . import cache as cache_mod
+        from vasco import cache as cache_mod
 
         return cache_mod.registered_domain(url)
     except Exception:
@@ -377,6 +377,20 @@ def _registered_domain(url: str) -> str:
         if host.startswith("www."):
             host = host[4:]
         return host
+
+
+def _route_key(url: str) -> str:
+    """Per-route strategy key (registered domain + first path segment).
+
+    Falls back to the bare registered domain if `cache.route_key` is
+    unavailable for any reason.
+    """
+    try:
+        from vasco import cache as cache_mod
+
+        return cache_mod.route_key(url)
+    except Exception:
+        return _registered_domain(url)
 
 
 # ---------------------------------------------------------------------------
@@ -562,14 +576,14 @@ async def _run_browser_tier(
     cfg: Any | None,
     phases: _Phases,
     cache: Any | None,
-    domain: str,
+    route: str,
     bump: bool,
 ) -> tuple[str, int, dict[str, str], FailureReason]:
     """Single browser fetch (desktop or mobile) with phase accounting.
 
     When `bump=True` and the call wasn't mobile, records the outcome against
-    the domain strategy cache. Mobile is always a recovery tier — it never
-    affects domain strategy.
+    the per-route strategy cache. Mobile is always a recovery tier — it never
+    affects the strategy.
     """
     tier_cap = MOBILE_MAX_BUDGET if mobile else BROWSER_MAX_BUDGET
     t0 = time.monotonic()
@@ -584,7 +598,7 @@ async def _run_browser_tier(
     reason = bot_detect.classify(status, html, headers)
     if bump and not mobile and cache is not None and hasattr(cache, "bump"):
         try:
-            cache.bump(domain, mode="browser", success=(reason == FailureReason.OK))
+            cache.bump(route, mode="browser", success=(reason == FailureReason.OK))
         except Exception:
             pass
     return html, status, headers, reason
@@ -621,13 +635,16 @@ async def _do_fetch_html(
     accumulates `network_ms`, and records `escalated_from` if the http tier
     was tried first then escalated.
     """
-    domain = _registered_domain(url)
+    route = _route_key(url)
     strategy: str | None = None
-    if cache is not None and hasattr(cache, "get_domain_strategy"):
+    if cache is not None and hasattr(cache, "get_strategy"):
         try:
-            strategy = cache.get_domain_strategy(domain)
+            strategy = cache.get_strategy(route)
         except Exception:
             strategy = None
+    # No learned row yet → fall back to the declarative seed (vasco/strategy.py).
+    if strategy is None:
+        strategy = seed_strategies.seed_strategy(route)
 
     browser_started = False
 
@@ -641,7 +658,7 @@ async def _do_fetch_html(
             cfg=cfg,
             phases=phases,
             cache=cache,
-            domain=domain,
+            route=route,
             bump=True,
         )
         return html, status, headers, reason, mode, True
@@ -685,7 +702,7 @@ async def _do_fetch_html(
         if reason == FailureReason.OK:
             if cache is not None and hasattr(cache, "bump"):
                 try:
-                    cache.bump(domain, mode="http", success=True)
+                    cache.bump(route, mode="http", success=True)
                 except Exception:
                     pass
             return html, status, headers, reason, "http", browser_started
@@ -694,7 +711,7 @@ async def _do_fetch_html(
             # Caller-explicit http: terminal.
             if cache is not None and hasattr(cache, "bump"):
                 try:
-                    cache.bump(domain, mode="http", success=False)
+                    cache.bump(route, mode="http", success=False)
                 except Exception:
                     pass
             return html, status, headers, reason, "http", browser_started
@@ -707,7 +724,7 @@ async def _do_fetch_html(
         if (deadline_monotonic - time.monotonic()) < BROWSER_MIN_BUDGET:
             if cache is not None and hasattr(cache, "bump"):
                 try:
-                    cache.bump(domain, mode="http", success=False)
+                    cache.bump(route, mode="http", success=False)
                 except Exception:
                     pass
             return (
@@ -729,7 +746,7 @@ async def _do_fetch_html(
         cfg=cfg,
         phases=phases,
         cache=cache,
-        domain=domain,
+        route=route,
         bump=True,
     )
     browser_started = True
@@ -759,7 +776,7 @@ async def _do_fetch_html(
                 cfg=cfg,
                 phases=phases,
                 cache=cache,
-                domain=domain,
+                route=route,
                 bump=False,
             )
         except Exception:
@@ -805,6 +822,51 @@ async def _do_fetch_html(
 
     # All recovery tiers exhausted. Return the prior browser failure.
     return last_html, last_status, last_headers, last_reason, last_mode, browser_started
+
+
+def _make_adapter_fetcher(
+    url: str,
+    normalized: str,
+    *,
+    mode: str,
+    deadline_monotonic: float,
+    cache: Any | None,
+    cfg: Any | None,
+    phases: _Phases,
+) -> tuple[Any, dict[str, bool]]:
+    """Build an injectable HTML fetcher backed by the shared escalation chain.
+
+    Content adapters (real-estate, Google Shopping) parse provider HTML into
+    their own envelope but obtain that HTML through this fetcher, so they share
+    one fetch path and the per-route strategy/seed system instead of hardcoding
+    a browser-only fetch. Returns ``(fetch_html, state)``; ``state``'s
+    ``browser_started`` reflects whether any browser tier ran (so the caller
+    knows whether to close the pool).
+    """
+    base = _base_envelope(
+        url_requested=url,
+        url_normalized=normalized,
+        url_final=None,
+        http_status=0,
+        mode_used="http",
+        content_type="text/html",
+    )
+    state = {"browser_started": False}
+
+    async def fetch_html(target: str):
+        html, status, headers, reason, mode_used, started = await _do_fetch_html(
+            target,
+            base=base,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        state["browser_started"] = state["browser_started"] or started
+        return html, status, headers, reason, mode_used
+
+    return fetch_html, state
 
 
 # ---------------------------------------------------------------------------
@@ -1083,10 +1145,19 @@ async def _fetch_one_body(
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope, False, phases
 
-    # --- Google Shopping shortcut (always uses the browser singleton) ------
+    # --- Google Shopping route (HTML via the shared escalation chain) -------
     if google_shopping.is_google_shopping_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
         envelope = await google_shopping.fetch_google_shopping(
-            url, deadline=deadline, cfg=cfg
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
         )
         envelope["url_requested"] = url
         envelope["url_canonical"] = normalized
@@ -1096,20 +1167,29 @@ async def _fetch_one_body(
             )
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        # browser_started=True so fetch_one / fetch_many close the pool.
-        return envelope, True, phases
+        return envelope, state["browser_started"], phases
 
-    # --- Real-estate shortcut (always uses the browser singleton) ----------
+    # --- Real-estate route (HTML via the shared escalation chain) -----------
     if realestate.is_realestate_url(url):
-        envelope = await realestate.fetch_realestate(url, deadline=deadline, cfg=cfg)
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await realestate.fetch_realestate(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
         envelope["url_requested"] = url
         envelope["url_canonical"] = normalized
         if raw:
             envelope.setdefault("warnings", []).append("raw_unsupported_for_realestate")
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        # browser_started=True so fetch_one / fetch_many close the pool.
-        return envelope, True, phases
+        return envelope, state["browser_started"], phases
 
     base = _base_envelope(
         url_requested=url,

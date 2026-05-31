@@ -32,6 +32,7 @@ import logging
 import re
 import statistics
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
@@ -55,10 +56,6 @@ _BADGE_MAP: dict[str, str] = {
     "REDUÇÃO NO PREÇO": "price_drop",
     "PREÇO BAIXO": "low_price",
 }
-
-# Tier cap mirrors fetch.BROWSER_MAX_BUDGET; Google Shopping is JS-heavy and
-# routinely takes 4–7s to render the product grid.
-_BROWSER_TIER_CAP: float = 8.0
 
 # Outlier filter only fires with enough samples; below this, the IQR is
 # dominated by individual products.
@@ -523,16 +520,40 @@ async def _browser_fetch_html(
     return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
 
 
+# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
+# The main fetch flow passes one backed by the shared escalation chain; Google
+# Shopping's routes are seeded to the browser tier in vasco/strategy.py so the
+# chain starts there (the http tier only ever returns an empty JS shell).
+HtmlFetcher = Callable[
+    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
+]
+
+
+async def _browser_only_fetch(
+    url: str, *, deadline: float, cfg: Any | None
+) -> tuple[str, int, dict[str, str], FailureReason, str]:
+    """Standalone fallback when no escalating fetcher is injected (direct use)."""
+    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+    html, status, headers = await _browser_fetch_html(
+        url, deadline_monotonic=deadline_monotonic, cfg=cfg
+    )
+    return html, status, headers, FailureReason.OK, "browser"
+
+
 async def fetch_google_shopping(
     url: str,
     *,
     deadline: float = 30.0,
     cfg: Any | None = None,
+    fetch_html: HtmlFetcher | None = None,
 ) -> dict[str, Any]:
-    """Fetch a Google Shopping page and return a structured envelope."""
+    """Fetch a Google Shopping page and return a structured envelope.
+
+    HTML is obtained via ``fetch_html`` — the main flow injects the shared
+    escalation chain (seeded to the browser tier for Google routes). Without an
+    injected fetcher it falls back to a direct browser fetch.
+    """
     fetch_url, rewritten = _canonicalize_shopping_url(url)
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    tier_deadline = min(deadline_monotonic, time.monotonic() + _BROWSER_TIER_CAP)
 
     def _fail(
         reason: FailureReason, message: str, *, http_status: int = 0
@@ -546,20 +567,26 @@ async def fetch_google_shopping(
             env["warnings"] = ["rewrote_shopping_search_to_udm28"]
         return env
 
+    async def _fetch(target: str):
+        if fetch_html is not None:
+            return await fetch_html(target)
+        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
+
     try:
-        html_src, status, _headers = await _browser_fetch_html(
-            fetch_url, deadline_monotonic=tier_deadline, cfg=cfg
-        )
+        html_src, status, _headers, reason, mode_used = await _fetch(fetch_url)
     except asyncio.TimeoutError:
-        return _fail(FailureReason.TIMEOUT, "browser deadline elapsed")
+        return _fail(FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         reason = _classify_browser_error(exc)
-        return _fail(reason, f"browser fetch failed: {type(exc).__name__}: {exc}")
+        return _fail(reason, f"fetch failed: {type(exc).__name__}: {exc}")
+
+    if reason != FailureReason.OK:
+        return _fail(reason, f"fetch failed via {mode_used} tier", http_status=status)
 
     if not html_src:
         return _fail(
             FailureReason.SERVER_ERROR,
-            "browser returned empty body",
+            f"empty body from {mode_used} tier",
             http_status=status,
         )
 

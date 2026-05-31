@@ -157,3 +157,39 @@ def test_render_markdown() -> None:
     assert "KITNET 01 QUARTO" in md  # leads with title when present
     assert "45m²" in md
     assert "Baixo Guandu" in md
+
+
+# --- fetch via injected escalating fetcher ---------------------------------
+
+BINDA_LIST_URL = "https://corretorromildobinda.com.br/pt/pesq_imovel.php?ptip=A"
+
+
+async def test_fetch_uses_injected_fetcher_and_records_tier() -> None:
+    """An injected fetcher (the shared escalation chain) supplies the HTML;
+    a server-rendered portal resolves at the cheap http tier, no browser."""
+    html = _fx("binda_list.html")
+    calls: list[str] = []
+
+    async def fake_fetch_html(url: str):
+        calls.append(url)
+        return html, 200, {}, R.FailureReason.OK, "http"
+
+    env = await R.fetch_realestate(BINDA_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert calls == [BINDA_LIST_URL]
+    assert env["mode_used"] == "realestate"  # envelope contract is preserved
+    assert env["http_status"] == 200
+    assert "failure" not in env
+    assert env["quality"]["result_count"] > 0
+
+
+async def test_fetch_passes_through_escalation_failure() -> None:
+    """When every tier fails, the adapter surfaces that reason/tier verbatim."""
+
+    async def failing_fetch_html(url: str):
+        return "", 0, {}, R.FailureReason.TIMEOUT, "wayback"
+
+    env = await R.fetch_realestate(BINDA_LIST_URL, fetch_html=failing_fetch_html)
+
+    assert env["failure"]["reason"] == R.FailureReason.TIMEOUT.value
+    assert "wayback" in env["failure"]["message"]

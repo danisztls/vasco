@@ -19,7 +19,7 @@ _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 _AMP_AMP_VALUES = frozenset({"", "1", "true", "amp"})
 _AMP_OUTPUT_VALUES = frozenset({"amp"})
 
-_KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne"}
+_KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne", "com", "net", "org", "edu"}
 
 WIKIMEDIA_PROJECTS = (
     "wikibooks",
@@ -288,6 +288,49 @@ def registered_domain(url: str) -> str:
     return ".".join(labels[-2:])
 
 
+# An id-ish slug: has a hyphen and at least one digit (e.g. "apto-2q-id-12345").
+_ID_SLUG_RE = re.compile(r"-.*\d|\d.*-")
+
+
+def _is_variable_segment(seg: str) -> bool:
+    """A path segment that varies per-item (id, long slug) rather than naming
+    a stable route class. Such segments are wildcarded in `route_key`."""
+    if any(c.isdigit() for c in seg):
+        return True
+    if len(seg) > 24:
+        return True
+    return bool(_ID_SLUG_RE.search(seg))
+
+
+def route_key(url: str) -> str:
+    """Strategy key: registered_domain + first structural path segment.
+
+    Distinguishes page-types within a domain (e.g. vivareal ``/aluguel`` list vs
+    ``/imovel`` detail) while collapsing per-city slugs and per-listing ids so
+    learning accumulates. Degrades to the bare domain for homepages.
+
+    Keeping only the *first* path segment literal is deliberate: it avoids
+    fragmenting learning per-city/state (all ``/aluguel/<state>/<city>`` share
+    one key) while still separating route classes that lead with a different
+    first segment.
+    """
+    dom = registered_domain(url)
+    if not dom:
+        return ""
+    raw = url.strip()
+    if "://" not in raw:
+        raw = "http://" + raw
+    segs = [s for s in urlsplit(raw).path.lower().split("/") if s]
+    if not segs:
+        return dom
+    first = segs[0]
+    if _is_variable_segment(first):
+        return f"{dom}/*"
+    if len(segs) == 1:
+        return f"{dom}/{first}"
+    return f"{dom}/{first}/*"
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS fetch_cache (
   url            TEXT PRIMARY KEY,
@@ -314,8 +357,9 @@ CREATE TABLE IF NOT EXISTS fetch_cache (
   html_gz        BLOB
 );
 
-CREATE TABLE IF NOT EXISTS domain_strategy (
-  domain          TEXT PRIMARY KEY,
+DROP TABLE IF EXISTS domain_strategy;
+CREATE TABLE IF NOT EXISTS fetch_strategy (
+  route_key       TEXT PRIMARY KEY,
   preferred_mode  TEXT,
   success_count   INTEGER DEFAULT 0,
   failure_count   INTEGER DEFAULT 0,
@@ -448,17 +492,18 @@ class Cache:
         )
         self._conn.commit()
 
-    def get_domain_strategy(self, domain: str) -> str | None:
+    def get_strategy(self, route_key: str) -> str | None:
         cur = self._conn.execute(
-            "SELECT preferred_mode FROM domain_strategy WHERE domain = ?", (domain,)
+            "SELECT preferred_mode FROM fetch_strategy WHERE route_key = ?",
+            (route_key,),
         )
         row = cur.fetchone()
         if row is None:
             return None
         return row["preferred_mode"]
 
-    def bump(self, domain: str, *, mode: str, success: bool) -> None:
-        """Update domain strategy.
+    def bump(self, route_key: str, *, mode: str, success: bool) -> None:
+        """Update the per-route fetch strategy.
 
         `failure_count` tracks **consecutive failures of the preferred mode**.
         Any success resets it to 0. A failure on a non-preferred mode is
@@ -468,17 +513,17 @@ class Cache:
         """
         now = int(time.time())
         cur = self._conn.execute(
-            "SELECT preferred_mode, success_count, failure_count FROM domain_strategy WHERE domain = ?",
-            (domain,),
+            "SELECT preferred_mode, success_count, failure_count FROM fetch_strategy WHERE route_key = ?",
+            (route_key,),
         )
         row = cur.fetchone()
         if row is None:
             self._conn.execute(
                 """
-                INSERT INTO domain_strategy (domain, preferred_mode, success_count, failure_count, last_updated)
+                INSERT INTO fetch_strategy (route_key, preferred_mode, success_count, failure_count, last_updated)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (domain, mode, 1 if success else 0, 0 if success else 1, now),
+                (route_key, mode, 1 if success else 0, 0 if success else 1, now),
             )
             self._conn.commit()
             return
@@ -498,11 +543,11 @@ class Cache:
 
         self._conn.execute(
             """
-            UPDATE domain_strategy
+            UPDATE fetch_strategy
             SET preferred_mode = ?, success_count = ?, failure_count = ?, last_updated = ?
-            WHERE domain = ?
+            WHERE route_key = ?
             """,
-            (preferred, success_count, failure_count, now, domain),
+            (preferred, success_count, failure_count, now, route_key),
         )
         self._conn.commit()
 

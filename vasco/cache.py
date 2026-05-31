@@ -522,6 +522,27 @@ class Cache:
         self._conn.commit()
         return deleted
 
+    def purge_domain(self, domain: str) -> int:
+        """Delete every cache entry whose registered domain matches `domain`.
+
+        `domain` is itself reduced via `registered_domain`, so "www.x.com.br",
+        "x.com.br", and a full URL on that host all match the same entries
+        (including subdomains).
+        """
+        target = registered_domain(domain)
+        if not target:
+            return 0
+        urls = [
+            row["url"]
+            for row in self._conn.execute("SELECT url FROM fetch_cache").fetchall()
+            if registered_domain(row["url"]) == target
+        ]
+        self._conn.executemany(
+            "DELETE FROM fetch_cache WHERE url = ?", [(u,) for u in urls]
+        )
+        self._conn.commit()
+        return len(urls)
+
     def stats(self) -> dict:
         entries = self._conn.execute(
             "SELECT COUNT(*) AS n FROM fetch_cache"

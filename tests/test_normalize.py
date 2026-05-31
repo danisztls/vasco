@@ -216,6 +216,14 @@ def test_normalize_repeated_keys_preserve_within_key_order() -> None:
         ("https://www.example.co.uk/x", "example.co.uk"),
         ("https://sub.example.co.uk/x", "example.co.uk"),
         ("https://foo.bar.baz.example.com/x", "example.com"),
+        # compound ccSLDs the old hand-rolled heuristic handled
+        ("https://www.vivareal.com.br/aluguel/", "vivareal.com.br"),
+        # ... and ones it did NOT (real PSL via tldextract gets these right)
+        ("https://www.asahi.co.jp/news", "asahi.co.jp"),
+        ("https://canberra.act.edu.au/x", "canberra.act.edu.au"),
+        # no public suffix → fall back to bare host (minus www.)
+        ("http://localhost:8000/x", "localhost"),
+        ("http://127.0.0.1:5000/x", "127.0.0.1"),
     ],
 )
 def test_registered_domain(url: str, expected: str) -> None:

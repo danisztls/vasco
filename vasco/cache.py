@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
+import tldextract
+
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 
@@ -18,8 +20,6 @@ _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 # AMP sentinel — `output=json` etc. is meaningful elsewhere.
 _AMP_AMP_VALUES = frozenset({"", "1", "true", "amp"})
 _AMP_OUTPUT_VALUES = frozenset({"amp"})
-
-_KNOWN_SECOND_LEVELS = {"co", "ac", "gov", "or", "ne", "com", "net", "org", "edu"}
 
 WIKIMEDIA_PROJECTS = (
     "wikibooks",
@@ -263,29 +263,30 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
-def registered_domain(url: str) -> str:
-    """Best-effort registered domain extraction.
+# Public Suffix List lookups via the bundled snapshot only: `suffix_list_urls=()`
+# disables network fetches (deterministic, offline-safe) and `cache_dir=None`
+# disables disk caching. The eTLD+1 (registered domain) is the base of the
+# strategy key, so we want a real PSL — not a hand-rolled second-level guess.
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
 
-    Strips a leading "www." then returns the last two labels, unless the
-    second-to-last label is a known secondary suffix (co, ac, gov, org, net,
-    edu, or, ne, com) in which case the last three labels are returned.
-    This is a heuristic, not a real PSL lookup.
+
+def registered_domain(url: str) -> str:
+    """Registered domain (eTLD+1) via the Public Suffix List.
+
+    e.g. ``www.foo.example.co.uk`` → ``example.co.uk``. Hosts with no public
+    suffix (``localhost``, raw IPs, internal names) fall back to the bare host
+    minus a leading ``www.``.
     """
     if not url:
         return ""
     raw = url.strip()
     if "://" not in raw:
         raw = "http://" + raw
-    host = urlsplit(raw).hostname or ""
-    host = host.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    labels = [label for label in host.split(".") if label]
-    if len(labels) <= 2:
-        return ".".join(labels)
-    if labels[-2] in _KNOWN_SECOND_LEVELS:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
+    ext = _TLD_EXTRACT(raw)
+    if ext.domain and ext.suffix:
+        return f"{ext.domain}.{ext.suffix}".lower()
+    host = (urlsplit(raw).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
 
 
 # An id-ish slug: has a hyphen and at least one digit (e.g. "apto-2q-id-12345").

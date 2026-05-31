@@ -28,6 +28,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/adapters/wayback.py` | Wayback Availability API + `if_` modifier; trailing-slash retry |
 | `vasco/adapters/youtube.py` | Transcript fetch — own envelope shape (`mode_used="youtube"`, `content_type="text/youtube"`) |
 | `vasco/adapters/wikimedia.py` | Wikimedia article fetch via Enterprise On-demand API — Structured Contents (Wikipedia, 9 beta langs) + standard articles (all projects/langs); own envelope shape (`mode_used="wikimedia"`, `content_type="text/wikimedia"`) |
+| `vasco/adapters/realestate.py` | Brazilian real-estate portals (vivareal, binda=corretorromildobinda, barreto=barretoimobiliaria) — browser-rendered HTML parsed per-provider into normalized listings (`url`, `type`, `price`, `condo_fee`, `area`, `bedrooms`, `bathrooms`, `parking`, `neighborhood`, `city`, `street`, `amenities`, `image`, `images`) in `quality.listings`; `list` pages (many, thumbnail) vs `detail` pages (one, full gallery); own envelope shape (`mode_used="realestate"`, `content_type="application/x-realestate"`) |
 | `vasco/adapters/google_shopping.py` | Google Shopping BR results (search + homepage) — browser-rendered HTML parsed via `<product-viewer-entrypoint>` aria-labels into structured products (title, price, store, rating, discount, badges) in `quality.products`; filters used/refurb + international sellers + IQR outliers; own envelope shape (`mode_used="google_shopping"`, `content_type="application/x-google-shopping"`) |
 | `vasco/quality/__init__.py` | `score(markdown, url, cfg)` → composite quality dict merged into envelope; orchestrates both layers |
 | `vasco/quality/heuristics.py` | Text-level slop detection: vocab ratio, phrase count, sentence CV, em-dash density, transition starts, TTR |
@@ -102,4 +103,9 @@ uv run vasco fetch https://example.com | jq '.quality.slop_score, .quality.domai
 uv run vasco fetch "https://www.google.com/search?udm=28&q=kindle+paperwhite" \
   | jq '.mode_used, .quality.result_count, .quality.filtered, .quality.products[0:3]'
 # Google Shopping adapter: structured products in quality.products, drops by reason in quality.filtered
+
+uv run vasco fetch "https://www.vivareal.com.br/aluguel/sp/sao-carlos/" \
+  | jq '.mode_used, .quality.provider, .quality.page_type, .quality.result_count, .quality.listings[0]'
+# Real-estate adapter: normalized listings in quality.listings; routes vivareal/binda/barreto by domain,
+# list vs detail by URL (detail pages add the full photo gallery)
 ```

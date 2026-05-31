@@ -29,7 +29,7 @@ from . import bot_detect, browser
 from vasco import io as io_mod, quality as quality_mod
 from vasco.config import QualityCfg
 from vasco.converters import convert, pandoc, pdf
-from vasco.adapters import google_shopping, wayback, wikimedia, youtube
+from vasco.adapters import google_shopping, realestate, wayback, wikimedia, youtube
 from vasco.errors import FailureReason
 
 
@@ -1094,6 +1094,18 @@ async def _fetch_one_body(
             envelope.setdefault("warnings", []).append(
                 "raw_unsupported_for_google_shopping"
             )
+        if use_cache and cache is not None:
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        # browser_started=True so fetch_one / fetch_many close the pool.
+        return envelope, True, phases
+
+    # --- Real-estate shortcut (always uses the browser singleton) ----------
+    if realestate.is_realestate_url(url):
+        envelope = await realestate.fetch_realestate(url, deadline=deadline, cfg=cfg)
+        envelope["url_requested"] = url
+        envelope["url_canonical"] = normalized
+        if raw:
+            envelope.setdefault("warnings", []).append("raw_unsupported_for_realestate")
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         # browser_started=True so fetch_one / fetch_many close the pool.

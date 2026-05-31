@@ -111,6 +111,7 @@ def _page_type(url: str, provider: str) -> str:
 
 _LISTING_FIELDS = (
     "url",
+    "title",
     "type",
     "price",
     "condo_fee",
@@ -122,6 +123,7 @@ _LISTING_FIELDS = (
     "neighborhood",
     "city",
     "street",
+    "description",
     "amenities",
     "image",
     "images",
@@ -224,6 +226,7 @@ def _vivareal_item(item: dict) -> dict | None:
     offers = item.get("offers") or {}
     return _listing(
         url=url,
+        title=name or None,
         type=_VIVAREAL_TYPE_MAP.get(item.get("@type", ""), "Imóvel"),
         price=_as_int(offers.get("price")),
         condo_fee=_vivareal_condo_fee(offers.get("propertyValue")),
@@ -270,6 +273,7 @@ def _vivareal_detail(html: str) -> list[dict]:
     return [
         _listing(
             url=offers.get("url") or product.get("sku") or "",
+            title=name or None,
             type="Imóvel",
             price=_as_int(offers.get("price")),
             area=_as_int(area.group(1)) if area else None,
@@ -278,6 +282,7 @@ def _vivareal_detail(html: str) -> list[dict]:
             parking=int(parking.group(1)) if parking else None,
             neighborhood=nbh.group(1).strip() if nbh else None,
             city=city.group(1).strip() if city else None,
+            description=desc.strip() or None,
             images=_dedup(product.get("image")),
         )
     ]
@@ -336,9 +341,8 @@ def _render_markdown(listings: list[dict]) -> str:
             if s
         ]
         loc = ", ".join(s for s in (ln.get("neighborhood"), ln.get("city")) if s)
-        head = " · ".join(
-            x for x in (ln.get("type"), _fmt_price(ln), " · ".join(specs)) if x
-        )
+        lead = ln.get("title") or ln.get("type")
+        head = " · ".join(x for x in (lead, _fmt_price(ln), " · ".join(specs)) if x)
         line = f"{i}. {head}"
         if loc:
             line += f" — {loc}"

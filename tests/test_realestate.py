@@ -73,6 +73,8 @@ def test_vivareal_detail_parses_product() -> None:
     assert ln["city"] == "São Carlos"
     assert ln["url"].endswith("id-2889266573/")
     assert ln["image"] and ln["images"]
+    assert ln["title"] and "São Carlos" in ln["title"]
+    assert ln["description"] and "dormit" in ln["description"]
 
 
 def test_vivareal_list_returns_empty_without_itemlist() -> None:

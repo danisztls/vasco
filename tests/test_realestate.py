@@ -79,6 +79,8 @@ def test_vivareal_detail_parses_product() -> None:
     assert ln["city"] == "São Carlos"
     assert ln["url"].endswith("id-2889266573/")
     assert ln["image"] and ln["images"]
+    assert ln["title"] and "São Carlos" in ln["title"]
+    assert ln["description"] and "dormit" in ln["description"]
 
 
 def test_vivareal_list_returns_empty_without_itemlist() -> None:
@@ -99,6 +101,10 @@ def test_binda_list_parses_cards() -> None:
     )
     assert first["price"] == 900
     assert first["image"]
+    # Descriptive text lands in title/description, not type/neighborhood.
+    assert first["title"]
+    assert first["type"] == "Imóvel"
+    assert first["neighborhood"] is None
 
 
 def test_binda_detail_extracts_gallery() -> None:
@@ -126,6 +132,7 @@ def test_barreto_list_positional_specs() -> None:
     assert ln["neighborhood"] == "SAPUCAIA"
     assert ln["city"] == "Baixo Guandu"
     assert ln["url"].endswith("/imovel/partamentos-para-locacao/")
+    assert ln["title"]  # h1 heading
 
 
 def test_barreto_detail_labeled_specs_and_gallery() -> None:
@@ -147,6 +154,6 @@ def test_render_markdown() -> None:
         _fx("barreto_list.html"), "https://www.barretoimobiliaria.com/"
     )
     md = R._render_markdown(items)
-    assert "Apartamento" in md
+    assert "KITNET 01 QUARTO" in md  # leads with title when present
     assert "45m²" in md
     assert "Baixo Guandu" in md

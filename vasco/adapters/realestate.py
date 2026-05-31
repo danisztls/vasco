@@ -120,6 +120,7 @@ def _page_type(url: str, provider: str) -> str:
 
 _LISTING_FIELDS = (
     "url",
+    "title",
     "type",
     "price",
     "condo_fee",
@@ -131,6 +132,7 @@ _LISTING_FIELDS = (
     "neighborhood",
     "city",
     "street",
+    "description",
     "amenities",
     "image",
     "images",
@@ -233,6 +235,7 @@ def _vivareal_item(item: dict) -> dict | None:
     offers = item.get("offers") or {}
     return _listing(
         url=url,
+        title=name or None,
         type=_VIVAREAL_TYPE_MAP.get(item.get("@type", ""), "Imóvel"),
         price=_as_int(offers.get("price")),
         condo_fee=_vivareal_condo_fee(offers.get("propertyValue")),
@@ -279,6 +282,7 @@ def _vivareal_detail(html: str) -> list[dict]:
     return [
         _listing(
             url=offers.get("url") or product.get("sku") or "",
+            title=name or None,
             type="Imóvel",
             price=_as_int(offers.get("price")),
             area=_as_int(area.group(1)) if area else None,
@@ -287,6 +291,7 @@ def _vivareal_detail(html: str) -> list[dict]:
             parking=int(parking.group(1)) if parking else None,
             neighborhood=nbh.group(1).strip() if nbh else None,
             city=city.group(1).strip() if city else None,
+            description=desc.strip() or None,
             images=_dedup(product.get("image")),
         )
     ]
@@ -315,10 +320,13 @@ def _binda_list(html: str, base: str) -> list[dict]:
         amenities = card.select(".amenities .pull-right li")
         price_el = card.select_one(".label.price")
         thumb = img.get("src") if img else None
+        # Binda has no clean type/neighborhood; the card's address text is the
+        # listing title and the content block is a free-text description.
         out.append(
             _listing(
                 url=urljoin(base, link["href"]),
-                type=category or "Imóvel",
+                title=title.get_text(strip=True) if title else None,
+                type="Imóvel",
                 price=_brl_int(price_el.get_text(strip=True)) if price_el else None,
                 bedrooms=_as_int(amenities[0].get_text(strip=True))
                 if len(amenities) > 0
@@ -326,7 +334,7 @@ def _binda_list(html: str, base: str) -> list[dict]:
                 parking=_as_int(amenities[1].get_text(strip=True))
                 if len(amenities) > 1
                 else None,
-                neighborhood=title.get_text(strip=True) if title else None,
+                description=category,
                 images=_dedup([thumb]) if thumb else [],
             )
         )
@@ -435,6 +443,7 @@ def _barreto_list(html: str, base: str) -> list[dict]:
         out.append(
             _listing(
                 url=urljoin(base, link["href"]),
+                title=title.get_text(strip=True),
                 type=_barreto_type(card.get("class", [])),
                 neighborhood=re.sub(r"(?i)bairro:\s*", "", nbh).strip()
                 if nbh
@@ -449,6 +458,7 @@ def _barreto_list(html: str, base: str) -> list[dict]:
 
 def _barreto_detail(html: str, base: str, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
+    title = soup.select_one("h1.elementor-heading-title") or soup.select_one("h1")
     specs_texts = [
         e.get_text(strip=True) for e in soup.select(".elementor-icon-list-text")
     ]
@@ -462,6 +472,7 @@ def _barreto_detail(html: str, base: str, url: str) -> list[dict]:
     return [
         _listing(
             url=url,
+            title=title.get_text(strip=True) if title else None,
             type="Imóvel",
             neighborhood=re.sub(r"(?i)bairro:\s*", "", nbh).strip() if nbh else None,
             images=gallery,
@@ -508,9 +519,8 @@ def _render_markdown(listings: list[dict]) -> str:
             if s
         ]
         loc = ", ".join(s for s in (ln.get("neighborhood"), ln.get("city")) if s)
-        head = " · ".join(
-            x for x in (ln.get("type"), _fmt_price(ln), " · ".join(specs)) if x
-        )
+        lead = ln.get("title") or ln.get("type")
+        head = " · ".join(x for x in (lead, _fmt_price(ln), " · ".join(specs)) if x)
         line = f"{i}. {head}"
         if loc:
             line += f" — {loc}"

@@ -3006,7 +3006,6 @@ source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "brotli" },
-    { name = "camoufox", extra = ["geoip"] },
     { name = "ddgs" },
     { name = "httpx", extra = ["http2"] },
     { name = "mcp" },
@@ -3022,6 +3021,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "camoufox", extra = ["geoip"] },
+]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -3040,7 +3042,7 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "brotli", specifier = ">=1.1" },
-    { name = "camoufox", extras = ["geoip"], specifier = ">=0.4" },
+    { name = "camoufox", extras = ["geoip"], marker = "extra == 'browser'", specifier = ">=0.4" },
     { name = "ddgs", specifier = ">=9.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.0" },
@@ -3057,7 +3059,7 @@ requires-dist = [
     { name = "yt-dlp", specifier = ">=2024.10" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["dev", "semantic"]
+provides-extras = ["dev", "semantic", "browser"]
 
 [package.metadata.requires-dev]
 dev = [

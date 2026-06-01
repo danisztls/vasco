@@ -326,3 +326,23 @@ def test_refresh_flag_writes_but_ignores_read(
         assert "second" in (third.get("markdown") or "").lower()
     finally:
         cache.close()
+
+
+def test_browser_tier_unavailable_degrades_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no browser server running, a browser-tier fetch fails as
+    BROWSER_UNAVAILABLE rather than raising — the real BrowserPool is used
+    (not the NopPool stub), pointed at a socket that doesn't exist."""
+    monkeypatch.setattr(
+        browser_mod, "_socket_path", lambda: str(tmp_path / "no-server.sock")
+    )
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+
+    env = asyncio.run(
+        fetch_mod.fetch_one(
+            "https://example.com", mode="browser", use_cache=False, deadline=10.0
+        )
+    )
+    assert "failure" in env
+    assert env["failure"]["reason"] == "browser_unavailable"

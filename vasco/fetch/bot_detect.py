@@ -131,6 +131,8 @@ def classify(
             return FailureReason.TIMEOUT
         if hint == "bot_blocked":
             return FailureReason.BLOCKED_BOT
+        if hint == "browser_unavailable":
+            return FailureReason.BROWSER_UNAVAILABLE
         if hint == "dns_fail":
             return FailureReason.DNS_FAIL
         # Default to DNS_FAIL when we got literally nothing.

@@ -44,7 +44,7 @@ from vasco.adapters import (
     wikimedia,
     youtube,
 )
-from vasco.errors import FailureReason
+from vasco.errors import BrowserServerUnavailable, FailureReason
 
 
 def _supported_accept_encoding() -> str:
@@ -278,6 +278,12 @@ async def _browser_fetch(
         )
     except asyncio.TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
+    except BrowserServerUnavailable:
+        # The browser tier is a separate peer service that isn't running. Don't
+        # raise — return a sentinel so the auto chain escalates (e.g. to wayback)
+        # like any other browser-tier failure; classify() maps it to
+        # BROWSER_UNAVAILABLE if the whole chain ultimately fails.
+        return "", 0, {"_failure_hint": "browser_unavailable"}
     except Exception as exc:
         if _looks_like_timeout(exc):
             return "", 0, {"_failure_hint": "timeout"}
@@ -430,6 +436,9 @@ _FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
     # Scraper-rot: fixed by a code change (or a site reverting), so expire fast
     # — a 24h pin would keep serving the failure long after the adapter is fixed.
     FailureReason.PARSE_FAILED: 0.33,
+    # Browser server not running: transient/operational, heals as soon as the
+    # peer service is back — retry soon rather than pinning the failure.
+    FailureReason.BROWSER_UNAVAILABLE: 0.33,
 }
 
 

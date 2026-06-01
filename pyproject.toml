@@ -17,7 +17,6 @@ dependencies = [
     "ddgs>=9.0",
     "trafilatura>=2.0",
     "beautifulsoup4>=4.12",  # CSS-selector parsing for the realestate adapter
-    "camoufox[geoip]>=0.4",
     "rank-bm25>=0.2.2",
     "tiktoken>=0.7",
     "yt-dlp>=2024.10",
@@ -39,6 +38,13 @@ dev = [
 ]
 semantic = [
     "sentence-transformers>=3.0",
+]
+# Camoufox (and its Playwright/Firefox bundle) is needed ONLY by the browser
+# server (`vasco browser-server`). The fetch client proxies to that peer service
+# and never launches a browser in-process, so core `vasco` doesn't depend on it.
+# Install on the host that runs the browser server: `uv tool install '.[browser]'`.
+browser = [
+    "camoufox[geoip]>=0.4",
 ]
 
 [dependency-groups]

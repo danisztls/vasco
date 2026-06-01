@@ -6,6 +6,7 @@ Firefox — what we care about is which kwargs are passed.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -108,3 +109,93 @@ async def test_user_data_dir_expands_xdg_data_home_fallback(
     [cm] = _RecordingCM.instances
     expected = str(Path.home() / ".local" / "share" / "vasco" / "profile")
     assert cm.kwargs["user_data_dir"] == expected
+
+
+# ── Tracker-blocking request interception (fetch_page) ──────────────
+
+
+class _FakeResponse:
+    status = 200
+
+    async def all_headers(self) -> dict[str, str]:
+        return {}
+
+
+class _FakeRoute:
+    """Records the action the route handler takes for a given request URL."""
+
+    def __init__(self, url: str) -> None:
+        self.request = type("Req", (), {"url": url})()
+        self.action: str | None = None
+
+    async def abort(self) -> None:
+        self.action = "abort"
+
+    async def continue_(self) -> None:
+        self.action = "continue"
+
+
+class _FakePage:
+    def __init__(self) -> None:
+        self.routes: list[tuple[str, Any]] = []
+        self.closed = False
+
+    async def route(self, pattern: str, handler: Any) -> None:
+        self.routes.append((pattern, handler))
+
+    async def goto(self, url: str, **_: Any) -> _FakeResponse:
+        return _FakeResponse()
+
+    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def content(self) -> str:
+        return "<html>ok</html>"
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self, page: _FakePage) -> None:
+        self._page = page
+
+    async def new_page(self) -> _FakePage:
+        return self._page
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_installs_route_and_blocks_third_party_tracker() -> None:
+    page = _FakePage()
+    html, status, _ = await browser_mod.fetch_page(
+        _FakeBrowser(page),
+        "https://example.com",
+        deadline_monotonic=time.monotonic() + 5,
+        netblock=frozenset({"tracker.com"}),
+    )
+    assert (html, status) == ("<html>ok</html>", 200)
+    assert len(page.routes) == 1
+    pattern, handler = page.routes[0]
+    assert pattern == "**/*"
+
+    # Drive the captured handler: third-party tracker aborted, first-party passes.
+    tracker = _FakeRoute("https://tracker.com/t.js")
+    await handler(tracker)
+    assert tracker.action == "abort"
+
+    first_party = _FakeRoute("https://example.com/app.js")
+    await handler(first_party)
+    assert first_party.action == "continue"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_no_route_when_netblock_empty_or_none() -> None:
+    for netblock in (frozenset(), None):
+        page = _FakePage()
+        await browser_mod.fetch_page(
+            _FakeBrowser(page),
+            "https://example.com",
+            deadline_monotonic=time.monotonic() + 5,
+            netblock=netblock,
+        )
+        assert page.routes == []

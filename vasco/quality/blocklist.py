@@ -25,6 +25,8 @@ except Exception:  # pragma: no cover
 
 _UBLACKLIST_RE = re.compile(r"^\*://\*?\.?([^/\*]+)")
 _COMMENT_RE = re.compile(r"^\s*[#!]|^\s*$")
+# Sink addresses used by hosts-format lists ("0.0.0.0 ads.example.com").
+_SINK_IPS = frozenset({"0.0.0.0", "127.0.0.1", "::", "::1"})
 
 _blocklist: frozenset[str] | None = None
 
@@ -37,8 +39,8 @@ def _cache_dir() -> Path:
     return Path(xdg) / "vasco"
 
 
-def _consolidated_path() -> Path:
-    return _cache_dir() / "blocklist.txt"
+def _consolidated_path(name: str = "blocklist.txt") -> Path:
+    return _cache_dir() / name
 
 
 def _parse_line(line: str) -> str | None:
@@ -46,6 +48,11 @@ def _parse_line(line: str) -> str | None:
     line = line.strip()
     if not line or _COMMENT_RE.match(line):
         return None
+    # hosts format: "0.0.0.0 ads.example.com" (an optional trailing comment is
+    # tolerated). Reduce to the bare domain, then fall through to validation.
+    parts = line.split()
+    if len(parts) >= 2 and parts[0] in _SINK_IPS:
+        line = parts[1]
     # uBlacklist pattern
     m = _UBLACKLIST_RE.match(line)
     if m:
@@ -119,13 +126,20 @@ def _read_consolidated(path: Path) -> frozenset[str]:
     return frozenset(line.strip() for line in text.splitlines() if line.strip())
 
 
-def load_blocklist(sources: list[str | Path]) -> frozenset[str]:
-    """Load blocklist from sources. Uses consolidated cache when fresh."""
+def load_blocklist(
+    sources: list[str | Path], *, consolidated_name: str = "blocklist.txt"
+) -> frozenset[str]:
+    """Load blocklist from sources. Uses consolidated cache when fresh.
+
+    `consolidated_name` selects the on-disk consolidation file so independent
+    lists (e.g. the quality blocklist vs. the network request blocklist) don't
+    clobber each other's cache.
+    """
     if not sources:
         return frozenset()
 
     has_remote = any(_is_url(str(s)) for s in sources)
-    consolidated = _consolidated_path()
+    consolidated = _consolidated_path(consolidated_name)
 
     if has_remote and not _needs_refresh(consolidated):
         return _read_consolidated(consolidated)
@@ -138,12 +152,14 @@ def load_blocklist(sources: list[str | Path]) -> frozenset[str]:
     return frozenset(domains)
 
 
-def refresh(sources: list[str | Path]) -> frozenset[str]:
+def refresh(
+    sources: list[str | Path], *, consolidated_name: str = "blocklist.txt"
+) -> frozenset[str]:
     """Force re-download of remote sources and rebuild the consolidated file."""
-    consolidated = _consolidated_path()
+    consolidated = _consolidated_path(consolidated_name)
     if consolidated.is_file():
         consolidated.unlink()
-    return load_blocklist(sources)
+    return load_blocklist(sources, consolidated_name=consolidated_name)
 
 
 def get_blocklist(paths: list[str | Path] | None = None) -> frozenset[str]:

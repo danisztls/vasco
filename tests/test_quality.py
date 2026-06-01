@@ -141,6 +141,21 @@ class TestBlocklist:
     def test_parse_inline_comment(self):
         assert blocklist._parse_line("example.com # known spam") == "example.com"
 
+    def test_parse_hosts_format(self):
+        assert blocklist._parse_line("0.0.0.0 ads.example.com") == "ads.example.com"
+        assert (
+            blocklist._parse_line("127.0.0.1 track.example.net") == "track.example.net"
+        )
+        assert blocklist._parse_line("::1 beacon.example.org") == "beacon.example.org"
+        # trailing comment after the host entry is tolerated
+        assert blocklist._parse_line("0.0.0.0 ad.x.com # ads") == "ad.x.com"
+
+    def test_load_hosts_format_list(self, tmp_path: Path):
+        f = tmp_path / "hosts.txt"
+        f.write_text("# hosts\n0.0.0.0 ads.com\n127.0.0.1 track.io\nplain.net\n")
+        bl = blocklist.load_blocklist([f])
+        assert bl == frozenset({"ads.com", "track.io", "plain.net"})
+
     def test_parse_rejects_junk(self):
         assert blocklist._parse_line("not a domain") is None
         assert blocklist._parse_line("https://example.com") is None

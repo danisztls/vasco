@@ -20,6 +20,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..cache import registered_domain
+from .netblock import load_netblock, should_block
+
 try:  # pragma: no cover - camoufox is an optional dep at import time.
     from camoufox.async_api import AsyncCamoufox
 except Exception:  # pragma: no cover
@@ -72,6 +75,32 @@ async def _extract_headers(response: Any) -> dict[str, str]:
             return {}
 
 
+async def _install_netblock_route(
+    page: Any, url: str, netblock: frozenset[str]
+) -> None:
+    """Install a `page.route` handler that aborts third-party tracker requests.
+
+    First-party requests (same registered domain as `url`) always pass, so a
+    page's own resources are never blocked. The handler is an O(1) set membership
+    test; interception errors are swallowed so they can never kill a fetch.
+    """
+    page_domain = registered_domain(url)
+
+    async def _route(route: Any) -> None:
+        try:
+            if should_block(route.request.url, page_domain, netblock):
+                await route.abort()
+            else:
+                await route.continue_()
+        except Exception:
+            try:
+                await route.continue_()
+            except Exception:
+                pass
+
+    await page.route("**/*", _route)
+
+
 async def fetch_page(
     browser_or_context: Any,
     url: str,
@@ -79,12 +108,15 @@ async def fetch_page(
     deadline_monotonic: float,
     mobile: bool = False,
     is_persistent: bool = False,
+    netblock: frozenset[str] | None = None,
 ) -> tuple[str, int, dict[str, str]]:
     """Open a page, navigate to `url`, and return (html, status, headers).
 
     Honours `deadline_monotonic` (an absolute ``time.monotonic()`` value) for
     both the navigation and the networkidle settle. Shared by the in-process
     `BrowserPool` and the socket `browser_server` so the two behave identically.
+    When `netblock` is non-empty, third-party tracker/ad requests are aborted via
+    a `page.route` handler.
     """
     context = None
     if mobile and not is_persistent:
@@ -100,6 +132,8 @@ async def fetch_page(
             await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
             await page.set_viewport_size(_MOBILE_VIEWPORT)
     try:
+        if netblock:
+            await _install_netblock_route(page, url, netblock)
         remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
         if remaining_ms <= 0:
             raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
@@ -139,11 +173,16 @@ class BrowserPool:
         headless: bool = True,
         locale: str = "en-US",
         user_data_dir: str = "",
+        block_trackers: bool = True,
+        network_blocklist_paths: tuple[str, ...] = (),
     ) -> None:
         self._headless = headless
         self._locale = locale
         self._user_data_dir = _expand_profile_dir(user_data_dir)
         self._is_persistent = bool(self._user_data_dir)
+        self._block_trackers = block_trackers
+        self._network_blocklist_paths = network_blocklist_paths
+        self._netblock: frozenset[str] | None = None
         self._lock = asyncio.Lock()
         self._cm: Any | None = None
         self._browser: Any | None = None
@@ -172,6 +211,15 @@ class BrowserPool:
             if AsyncCamoufox is None:
                 raise RuntimeError(
                     "camoufox is not installed; cannot start browser tier"
+                )
+            # Resolve the tracker blocklist once, off the event loop (a configured
+            # remote list may consolidate; the bundled default is a quick read).
+            # Only the local path needs it — a remote browser server applies its own.
+            if self._netblock is None:
+                self._netblock = await asyncio.to_thread(
+                    load_netblock,
+                    self._block_trackers,
+                    self._network_blocklist_paths,
                 )
             kwargs: dict[str, Any] = {
                 "headless": self._headless,
@@ -232,6 +280,7 @@ class BrowserPool:
             deadline_monotonic=deadline_monotonic,
             mobile=mobile,
             is_persistent=self._is_persistent,
+            netblock=self._netblock,
         )
 
     async def close(self) -> None:
@@ -277,17 +326,23 @@ def get_browser(cfg: Any | None = None) -> BrowserPool:
         headless = True
         locale = "en-US"
         user_data_dir = ""
+        block_trackers = True
+        network_blocklist_paths: tuple[str, ...] = ()
         if cfg is not None:
             try:
                 headless = bool(cfg.browser.headless)
                 locale = str(cfg.browser.locale)
                 user_data_dir = str(cfg.browser.user_data_dir or "")
+                block_trackers = bool(cfg.browser.block_trackers)
+                network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
             except Exception:
                 pass
         _pool = BrowserPool(
             headless=headless,
             locale=locale,
             user_data_dir=user_data_dir,
+            block_trackers=block_trackers,
+            network_blocklist_paths=network_blocklist_paths,
         )
     return _pool
 

@@ -37,16 +37,26 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
-
-from bs4 import BeautifulSoup
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
+if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
+    from bs4 import BeautifulSoup
+
 log = logging.getLogger(__name__)
+
+
+def _soup(html: str) -> BeautifulSoup:
+    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
+    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
+    from bs4 import BeautifulSoup
+
+    return BeautifulSoup(html, "html.parser")
+
 
 _GALLERY_CAP: int = 6
 
@@ -180,7 +190,7 @@ def _strip_html(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     text = re.sub(r"(?i)<br\s*/?>", "\n", value)
-    text = BeautifulSoup(text, "html.parser").get_text()
+    text = _soup(text).get_text()
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text or None
 
@@ -245,7 +255,7 @@ def _parse_next_data(html: str) -> list[dict[str, Any]]:
     unparseable (scraper-rot); an empty-but-present ``ads`` array returns ``[]``
     (a genuinely empty result page).
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     tag = soup.find("script", id="__NEXT_DATA__")
     if not (tag and tag.string):
         raise AdapterParseError(
@@ -268,7 +278,7 @@ def _extract_detail_ad(html: str) -> dict[str, Any] | None:
     The JSON lives in the tag's ``data-json`` attribute (HTML-entity-escaped);
     BeautifulSoup returns it already decoded.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     tag = soup.find("script", id="initial-data")
     if not tag:
         return None
@@ -284,7 +294,7 @@ def _extract_detail_ad(html: str) -> dict[str, Any] | None:
 
 
 def _jsonld_objects(html: str) -> list[dict]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     out: list[dict] = []
     for tag in soup.find_all("script", type="application/ld+json"):
         if not tag.string:

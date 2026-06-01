@@ -9,8 +9,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
-import tldextract
-
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
 
@@ -267,7 +265,20 @@ def normalize_url(url: str) -> str:
 # disables network fetches (deterministic, offline-safe) and `cache_dir=None`
 # disables disk caching. The eTLD+1 (registered domain) is the base of the
 # strategy key, so we want a real PSL — not a hand-rolled second-level guess.
-_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+_TLD_EXTRACT = None  # lazily built on first registered_domain() call
+
+
+def _tld_extract():
+    """Return the process-wide TLDExtract singleton, importing tldextract on
+    first use. Deferring the import (~56ms) keeps importing this module cheap —
+    it's pulled in by nearly the whole codebase, but the PSL lookup is only
+    needed on real fetches/coordination, not at CLI import or ``--help``."""
+    global _TLD_EXTRACT
+    if _TLD_EXTRACT is None:
+        import tldextract
+
+        _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+    return _TLD_EXTRACT
 
 
 def registered_domain(url: str) -> str:
@@ -282,7 +293,7 @@ def registered_domain(url: str) -> str:
     raw = url.strip()
     if "://" not in raw:
         raw = "http://" + raw
-    ext = _TLD_EXTRACT(raw)
+    ext = _tld_extract()(raw)
     if ext.domain and ext.suffix:
         return f"{ext.domain}.{ext.suffix}".lower()
     host = (urlsplit(raw).hostname or "").lower()

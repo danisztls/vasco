@@ -43,16 +43,26 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
-
-from bs4 import BeautifulSoup
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
+if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
+    from bs4 import BeautifulSoup
+
 log = logging.getLogger(__name__)
+
+
+def _soup(html: str) -> BeautifulSoup:
+    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
+    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
+    from bs4 import BeautifulSoup
+
+    return BeautifulSoup(html, "html.parser")
+
 
 _GALLERY_CAP: int = 6
 _MLB_RE = re.compile(r"MLB-?(\d+)", re.IGNORECASE)
@@ -205,7 +215,7 @@ def _jsonld_products(html: str) -> list[dict[str, Any]]:
     Search pages wrap many Products in one ``@graph``; product pages have a
     single top-level (or listed) Product. Order is preserved.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     out: list[dict[str, Any]] = []
     for tag in soup.find_all("script", type="application/ld+json"):
         if not tag.string:
@@ -322,7 +332,7 @@ def _spec_attributes(soup: BeautifulSoup) -> dict[str, str]:
 def _pdp_extras(html: str) -> dict[str, Any]:
     """Best-effort display fields the PDP JSON-LD omits. Resilient by design:
     any missing/moved selector simply yields nothing rather than failing."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     extras: dict[str, Any] = {}
 
     subtitle = _text(soup, ".ui-pdp-subtitle")

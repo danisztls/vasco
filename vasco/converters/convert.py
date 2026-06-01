@@ -10,14 +10,32 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from typing import Any
 from urllib.parse import urljoin
 
-try:  # pragma: no cover - trafilatura is an optional dep at import time.
-    import trafilatura
-    from trafilatura.metadata import extract_metadata
-except Exception:  # pragma: no cover
-    trafilatura = None  # type: ignore[assignment]
-    extract_metadata = None  # type: ignore[assignment]
+# trafilatura is imported lazily: it pulls htmldate → dateparser, whose
+# timezone-parser build costs ~430ms at import time. Deferring it to the first
+# `html_to_markdown` call keeps importing this module (and the whole fetch
+# stack) cheap, so cache-hit / PDF fetches that never convert pay nothing.
+_UNSET: Any = object()
+trafilatura: Any = _UNSET
+extract_metadata: Any = _UNSET
+
+
+def _ensure_trafilatura() -> None:
+    """Resolve the trafilatura globals on first use; set them to None if the
+    optional dep is missing (graceful-degradation path below)."""
+    global trafilatura, extract_metadata
+    if trafilatura is _UNSET:
+        try:  # pragma: no cover - trafilatura is an optional dep at import time.
+            import trafilatura as _t
+            from trafilatura.metadata import extract_metadata as _em
+
+            trafilatura = _t
+            extract_metadata = _em
+        except Exception:  # pragma: no cover
+            trafilatura = None
+            extract_metadata = None
 
 
 _SCRIPT_STYLE_RE = re.compile(
@@ -107,6 +125,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     """
     warnings: list[str] = []
 
+    _ensure_trafilatura()
     if trafilatura is None:
         # Dependency missing — surface a graceful empty result.
         warnings.append("trafilatura_unavailable")

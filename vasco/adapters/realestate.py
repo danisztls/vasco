@@ -31,16 +31,26 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlsplit
-
-from bs4 import BeautifulSoup
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
+if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
+    from bs4 import BeautifulSoup
+
 log = logging.getLogger(__name__)
+
+
+def _soup(html: str) -> BeautifulSoup:
+    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
+    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
+    from bs4 import BeautifulSoup
+
+    return BeautifulSoup(html, "html.parser")
+
 
 _GALLERY_CAP: int = 4
 
@@ -187,7 +197,7 @@ def _dedup(urls: Any, limit: int = _GALLERY_CAP) -> list[str]:
 
 
 def _jsonld_objects(html: str) -> list[dict]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     out: list[dict] = []
     for tag in soup.find_all("script", type="application/ld+json"):
         if not tag.string:

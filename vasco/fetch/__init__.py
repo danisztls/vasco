@@ -37,6 +37,7 @@ from vasco.envelope import (
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import (
     google_shopping,
+    mercadolivre,
     olx,
     realestate,
     wayback,
@@ -1192,6 +1193,33 @@ async def _fetch_one_body(
             normalized=normalized,
             raw=raw,
             service="olx",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        return envelope, state["browser_started"], phases
+
+    # --- MercadoLivre route (search + product; HTML via the chain) ----------
+    if mercadolivre.is_mercadolivre_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await mercadolivre.fetch_mercadolivre(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="mercadolivre",
             use_cache=use_cache,
             cache=cache,
             cfg=cfg,

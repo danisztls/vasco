@@ -1,0 +1,28 @@
+# Paywall / metering SaaS vendor fingerprints.
+#
+# Used by vasco.quality.paywall to DETECT (not bypass) paywalls: when one of
+# these strings appears in a page's raw HTML, the page is likely served by a
+# subscription/metering vendor and its content may be truncated. This is a
+# site-level heuristic, not a guarantee the specific URL is gated.
+#
+# Seeded from the block_regex + manifest vendor domains of
+# magnolia1234/bypass-paywalls-chrome-clean. One fingerprint per line; lines
+# starting with # are comments. Entries flow through the shared blocklist loader
+# (vasco.quality.blocklist), so they must be valid domains; non-domain script
+# markers (amp-access, amp-subscriptions) are added in paywall.py.
+
+# Dedicated paywall / subscription / metering platforms only. General-purpose
+# analytics/CDP/tag managers (BlueConic, Cxense, Mather, Ensighten) are
+# deliberately excluded: they appear on plenty of non-gated sites and would
+# inflate false positives. The bar here is "presence strongly implies metering".
+piano.io
+tinypass.com
+poool.fr
+zephr.com
+qiota.com
+pelcro.com
+wallkit.net
+flip-pay.com
+evolok.net
+onecount.net
+tribdss.com

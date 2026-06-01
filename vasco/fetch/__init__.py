@@ -1376,6 +1376,7 @@ async def _fetch_one_body(
                     cfg=quality_cfg,
                     existing_quality=meta.get("quality", {}),
                     metadata=meta,
+                    raw_html=html,
                 )
                 meta["quality"].update(quality_scores)
             envelope = _success_envelope(

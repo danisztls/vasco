@@ -4,8 +4,16 @@ Documentation=https://github.com/dansouza/vasco
 
 [Service]
 ExecStart=%h/.local/bin/vasco browser-server
-Restart=on-failure
+# always (not on-failure): a wedge that exits 0, or a hard-kill recovery, should
+# still bring the server back.
+Restart=always
 RestartSec=5
+# Backstop the Firefox memory creep (Camoufox doesn't GC like Chromium). The
+# server also recycles its browser every N pages; these caps ensure a runaway is
+# reclaimed/OOM-restarted rather than swapping the host. KillMode=control-group
+# (the default) tears down the whole camoufox process tree on stop/restart.
+MemoryHigh=1500M
+MemoryMax=2G
 
 [Install]
 WantedBy=default.target

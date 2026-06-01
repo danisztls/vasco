@@ -37,6 +37,28 @@ _MOBILE_USER_AGENT = (
 )
 _MOBILE_VIEWPORT = {"width": 393, "height": 852}
 
+# --- Concurrency + lifecycle limits ------------------------------------------
+# Camoufox's patched Firefox deadlocks when `new_page()`/`new_context()` run
+# concurrently on one shared browser (daijro/camoufox#279, #553): the loser's
+# `goto` never resolves while the process stays connected — the silent wedge.
+# `_CREATE_LOCK` serializes *creation only* (navigation stays concurrent) and is
+# the root-cause fix; `_PAGE_SEMAPHORE` bounds how many pages are open at once so
+# a burst can't spike Firefox memory (which it never reclaims — camoufox#245).
+_MAX_CONCURRENT_PAGES = 3
+_CREATE_LOCK = asyncio.Lock()
+_PAGE_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
+
+# Graceful browser close is wrapped in this timeout; a wedged browser's close can
+# hang forever and (held under the supervisor lock) deadlock the whole server, so
+# on timeout we SIGKILL the process tree instead.
+_CLOSE_TIMEOUT = 10.0
+
+# Recycle the browser after this many page handouts. Firefox doesn't GC like
+# Chromium under a long-lived Playwright session, so memory creeps; a periodic
+# relaunch bounds it. An in-flight page torn down by a recycle is retried by
+# `_serve_fetch`'s disconnect path, same as any mid-flight browser death.
+_RECYCLE_AFTER_PAGES = 150
+
 
 # --- Playwright Firefox driver patch -------------------------------------
 # Playwright's Firefox PageError dispatcher reads `pageError.location.url`
@@ -151,40 +173,44 @@ async def _serve_fetch(
     suspend/resume cycle leaves the driver pipe dead, after which every fetch
     fails until the process restarts. We detect that here and relaunch in-place.
     """
-    last_exc: Exception | None = None
-    for attempt in (0, 1):
-        browser = await supervisor.get_browser()
-        try:
-            result = await _fetch_page(
-                browser,
-                url,
-                mobile=mobile,
-                timeout=timeout,
-                is_persistent=supervisor.is_persistent,
-                netblock=netblock,
-            )
-        except Exception as exc:
-            last_exc = exc
-            if attempt == 0 and _is_disconnect(exc):
-                log.warning("browser fetch failed (%s) — relaunching browser", exc)
-                await supervisor.mark_dead()
-                continue
-            if attempt == 0 and _is_timeout(exc):
-                streak = supervisor.note_timeout()
-                if streak >= _TIMEOUT_RELAUNCH_THRESHOLD:
-                    log.warning(
-                        "browser timed out %d× consecutively — wedged, relaunching",
-                        streak,
-                    )
+    # Bound concurrent open pages: with the creation lock this is defense-in-depth
+    # against memory spikes, not the deadlock fix. Acquired around the whole
+    # attempt loop so a relaunch+retry still counts as one in-flight page.
+    async with _PAGE_SEMAPHORE:
+        last_exc: Exception | None = None
+        for attempt in (0, 1):
+            browser = await supervisor.get_browser()
+            try:
+                result = await _fetch_page(
+                    browser,
+                    url,
+                    mobile=mobile,
+                    timeout=timeout,
+                    is_persistent=supervisor.is_persistent,
+                    netblock=netblock,
+                )
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0 and _is_disconnect(exc):
+                    log.warning("browser fetch failed (%s) — relaunching browser", exc)
                     await supervisor.mark_dead()
-                    supervisor.reset_timeouts()
                     continue
-            raise
-        else:
-            supervisor.reset_timeouts()
-            return result
-    assert last_exc is not None
-    raise last_exc
+                if attempt == 0 and _is_timeout(exc):
+                    streak = supervisor.note_timeout()
+                    if streak >= _TIMEOUT_RELAUNCH_THRESHOLD:
+                        log.warning(
+                            "browser timed out %d× consecutively — wedged, relaunching",
+                            streak,
+                        )
+                        await supervisor.mark_dead()
+                        supervisor.reset_timeouts()
+                        continue
+                raise
+            else:
+                supervisor.reset_timeouts()
+                return result
+        assert last_exc is not None
+        raise last_exc
 
 
 async def _handle_client(
@@ -281,18 +307,22 @@ async def fetch_page(
     handler.
     """
     context = None
-    if mobile and not is_persistent:
-        context = await browser_or_context.new_context(
-            user_agent=_MOBILE_USER_AGENT,
-            viewport=_MOBILE_VIEWPORT,
-            device_scale_factor=3,
-        )
-        page = await context.new_page()
-    else:
-        page = await browser_or_context.new_page()
-        if mobile:
-            await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
-            await page.set_viewport_size(_MOBILE_VIEWPORT)
+    # Serialize page/context creation: concurrent `new_page`/`new_context` on one
+    # shared Camoufox deadlock it. The lock is held only for creation — navigation
+    # below runs concurrently, so throughput is unaffected.
+    async with _CREATE_LOCK:
+        if mobile and not is_persistent:
+            context = await browser_or_context.new_context(
+                user_agent=_MOBILE_USER_AGENT,
+                viewport=_MOBILE_VIEWPORT,
+                device_scale_factor=3,
+            )
+            page = await context.new_page()
+        else:
+            page = await browser_or_context.new_page()
+            if mobile:
+                await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
+                await page.set_viewport_size(_MOBILE_VIEWPORT)
     try:
         if netblock:
             await _install_netblock_route(page, url, netblock)
@@ -305,6 +335,11 @@ async def fetch_page(
 
         remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
         if remaining_ms > 0:
+            # networkidle is load-bearing for the JS-heavy structured adapters
+            # (e.g. MercadoLivre injects its JSON-LD @graph after hydration), so we
+            # let it run to the tier deadline rather than capping it short. The
+            # auto-chain's browser budget (~8s) already bounds it; the concurrency
+            # semaphore bounds how many pages settle at once.
             try:
                 await page.wait_for_load_state("networkidle", timeout=remaining_ms)
             except Exception:
@@ -379,6 +414,55 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     return kwargs, is_persistent
 
 
+def _kill_browser_processes() -> None:
+    """SIGKILL the browser subprocess tree when a graceful close hangs/errors.
+
+    Best-effort and dependency-free (Linux ``/proc``, no psutil): walk ``/proc``
+    to find every descendant of this process and SIGKILL it. The browser server
+    is the only thing here that spawns subprocesses, so its descendants are
+    exactly the Playwright node driver + ``camoufox-bin`` + content-process tree.
+    All errors are swallowed — this is a last-resort reclaim after a wedged close.
+    """
+    import signal
+
+    self_pid = os.getpid()
+    try:
+        pids = [int(e) for e in os.listdir("/proc") if e.isdigit()]
+    except OSError:
+        return
+
+    children: dict[int, list[int]] = {}
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as fh:
+                data = fh.read()
+            # comm (field 2) is parenthesized and may contain spaces/')'; the ppid
+            # is the 2nd whitespace token after the final ')'.
+            ppid = int(data[data.rfind(b")") + 2 :].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(pid)
+
+    descendants: list[int] = []
+    queue = list(children.get(self_pid, []))
+    seen: set[int] = set()
+    while queue:
+        pid = queue.pop()
+        if pid in seen or pid == self_pid:
+            continue
+        seen.add(pid)
+        descendants.append(pid)
+        queue.extend(children.get(pid, []))
+
+    for pid in descendants:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    if descendants:
+        log.warning("force-killed %d wedged browser process(es)", len(descendants))
+
+
 class _BrowserSupervisor:
     """Owns the long-lived Camoufox browser and relaunches it when it dies.
 
@@ -396,6 +480,7 @@ class _BrowserSupervisor:
         self._browser: Any | None = None
         self._lock = asyncio.Lock()
         self._consecutive_timeouts = 0
+        self._handouts = 0  # pages served since the last (re)launch; drives recycle
 
     def note_timeout(self) -> int:
         """Record a goto timeout; return the current consecutive-timeout streak."""
@@ -447,9 +532,14 @@ class _BrowserSupervisor:
     async def _close_locked(self) -> None:
         if self._cm is not None:
             try:
-                await self._cm.__aexit__(None, None, None)
+                await asyncio.wait_for(
+                    self._cm.__aexit__(None, None, None), timeout=_CLOSE_TIMEOUT
+                )
             except Exception:
-                pass
+                # Graceful close hung or errored — force-kill the browser tree so a
+                # wedged close can't deadlock the supervisor lock or leak content
+                # processes (~930MB each).
+                _kill_browser_processes()
         self._cm = None
         self._browser = None
 
@@ -458,18 +548,34 @@ class _BrowserSupervisor:
             await self._launch_locked()
 
     async def get_browser(self) -> Any:
-        if self._alive():
+        # Fast path: alive and not due for recycle. Fully synchronous (no await),
+        # so concurrent callers can't interleave the handout increment.
+        if self._alive() and self._handouts < _RECYCLE_AFTER_PAGES:
+            self._handouts += 1
             return self._browser
         async with self._lock:
-            if self._alive():
+            if self._alive() and self._handouts < _RECYCLE_AFTER_PAGES:
+                self._handouts += 1
                 return self._browser
-            log.warning("browser dead/disconnected — relaunching")
+            if self._alive() and self._handouts >= _RECYCLE_AFTER_PAGES:
+                log.info("recycling browser after %d pages", self._handouts)
+            else:
+                log.warning("browser dead/disconnected — relaunching")
             await self._close_locked()
             await self._launch_locked()
+            self._handouts = 1
             return self._browser
 
     async def mark_dead(self) -> None:
+        # De-storm: a burst of concurrent failures all call mark_dead, but only
+        # the first should relaunch. Capture the browser we observed; if another
+        # coroutine already swapped it (cm changed or cleared) by the time we hold
+        # the lock, this is a no-op — which also stops a *late* mark_dead from
+        # tearing down a freshly relaunched browser (the re-wedge loop).
+        stale = self._cm
         async with self._lock:
+            if self._cm is None or self._cm is not stale:
+                return
             await self._close_locked()
 
     async def close(self) -> None:

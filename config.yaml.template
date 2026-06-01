@@ -50,3 +50,7 @@
 #   model: deepseek-v4-flash
 #   base_url: https://api.deepseek.com/v1   # any OpenAI-compatible chat endpoint
 #   api_key: ""                 # or set DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+
+# service:                       # vascod (`vasco serve`) coordination knobs
+#   single_flight: true         # collapse concurrent identical fetches into one (default on)
+#   rate_limit_rps: 0.0         # max network fetches/sec per registered domain; 0 disables

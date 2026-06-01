@@ -1,0 +1,17 @@
+[Unit]
+Description=Vasco resident daemon (vascod) — full fetch API over a UNIX socket
+Documentation=https://github.com/dansouza/vasco
+# vascod talks to the browser server as a client (peers, not parent/child).
+# Bring the browser up alongside vascod, but let each restart independently.
+Wants=vasco-browser.service
+After=vasco-browser.service
+
+[Service]
+# Runs the installed uv tool (`uv tool install .`), not the dev checkout.
+# Redeploy new code with `uv tool install --reinstall .` then restart this unit.
+ExecStart=%h/.local/bin/vasco serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

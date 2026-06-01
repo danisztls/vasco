@@ -1,0 +1,11 @@
+[Unit]
+Description=Vasco persistent browser server (Camoufox)
+Documentation=https://github.com/dansouza/vasco
+
+[Service]
+ExecStart=%h/.local/bin/vasco browser-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

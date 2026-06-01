@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -109,6 +110,87 @@ async def test_disconnect_still_relaunches_immediately(monkeypatch):
     )
     assert (html, status) == ("<html>ok</html>", 200)
     assert sup.relaunches == 1
+
+
+# ── Supervisor lifecycle: recycle, de-storm, force-kill ───────────────────────
+
+
+class _FakeBrowserObj:
+    """Minimal stand-in for a Camoufox Browser: only `is_connected()` is probed
+    by `_BrowserSupervisor._alive`."""
+
+    def __init__(self) -> None:
+        self._connected = True
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+
+def _stub_supervisor(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[str, int]]:
+    """A real `_BrowserSupervisor` whose launch/close are stubbed (no camoufox)."""
+    sup = bs._BrowserSupervisor({}, is_persistent=False)
+    counts = {"launch": 0, "close": 0}
+
+    async def fake_launch() -> None:
+        counts["launch"] += 1
+        sup._cm = object()
+        sup._browser = _FakeBrowserObj()
+
+    async def fake_close() -> None:
+        counts["close"] += 1
+        sup._cm = None
+        sup._browser = None
+
+    monkeypatch.setattr(sup, "_launch_locked", fake_launch)
+    monkeypatch.setattr(sup, "_close_locked", fake_close)
+    return sup, counts
+
+
+async def test_supervisor_recycles_after_page_threshold(monkeypatch) -> None:
+    monkeypatch.setattr(bs, "_RECYCLE_AFTER_PAGES", 3)
+    sup, counts = _stub_supervisor(monkeypatch)
+    await sup.start()
+    assert counts["launch"] == 1
+
+    # 3 handouts are allowed before recycle (fast path: handouts < threshold).
+    for _ in range(3):
+        await sup.get_browser()
+    assert counts["launch"] == 1
+
+    # The handout that crosses the threshold relaunches and resets the counter.
+    await sup.get_browser()
+    assert counts["launch"] == 2
+    assert counts["close"] == 1
+    assert sup._handouts == 1
+
+
+async def test_supervisor_mark_dead_destorms_concurrent_calls(monkeypatch) -> None:
+    """A burst of concurrent mark_dead calls collapses to a single close — and a
+    late one can't tear down a browser another coroutine already relaunched."""
+    sup, counts = _stub_supervisor(monkeypatch)
+    await sup.start()
+    await asyncio.gather(sup.mark_dead(), sup.mark_dead(), sup.mark_dead())
+    assert counts["close"] == 1
+
+
+async def test_close_timeout_force_kills_browser_tree(monkeypatch) -> None:
+    monkeypatch.setattr(bs, "_CLOSE_TIMEOUT", 0.05)
+    killed = {"n": 0}
+    monkeypatch.setattr(
+        bs, "_kill_browser_processes", lambda: killed.__setitem__("n", killed["n"] + 1)
+    )
+
+    class _HangingCM:
+        async def __aexit__(self, *_: Any) -> None:
+            await asyncio.sleep(10)  # never returns within _CLOSE_TIMEOUT
+
+    sup = bs._BrowserSupervisor({}, is_persistent=False)
+    sup._cm = _HangingCM()
+    sup._browser = _FakeBrowserObj()
+
+    await sup._close_locked()
+    assert killed["n"] == 1
+    assert sup._cm is None and sup._browser is None
 
 
 # ── Page driving / tracker-blocking request interception (fetch_page) ──────────

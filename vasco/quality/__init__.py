@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from vasco.adapters import wikimedia, youtube
 
-from . import blocklist, heuristics
+from . import blocklist, heuristics, paywall
 
 if TYPE_CHECKING:
     from vasco.config import QualityCfg
@@ -35,11 +35,14 @@ def score(
     cfg: "QualityCfg | None" = None,
     existing_quality: dict | None = None,
     metadata: dict | None = None,
+    raw_html: str | None = None,
 ) -> dict:
     """Score content quality. Returns dict with slop_score, domain_flagged, signals.
 
     existing_quality: the quality dict from html_to_markdown (has boilerplate_ratio).
     metadata: the full metadata dict (has byline, published, word_count).
+    raw_html: the un-converted HTML; needed for paywall-vendor detection because
+        trafilatura strips the <script> tags those fingerprints live in.
     """
     result: dict = {}
 
@@ -55,6 +58,21 @@ def score(
     if url:
         domain_flagged = blocklist.is_blocked(url, bl)
     result["domain_flagged"] = domain_flagged
+
+    # Paywall detection (diagnostic only). Runs before the heuristics skip so
+    # paywalled Wikimedia/YouTube would still be flagged. Best-effort, never
+    # raises — a detection failure must not break a fetch.
+    detect = getattr(cfg, "detect_paywall", True) if cfg is not None else True
+    paywall_vendor = None
+    if detect:
+        try:
+            paywall_vendor = paywall.detect_paywall(
+                raw_html, paywall.get_paywall_vendors(cfg)
+            )
+        except Exception:
+            paywall_vendor = None
+    result["paywalled"] = paywall_vendor is not None
+    result["paywall_vendor"] = paywall_vendor
 
     # Skip heuristics for sources with their own quality signals.
     if url and any(check(url) for check in _SKIP_HEURISTICS_CHECKERS):

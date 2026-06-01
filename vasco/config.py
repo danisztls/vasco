@@ -70,6 +70,10 @@ class WikimediaCfg:
 @dataclass(frozen=True)
 class QualityCfg:
     blocklist_paths: tuple[str, ...] = ()
+    detect_paywall: bool = True  # flag pages served by known paywall/metering vendors
+    # Vendor fingerprint lists (local files or remote URLs); empty uses the
+    # bundled default. Detection only — vasco never bypasses paywalls.
+    paywall_vendor_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

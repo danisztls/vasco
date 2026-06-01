@@ -20,6 +20,12 @@ from vasco.strategy import SEED_STRATEGIES, seed_strategy
         ("vivareal.com.br/imovel/*", "browser"),
         # list pages are deliberately NOT seeded (learned instead)
         ("vivareal.com.br/aluguel/*", None),
+        # OLX is Cloudflare-protected site-wide: the bare-domain seed covers
+        # list routes and every regional detail subdomain via prefix match.
+        ("olx.com.br/imoveis/*", "browser"),
+        ("olx.com.br/autos-e-pecas/*", "browser"),
+        ("olx.com.br/sao-paulo-e-regiao/*", "browser"),
+        ("olx.com.br", "browser"),
         # unrelated routes
         ("example.com/foo", None),
         # trailing-slash guard: no partial-segment false match

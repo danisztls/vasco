@@ -35,7 +35,14 @@ from vasco.envelope import (
     success_envelope as _success_envelope,
 )
 from vasco.converters import convert, pandoc, pdf
-from vasco.adapters import google_shopping, realestate, wayback, wikimedia, youtube
+from vasco.adapters import (
+    google_shopping,
+    olx,
+    realestate,
+    wayback,
+    wikimedia,
+    youtube,
+)
 from vasco.errors import FailureReason
 
 
@@ -1158,6 +1165,33 @@ async def _fetch_one_body(
             normalized=normalized,
             raw=raw,
             service="realestate",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        return envelope, state["browser_started"], phases
+
+    # --- OLX route (real-estate + vehicle verticals; HTML via the chain) -----
+    if olx.is_olx_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await olx.fetch_olx(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="olx",
             use_cache=use_cache,
             cache=cache,
             cfg=cfg,

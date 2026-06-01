@@ -194,5 +194,8 @@ def test_failure_ttl_scales_per_reason() -> None:
     assert _ttl_for(env("blocked_bot"), None) == base * 4
     assert _ttl_for(env("timeout"), None) == int(base * 0.33)
     assert _ttl_for(env("server_error"), None) == int(base * 0.33)
+    # Scraper-rot is fixed by a code change — short TTL so a fixed adapter heals
+    # fast instead of being pinned to the stale failure for ~24h.
+    assert _ttl_for(env("parse_failed"), None) == int(base * 0.33)
     # Unknown reasons fall back to the base TTL.
     assert _ttl_for(env("totally_made_up"), None) == base

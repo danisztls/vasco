@@ -114,6 +114,8 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
     escalation_domains: dict[str, dict[str, Any]] = {}
     failure_domains: dict[str, Counter[str]] = {}
     fetch_ok_total: dict[str, int] = {}
+    adapter_ok: dict[str, int] = {}
+    adapter_zero: dict[str, int] = {}
     total = 0
 
     for rec in _iter_records(files):
@@ -164,6 +166,13 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                     phase_values.setdefault(tool, {}).setdefault(field_name, []).append(
                         int(val)
                     )
+            # Content-adapter rollup: a success carrying provider/result_count.
+            # result_count == 0 is the silent-scraper-rot fingerprint.
+            provider = rec.get("provider")
+            if isinstance(provider, str):
+                adapter_ok[provider] = adapter_ok.get(provider, 0) + 1
+                if rec.get("result_count") == 0:
+                    adapter_zero[provider] = adapter_zero.get(provider, 0) + 1
 
     duration_stats: dict[str, dict[str, int]] = {}
     for tool, vals in durations.items():
@@ -186,6 +195,18 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
         denom = fetch_ok_total.get(tool, 0)
         if denom:
             escalation_rate[tool] = round(escalated_count / denom, 4)
+
+    # Per-provider zero-result rate: a high rate on a list-heavy provider is the
+    # signature of an adapter that has silently rotted (still 200s, parses to
+    # zero items). `parse_failed` failures show up in `failures` for free.
+    adapters: dict[str, dict[str, Any]] = {}
+    for provider, ok_count in sorted(adapter_ok.items()):
+        zero = adapter_zero.get(provider, 0)
+        adapters[provider] = {
+            "ok": ok_count,
+            "zero_result": zero,
+            "zero_result_rate": round(zero / ok_count, 4) if ok_count else 0.0,
+        }
 
     today = datetime.now(timezone.utc).date()
     since = (today - timedelta(days=days - 1)).isoformat()
@@ -214,6 +235,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             )
         },
         "failures": dict(failures.most_common()),
+        "adapters": adapters,
         "duration_ms": duration_stats,
         "phase_percentiles": phase_percentiles,
     }

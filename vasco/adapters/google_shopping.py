@@ -37,7 +37,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
 from .. import envelope
-from ..errors import FailureReason
+from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
 log = logging.getLogger(__name__)
@@ -298,6 +298,11 @@ def _extract_offers(html_src: str) -> tuple[list[dict[str, Any]], dict[str, int]
 
     tree = lxml_html.fromstring(html_src)
     cards = tree.xpath(".//product-viewer-entrypoint")
+    if not cards:
+        raise AdapterParseError(
+            "no <product-viewer-entrypoint> cards found — site structure may "
+            "have changed"
+        )
 
     offers: list[dict[str, Any]] = []
     used_dropped = 0
@@ -587,11 +592,18 @@ async def fetch_google_shopping(
     try:
         offers, filter_counts = _extract_offers(html_src)
         products = _group_by_product(offers)
+    except AdapterParseError as exc:
+        log.warning("Google Shopping parse anchor missing: %s", exc)
+        return _fail(
+            FailureReason.PARSE_FAILED,
+            f"google_shopping {exc}",
+            http_status=status,
+        )
     except Exception as exc:
         log.warning("Google Shopping HTML parse failed: %s", exc)
         return _fail(
-            FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            f"parse failed: {type(exc).__name__}: {exc}",
+            FailureReason.PARSE_FAILED,
+            f"google_shopping parse failed: {type(exc).__name__}: {exc}",
             http_status=status,
         )
 
@@ -614,6 +626,12 @@ async def fetch_google_shopping(
     if filter_counts:
         quality["filtered"] = filter_counts
 
+    # Cards were present (else _extract_offers raised), so zero products means a
+    # genuinely empty / fully-filtered result set — not scraper-rot.
+    warnings = ["rewrote_shopping_search_to_udm28"] if rewritten else []
+    if not products:
+        warnings.append("no_results")
+
     env = envelope.success_envelope(
         base=_base_envelope(url, http_status=status or 200),
         markdown=markdown,
@@ -627,7 +645,7 @@ async def fetch_google_shopping(
             "image": products[0].get("image") if products else None,
             "word_count": len(markdown.split()),
             "quality": quality,
-            "warnings": ["rewrote_shopping_search_to_udm28"] if rewritten else [],
+            "warnings": warnings,
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),
     )

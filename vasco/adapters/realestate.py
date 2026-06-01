@@ -37,7 +37,7 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 
 from .. import envelope
-from ..errors import FailureReason
+from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
 log = logging.getLogger(__name__)
@@ -252,7 +252,10 @@ def _vivareal_list(html: str) -> list[dict]:
             if parsed:
                 out.append(parsed)
         return out
-    return []
+    raise AdapterParseError(
+        "vivareal list page: no ItemList JSON-LD found — site structure may "
+        "have changed"
+    )
 
 
 def _vivareal_detail(html: str) -> list[dict]:
@@ -260,7 +263,10 @@ def _vivareal_detail(html: str) -> list[dict]:
         (o for o in _jsonld_objects(html) if o.get("@type") == "Product"), None
     )
     if not product:
-        return []
+        raise AdapterParseError(
+            "vivareal detail page: no Product JSON-LD found — site structure "
+            "may have changed"
+        )
     name = product.get("name") or ""
     desc = product.get("description") or ""
     offers = product.get("offers") or {}
@@ -467,17 +473,37 @@ async def fetch_realestate(
 
     try:
         listings = _PARSERS[(provider, page_type)](html_src, url, url)
+    except AdapterParseError as exc:
+        log.warning(
+            "realestate parse anchor missing (%s/%s): %s", provider, page_type, exc
+        )
+        return _failure_envelope(
+            url, FailureReason.PARSE_FAILED, f"realestate {exc}", http_status=status
+        )
     except Exception as exc:
         log.warning("realestate parse failed (%s/%s): %s", provider, page_type, exc)
         return _failure_envelope(
             url,
-            FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            f"parse failed: {type(exc).__name__}: {exc}",
+            FailureReason.PARSE_FAILED,
+            f"realestate parse failed: {type(exc).__name__}: {exc}",
+            http_status=status,
+        )
+
+    # A detail page is about one property; zero listings here means the anchor
+    # was present but yielded nothing — treat as rot, not a valid empty result.
+    if page_type == "detail" and not listings:
+        return _failure_envelope(
+            url,
+            FailureReason.PARSE_FAILED,
+            f"realestate {provider} detail page: parsed no listing — site "
+            "structure may have changed",
             http_status=status,
         )
 
     from .. import io as io_mod
 
+    # Anchor present but zero items on a list page: a genuinely empty result set.
+    warnings = ["no_results"] if page_type == "list" and not listings else []
     markdown = _render_markdown(listings)
     return envelope.success_envelope(
         base=_base_envelope(url, http_status=status or 200),
@@ -499,7 +525,7 @@ async def fetch_realestate(
                 "result_count": len(listings),
                 "listings": listings,
             },
-            "warnings": [],
+            "warnings": warnings,
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),
     )

@@ -541,3 +541,27 @@ async def test_fetch_google_shopping_empty_body(
     )
     assert "failure" in env
     assert env["failure"]["reason"] == str(FailureReason.SERVER_ERROR)
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_shopping_rot_returns_parse_failed() -> None:
+    """200 OK but no <product-viewer-entrypoint> cards → PARSE_FAILED
+    (scraper-rot), not a silent empty success."""
+
+    async def fake_fetch_html(_url: str):
+        return (
+            "<html><body>no cards</body></html>",
+            200,
+            {},
+            FailureReason.OK,
+            "browser",
+        )
+
+    env = await google_shopping.fetch_google_shopping(
+        "https://www.google.com/search?udm=28&q=kindle",
+        deadline=5.0,
+        fetch_html=fake_fetch_html,
+    )
+    assert "failure" in env
+    assert env["failure"]["reason"] == str(FailureReason.PARSE_FAILED)
+    assert "product-viewer-entrypoint" in env["failure"]["message"]

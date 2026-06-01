@@ -124,8 +124,15 @@ def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
     Includes phase timings (`network_ms`, `parse_ms`, `cache_write_ms`,
     `attempts`, `escalated_from`) when present on the envelope, so a slow
     fetch can be triaged from the log alone.
+
+    For content-adapter envelopes (olx, mercadolivre, realestate,
+    google_shopping) it also surfaces `provider`, `page_type`, and
+    `result_count` from the `quality` block. `result_count == 0` on a success
+    is the silent-scraper-rot fingerprint — logging it lets `vasco logs stats`
+    flag an adapter that is quietly returning nothing. Non-adapter fetches have
+    no `provider`, so these keys stay absent there.
     """
-    return {
+    fields: dict[str, Any] = {
         "url": env.get("url_requested"),
         "mode_used": env.get("mode_used"),
         "from_cache": bool(env.get("from_cache")),
@@ -139,3 +146,9 @@ def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
         "attempts": env.get("attempts"),
         "escalated_from": env.get("escalated_from"),
     }
+    quality = env.get("quality")
+    if isinstance(quality, dict) and quality.get("provider"):
+        fields["provider"] = quality.get("provider")
+        fields["page_type"] = quality.get("page_type")
+        fields["result_count"] = quality.get("result_count")
+    return fields

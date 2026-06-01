@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import realestate as R
+from vasco.errors import AdapterParseError
 
 FX = Path(__file__).parent / "fixtures" / "realestate"
 
@@ -77,9 +78,11 @@ def test_vivareal_detail_parses_product() -> None:
     assert ln["description"] and "dormit" in ln["description"]
 
 
-def test_vivareal_list_returns_empty_without_itemlist() -> None:
-    # The detail fixture has a Product, not an ItemList.
-    assert R._vivareal_list(_fx("vivareal_detail.html")) == []
+def test_vivareal_list_raises_without_itemlist() -> None:
+    # The detail fixture has a Product, not an ItemList — the list parser's
+    # anchor is absent, which signals scraper-rot, not an empty result.
+    with pytest.raises(AdapterParseError):
+        R._vivareal_list(_fx("vivareal_detail.html"))
 
 
 
@@ -100,6 +103,10 @@ def test_vivareal_list_returns_empty_without_itemlist() -> None:
 
 
 # --- fetch via injected escalating fetcher ---------------------------------
+
+
+
+
 
 
 

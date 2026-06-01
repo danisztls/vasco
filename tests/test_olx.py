@@ -260,3 +260,41 @@ async def test_fetch_passes_through_escalation_failure() -> None:
 
     assert env["failure"]["reason"] == O.FailureReason.TIMEOUT.value
     assert "wayback" in env["failure"]["message"]
+
+
+async def test_fetch_list_rot_returns_parse_failed() -> None:
+    """200 OK but the __NEXT_DATA__ anchor is gone → PARSE_FAILED (scraper-rot),
+    not a silent empty success."""
+
+    async def fake_fetch_html(_url: str):
+        return (
+            "<html><body>no next data</body></html>",
+            200,
+            {},
+            O.FailureReason.OK,
+            "http",
+        )
+
+    env = await O.fetch_olx(RE_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" in env
+    assert env["failure"]["reason"] == O.FailureReason.PARSE_FAILED.value
+    assert "__NEXT_DATA__" in env["failure"]["message"]
+
+
+async def test_fetch_list_genuine_empty_warns_no_results() -> None:
+    """__NEXT_DATA__ present but zero ads → a real empty result: success with a
+    `no_results` warning, distinct from the rot case above."""
+    html = (
+        '<html><body><script id="__NEXT_DATA__">'
+        '{"props":{"pageProps":{"ads":[]}}}</script></body></html>'
+    )
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, O.FailureReason.OK, "http"
+
+    env = await O.fetch_olx(RE_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" not in env
+    assert env["quality"]["result_count"] == 0
+    assert "no_results" in env["warnings"]

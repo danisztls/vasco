@@ -427,6 +427,9 @@ _FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
     FailureReason.DEADLINE_EXCEEDED: 0.33,
     FailureReason.SERVER_ERROR: 0.33,
     FailureReason.DNS_FAIL: 0.33,
+    # Scraper-rot: fixed by a code change (or a site reverting), so expire fast
+    # — a 24h pin would keep serving the failure long after the adapter is fixed.
+    FailureReason.PARSE_FAILED: 0.33,
 }
 
 

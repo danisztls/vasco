@@ -30,6 +30,11 @@ SEED_STRATEGIES: dict[str, str] = {
     # challenge, so start at the browser for every OLX route (list + every
     # regional detail subdomain — the bare-domain key covers them all).
     "olx.com.br": "browser",
+    # MercadoLivre serves a bot-challenge shell on the http tier across every
+    # surface; start at the browser. registered_domain collapses www./lista./
+    # produto. to mercadolivre.com.br, so this bare-domain key covers product +
+    # search + category routes via seed_strategy's prefix match.
+    "mercadolivre.com.br": "browser",
 }
 
 

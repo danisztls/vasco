@@ -641,5 +641,37 @@ def browser_server() -> None:
         loop.close()
 
 
+@app.command("serve")
+def serve() -> None:
+    """Run vascod — the resident vasco daemon — on a UNIX socket.
+
+    Owns the full fetch pipeline (one Config + one Cache) and serves every local
+    consumer (CLI, MCP, claudinho) over $XDG_RUNTIME_DIR/vasco/vascod.sock, adding
+    cross-consumer single-flight + per-domain rate-limiting. Sits in front of the
+    browser server (which it uses as a client, never owns). Local-only by
+    construction: UNIX socket, mode 0600.
+    """
+    import signal
+
+    from vasco.config import load_config
+    from vasco.service.daemon import run_daemon
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    cfg = load_config()
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(run_daemon(cfg))
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, task.cancel)
+    try:
+        loop.run_until_complete(task)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        loop.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

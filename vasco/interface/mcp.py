@@ -25,6 +25,8 @@ from vasco import search as _search
 from vasco import summarize as _summarize_mod
 from vasco import telemetry as _telemetry
 from vasco.fetch import browser as _browser
+from vasco.service import client as _service_client
+from vasco.service import protocol as _proto
 
 log = logging.getLogger("vasco.mcp")
 
@@ -101,18 +103,32 @@ async def search(
 ) -> list[dict[str, str]]:
     assert _cfg is not None  # populated by lifespan before tools run
     started = _monotonic()
-    try:
-        searcher = _search.get_searcher(
-            backend or _cfg.search.default_backend, cfg=_cfg
-        )
-        rows = [
+    eff_backend = backend or _cfg.search.default_backend
+
+    async def _local() -> list[dict[str, str]]:
+        searcher = _search.get_searcher(eff_backend, cfg=_cfg)
+        return [
             {"title": r.title, "url": r.url, "snippet": r.snippet}
             for r in searcher.search(
                 query, max_results=max_results, region=region, time=time, site=site
             )
         ]
+
+    try:
+        rows = await _service_client.request_or(
+            _proto.OP_SEARCH,
+            {
+                "query": query,
+                "max_results": max_results,
+                "region": region,
+                "time": time,
+                "site": site,
+                "backend": eff_backend,
+            },
+            local=_local,
+        )
     except Exception as exc:
-        _record_exception("search", exc, query=query, site=site, backend=backend)
+        _record_exception("search", exc, query=query, site=site, backend=eff_backend)
         raise
     duration_ms = int((_monotonic() - started) * 1000)
     if not rows:
@@ -182,14 +198,27 @@ async def fetch(
     raw: bool = False,
     metadata_only: bool = False,
 ) -> dict[str, Any]:
-    envelope = await _fetch.fetch_one(
-        url,
-        mode=mode,
-        deadline=deadline,
-        refresh=refresh,
-        raw=raw,
-        cache=_cache,
-        cfg=_cfg,
+    async def _local() -> dict[str, Any]:
+        return await _fetch.fetch_one(
+            url,
+            mode=mode,
+            deadline=deadline,
+            refresh=refresh,
+            raw=raw,
+            cache=_cache,
+            cfg=_cfg,
+        )
+
+    envelope = await _service_client.request_or(
+        _proto.OP_FETCH,
+        {
+            "url": url,
+            "mode": mode,
+            "deadline": deadline,
+            "refresh": refresh,
+            "raw": raw,
+        },
+        local=_local,
     )
     if "failure" in envelope:
         _record_failure("fetch", envelope)
@@ -220,21 +249,37 @@ async def fetch_many(
     refresh: bool = False,
     metadata_only: bool = True,
 ) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    async for env in _fetch.fetch_many(
-        urls,
-        workers=workers,
-        mode=mode,
-        deadline=deadline,
-        refresh=refresh,
-        cache=_cache,
-        cfg=_cfg,
-    ):
+    async def _local() -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        async for env in _fetch.fetch_many(
+            urls,
+            workers=workers,
+            mode=mode,
+            deadline=deadline,
+            refresh=refresh,
+            cache=_cache,
+            cfg=_cfg,
+        ):
+            out.append(_strip_markdown(env) if metadata_only else env)
+        return out
+
+    results = await _service_client.request_or(
+        _proto.OP_FETCH_MANY,
+        {
+            "urls": urls,
+            "workers": workers,
+            "mode": mode,
+            "deadline": deadline,
+            "refresh": refresh,
+            "metadata_only": metadata_only,
+        },
+        local=_local,
+    )
+    for env in results:
         if "failure" in env:
             _record_failure("fetch_many", env)
         else:
             _record_success("fetch_many", **_fetch_success_fields(env))
-        results.append(_strip_markdown(env) if metadata_only else env)
     return results
 
 
@@ -256,8 +301,9 @@ async def extract(
     deadline: float = 30.0,
 ) -> dict[str, Any]:
     started = _monotonic()
-    try:
-        result = await _extract_mod.extract(
+
+    async def _local() -> dict[str, Any]:
+        return await _extract_mod.extract(
             url,
             query=query,
             top=top,
@@ -267,6 +313,21 @@ async def extract(
             deadline=deadline,
             cache=_cache,
             cfg=_cfg,
+        )
+
+    try:
+        result = await _service_client.request_or(
+            _proto.OP_EXTRACT,
+            {
+                "url": url,
+                "query": query,
+                "top": top,
+                "context_chars": context_chars,
+                "mode": mode,
+                "rank": rank,
+                "deadline": deadline,
+            },
+            local=_local,
         )
     except Exception as exc:
         _record_exception("extract", exc, url=url, query=query)
@@ -319,8 +380,9 @@ async def answer(
     refresh: bool = False,
 ) -> dict[str, Any]:
     started = _monotonic()
-    try:
-        result = await _summarize_mod.answer(
+
+    async def _local() -> dict[str, Any]:
+        return await _summarize_mod.answer(
             url,
             question=question,
             mode=mode,
@@ -328,6 +390,19 @@ async def answer(
             refresh=refresh,
             cache=_cache,
             cfg=_cfg,
+        )
+
+    try:
+        result = await _service_client.request_or(
+            _proto.OP_ANSWER,
+            {
+                "url": url,
+                "question": question,
+                "mode": mode,
+                "deadline": deadline,
+                "refresh": refresh,
+            },
+            local=_local,
         )
     except Exception as exc:
         _record_exception("answer", exc, url=url, question=question)
@@ -385,11 +460,19 @@ async def map_site(
     # trafilatura does synchronous HTTP; offload to a thread so a slow
     # sitemap fetch doesn't block other in-flight MCP tool calls.
     started = _monotonic()
-    try:
-        results = await asyncio.to_thread(
+
+    async def _local() -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
             lambda: list(
                 _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
             )
+        )
+
+    try:
+        results = await _service_client.request_or(
+            _proto.OP_MAP,
+            {"url": url, "source": source, "limit": limit, "exclude": exclude},
+            local=_local,
         )
     except Exception as exc:
         _record_exception("map", exc, url=url, source=source)

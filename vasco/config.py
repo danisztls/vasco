@@ -87,6 +87,18 @@ class ShoppingCfg:
 
 
 @dataclass(frozen=True)
+class ServiceCfg:
+    """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside
+    and on by default; per-domain rate limiting is an opt-in politeness policy
+    (0 disables it — no added latency unless asked)."""
+
+    single_flight: bool = True
+    rate_limit_rps: float = (
+        0.0  # max network fetches/sec per registered domain; 0 = off
+    )
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -99,6 +111,7 @@ class Config:
     quality: QualityCfg | None = field(default_factory=QualityCfg)
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
+    service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
 _SECTIONS: dict[str, type] = {
@@ -113,6 +126,7 @@ _SECTIONS: dict[str, type] = {
     "quality": QualityCfg,
     "answer": AnswerCfg,
     "shopping": ShoppingCfg,
+    "service": ServiceCfg,
 }
 
 

@@ -8,6 +8,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 |---|---|
 | Install | `uv sync` (`--group dev` for tests) |
 | CLI | `uv run vasco <subcommand>` |
+| Daemon | `uv run vasco serve` (resident `vascod`; systemd units in `contrib/systemd/`) |
 | Tests | `uv run --group dev pytest -q` |
 | Lint / format | `uv run ruff check .` / `uv run ruff format .` |
 
@@ -15,8 +16,12 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 
 | File | Role |
 |---|---|
-| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `search`/`fetch`/`extract`/`answer`/`map`/`normalize` commands + `cache` and `logs` sub-apps |
-| `vasco/interface/mcp.py` | MCP server (stdio); tools `search`/`fetch`/`fetch_many`/`extract`/`answer`/`map`; opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results |
+| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `search`/`fetch`/`extract`/`answer`/`map`/`normalize` commands + `cache` and `logs` sub-apps + `serve` (run vascod) and `browser-server`. CLI commands run **in-process** (not routed through vascod) so the CLI stays the daemon-free ground-truth/debug path |
+| `vasco/interface/mcp.py` | MCP server (stdio); tools `search`/`fetch`/`fetch_many`/`extract`/`answer`/`map`; opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results. Every tool routes through `service.client.request_or` (vascod when reachable, else in-process fallback); telemetry stays at the tool layer |
+| `vasco/service/protocol.py` | Wire protocol for vascod — single home for the socket contract: `PROTOCOL_VERSION`, length-prefixed JSON framing (`read_msg`/`write_msg`), `socket_path()` (`$XDG_RUNTIME_DIR/vasco/vascod.sock`, `VASCO_SERVICE_SOCKET` override), op constants. The *payload* model is the envelope itself (already JSON) |
+| `vasco/service/daemon.py` | `run_daemon(cfg)` = vascod: loads one `Config`+`Cache`, serves the full API over a UNIX socket (chmod 0600, 10 MiB frame cap). `Dispatcher` routes ops to existing entry points; `fetch`/`fetch_many` go through the coordinator (fetch_many = coordinated gather over fetch). A fetch failure crosses the wire as `ok=true` + failure envelope; `ok=false` is reserved for transport/unexpected errors |
+| `vasco/service/coordinator.py` | Cross-consumer coordination for the fetch path: single-flight dedup (task-keyed by `normalize_url`+mode/raw/refresh/use_cache) + per-domain min-interval rate limit (`registered_domain`, skipped on cache hit). Config via `ServiceCfg` (`single_flight` default on, `rate_limit_rps` default 0=off) |
+| `vasco/service/client.py` | `DaemonClient` (one-shot request; fast-fail on no daemon, one reconnect on mid-request drop, bounded read timeout) + `request_or(op, params, local=)` — daemon when reachable else in-process. `DaemonError` (ok=false) propagates; only `DaemonUnavailable` falls back |
 | `vasco/fetch/__init__.py` | `fetch_one` / `fetch_many`, auto chain `http → browser → browser+mobile → wayback`, phase timing, envelope assembly |
 | `vasco/fetch/browser.py` | Camoufox singleton (`get_browser(cfg)` → `BrowserPool`); `fetch(mobile=)` for iOS UA/viewport |
 | `vasco/fetch/bot_detect.py` | `classify(status, html, headers) -> FailureReason` (pure) |
@@ -52,6 +57,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 ## Invariants
 
 - **Fetch envelope is the contract.** Same shape across `fetch_one`, `extract`, `cache.get`. The shape is built in exactly one place — `vasco/envelope.py` (`base_envelope`/`success_envelope`/`failure_envelope`); core fetch and all four adapters call these (adapters keep only thin delegators passing their own `mode_used`/`content_type`). Adding/renaming a field means editing `vasco/envelope.py` **and** the `cache.py` columns (incl. `_FETCH_CACHE_ADDED_COLUMNS` for the ALTER back-fill) + `_hydrate_cache_hit`; `tests/test_cache_roundtrip.py` fails CI if a builder field has no cache column (this caught `image`/`modified` being silently dropped).
+- **vascod is the shared coordinator; the envelope is also a wire contract.** `vasco serve` runs a resident daemon (`vasco/service/`) that owns one `Config`+`Cache` and serves the full API (`search`/`fetch`/`fetch_many`/`extract`/`answer`/`map`) over a UNIX socket, adding cross-consumer **single-flight dedup + per-domain rate-limiting** (only meaningful because every consumer funnels through one process). It sits **in front of** `browser_server` as a client (two independent systemd peers — neither owns the other; preserves browser crash isolation). MCP and claudinho are clients; the **CLI stays in-process** (debuggable ground-truth path, and the cache is already shared via the SQLite *file*). The envelope crosses the socket as JSON unchanged — `protocol.PROTOCOL_VERSION` versions the *transport*, the envelope stays the single source of truth. A *fetch failure* is still a `failure` envelope over the wire (`ok=true`); `ok=false` means a transport/daemon error. The wire shape lives in exactly one place: `vasco/service/protocol.py` (claudinho vendors a copy of `PROTOCOL_VERSION` + framing and guards against drift at runtime). vascod is **stateless between deadline-bounded requests** — it survives host suspend/resume with no special handling; a wedged browser is healed by `browser_server`'s existing watchdog.
 - **`fetch_one` never raises.** Failures are first-class output via a `failure` object whose `reason` is a `FailureReason` enum value. New failure modes go in `errors.py` first, then `fetch.bot_detect.classify` learns to produce them.
 - **URL normalization is the cache key.** `cache.normalize_url` is load-bearing — changing it invalidates every cached entry. Besides lowering, sorting params, and stripping tracking params, it folds AMP variants (`?amp=1`, `?output=amp`, `/amp/` path segments) and collapses all YouTube URL forms (`youtu.be`, `m.youtube.com`, local TLDs, `/embed/`, `/shorts/`) to bare `youtube.com/watch?v=<id>`. Tests in `tests/test_normalize.py` are table-driven.
 - **Auto-mode escalation lives in `fetch._do_fetch_html`.** Chain is `http → browser → browser+mobile → wayback`. Per-tier wall-clock caps (`HTTP_MAX_BUDGET` 5s, `BROWSER_MAX_BUDGET` 8s, `MOBILE_MAX_BUDGET` 5s, `WAYBACK_MAX_BUDGET` 6s) are the *primary* budget — the chain naturally takes up to ~24s for a full run. The caller-supplied `deadline` (default 30s) is a kill-switch hard upper bound, not the timing users feel in practice. Each tier's effective deadline is `min(global_deadline, now + tier_cap)`. `cache.bump`'s `failure_count` tracks consecutive failures of the *preferred* mode only; non-preferred-mode bumps don't move the counter. Strategy is keyed per-**route** (`cache.route_key(url)`: registered_domain + first path segment, e.g. `vivareal.com.br/aluguel/*` vs `vivareal.com.br/imovel/*`), so page-types within a domain learn independent starting tiers. The starting tier is `cache.get_strategy(route)` (learned) falling back to `strategy.seed_strategy(route)` (declarative seed in `vasco/strategy.py`); it picks the *starting* tier only — it never decides whether the chain runs to completion. Content adapters (real-estate, google-shopping) route their HTML fetch through this same chain via an injected `fetch_html`, so they share the strategy/seed system instead of hardcoding a browser-only fetch.
@@ -98,6 +104,11 @@ uv run vasco logs stats --days 7 | jq '.by_tool, .escalation_rate, .phase_percen
 
 VASCO_FETCH_WORKERS=7 uv run python -c "from vasco.config import load_config; print(load_config().fetch.workers)"
 # → 7
+
+uv run vasco serve &     # vascod on $XDG_RUNTIME_DIR/vasco/vascod.sock (or: systemctl --user start vascod)
+uv run python -c "import asyncio; from vasco.service.client import DaemonClient; \
+print(asyncio.run(DaemonClient().request('fetch', url='https://example.com'))['mode_used'])"
+# full fetch over the socket; single-flight collapses concurrent identical fetches to one upstream GET
 
 uv run vasco fetch https://example.com | jq '.quality.slop_score, .quality.domain_flagged, .quality.signals'
 # quality scoring: slop_score 0-1 (15% text heuristics, 85% metadata), domain blocklist check, raw signal breakdown

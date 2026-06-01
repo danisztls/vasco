@@ -125,3 +125,25 @@ def test_log_event_preserves_explicit_ts(
     log_file = tmp_path / "vasco" / "logs" / f"{_today()}.jsonl"
     record = json.loads(log_file.read_text().splitlines()[0])
     assert record["ts"] == "2020-01-01T00:00:00+00:00"
+
+
+def test_fetch_success_fields_surfaces_adapter_quality() -> None:
+    """Content-adapter envelopes carry provider/page_type/result_count so a
+    zero-result success (the rot fingerprint) is visible in the log."""
+    env = {
+        "url_requested": "https://www.olx.com.br/imoveis/estado-sp",
+        "mode_used": "olx",
+        "quality": {"provider": "olx", "page_type": "list", "result_count": 0},
+    }
+    fields = telemetry.fetch_success_fields(env)
+    assert fields["provider"] == "olx"
+    assert fields["page_type"] == "list"
+    assert fields["result_count"] == 0
+
+
+def test_fetch_success_fields_omits_quality_for_plain_fetch() -> None:
+    """A normal fetch has no provider, so the adapter keys stay absent."""
+    env = {"url_requested": "https://example.com", "mode_used": "http", "quality": {}}
+    fields = telemetry.fetch_success_fields(env)
+    assert "provider" not in fields
+    assert "result_count" not in fields

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import mercadolivre as M
+from vasco.errors import AdapterParseError
 
 FX = Path(__file__).parent / "fixtures" / "mercadolivre"
 
@@ -140,8 +141,10 @@ def test_parse_product_spine_and_extras() -> None:
     assert p["attributes"]  # spec table lifted to a dict
 
 
-def test_parse_product_empty_without_jsonld() -> None:
-    assert M._parse_product("<html><body>no jsonld</body></html>", "https://x") == []
+def test_parse_product_raises_without_jsonld() -> None:
+    # No Product JSON-LD = MercadoLivre's spine is gone = scraper-rot, not empty.
+    with pytest.raises(AdapterParseError):
+        M._parse_product("<html><body>no jsonld</body></html>", "https://x")
 
 
 # --- markdown rendering ----------------------------------------------------
@@ -213,3 +216,40 @@ async def test_fetch_passes_through_escalation_failure() -> None:
 
     assert env["failure"]["reason"] == M.FailureReason.BLOCKED_BOT.value
     assert "browser" in env["failure"]["message"]
+
+
+async def test_fetch_search_rot_returns_parse_failed() -> None:
+    """200 OK but no Product JSON-LD (ML's spine) → PARSE_FAILED, not empty."""
+
+    async def fake_fetch_html(_url: str):
+        return (
+            "<html><body>no jsonld here</body></html>",
+            200,
+            {},
+            M.FailureReason.OK,
+            "browser",
+        )
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" in env
+    assert env["failure"]["reason"] == M.FailureReason.PARSE_FAILED.value
+    assert "JSON-LD" in env["failure"]["message"]
+
+
+async def test_fetch_search_genuine_empty_warns_no_results() -> None:
+    """Product JSON-LD present (anchor intact) but missing name/url so nothing
+    parses → success with a `no_results` warning, not a rot failure."""
+    html = (
+        '<html><body><script type="application/ld+json">'
+        '{"@graph":[{"@type":"Product"}]}</script></body></html>'
+    )
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" not in env
+    assert env["quality"]["result_count"] == 0
+    assert "no_results" in env["warnings"]

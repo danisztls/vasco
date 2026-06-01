@@ -39,7 +39,7 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 
 from .. import envelope
-from ..errors import FailureReason
+from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
 log = logging.getLogger(__name__)
@@ -261,7 +261,10 @@ def _vivareal_list(html: str) -> list[dict]:
             if parsed:
                 out.append(parsed)
         return out
-    return []
+    raise AdapterParseError(
+        "vivareal list page: no ItemList JSON-LD found — site structure may "
+        "have changed"
+    )
 
 
 def _vivareal_detail(html: str) -> list[dict]:
@@ -269,7 +272,10 @@ def _vivareal_detail(html: str) -> list[dict]:
         (o for o in _jsonld_objects(html) if o.get("@type") == "Product"), None
     )
     if not product:
-        return []
+        raise AdapterParseError(
+            "vivareal detail page: no Product JSON-LD found — site structure "
+            "may have changed"
+        )
     name = product.get("name") or ""
     desc = product.get("description") or ""
     offers = product.get("offers") or {}
@@ -304,8 +310,14 @@ def _vivareal_detail(html: str) -> list[dict]:
 
 def _binda_list(html: str, base: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select(".pgl-property")
+    if not cards:
+        raise AdapterParseError(
+            "binda list page: no .pgl-property cards found — site structure may "
+            "have changed"
+        )
     out: list[dict] = []
-    for card in soup.select(".pgl-property"):
+    for card in cards:
         link = card.select_one(".property-thumb-info-image a[href]")
         if not (link and link.get("href")):
             continue
@@ -350,7 +362,13 @@ def _binda_detail(html: str, base: str, url: str) -> list[dict]:
     )
     price_el = soup.select_one(".label.price")
     # Binda detail pages carry no clean structured fields beyond the gallery;
-    # the list card is the source of truth for price/specs/location.
+    # the list card is the source of truth for price/specs/location. A page with
+    # neither the price element nor any gallery image has lost its structure.
+    if price_el is None and not gallery:
+        raise AdapterParseError(
+            "binda detail page: no price element or gallery found — site "
+            "structure may have changed"
+        )
     return [
         _listing(
             url=url,
@@ -413,8 +431,14 @@ def _barreto_specs_positional(texts: list[str]) -> dict[str, Any]:
 
 def _barreto_list(html: str, base: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select(".imovel.type-imovel")
+    if not cards:
+        raise AdapterParseError(
+            "barreto list page: no .imovel.type-imovel cards found — site "
+            "structure may have changed"
+        )
     out: list[dict] = []
-    for card in soup.select(".imovel.type-imovel"):
+    for card in cards:
         link = card.select_one('a[href*="/imovel/"]')
         title = card.select_one("h1.elementor-heading-title")
         if not (link and link.get("href") and title):
@@ -462,6 +486,11 @@ def _barreto_detail(html: str, base: str, url: str) -> list[dict]:
     specs_texts = [
         e.get_text(strip=True) for e in soup.select(".elementor-icon-list-text")
     ]
+    if title is None and not specs_texts:
+        raise AdapterParseError(
+            "barreto detail page: no title or spec list found — site structure "
+            "may have changed"
+        )
     parsed = _barreto_specs(specs_texts)
     nbh = next((s for s in specs_texts if "bairro" in s.lower()), None)
     gallery = _dedup(
@@ -645,17 +674,37 @@ async def fetch_realestate(
 
     try:
         listings = _PARSERS[(provider, page_type)](html_src, url, url)
+    except AdapterParseError as exc:
+        log.warning(
+            "realestate parse anchor missing (%s/%s): %s", provider, page_type, exc
+        )
+        return _failure_envelope(
+            url, FailureReason.PARSE_FAILED, f"realestate {exc}", http_status=status
+        )
     except Exception as exc:
         log.warning("realestate parse failed (%s/%s): %s", provider, page_type, exc)
         return _failure_envelope(
             url,
-            FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            f"parse failed: {type(exc).__name__}: {exc}",
+            FailureReason.PARSE_FAILED,
+            f"realestate parse failed: {type(exc).__name__}: {exc}",
+            http_status=status,
+        )
+
+    # A detail page is about one property; zero listings here means the anchor
+    # was present but yielded nothing — treat as rot, not a valid empty result.
+    if page_type == "detail" and not listings:
+        return _failure_envelope(
+            url,
+            FailureReason.PARSE_FAILED,
+            f"realestate {provider} detail page: parsed no listing — site "
+            "structure may have changed",
             http_status=status,
         )
 
     from .. import io as io_mod
 
+    # Anchor present but zero items on a list page: a genuinely empty result set.
+    warnings = ["no_results"] if page_type == "list" and not listings else []
     markdown = _render_markdown(listings)
     return envelope.success_envelope(
         base=_base_envelope(url, http_status=status or 200),
@@ -677,7 +726,7 @@ async def fetch_realestate(
                 "result_count": len(listings),
                 "listings": listings,
             },
-            "warnings": [],
+            "warnings": warnings,
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),
     )

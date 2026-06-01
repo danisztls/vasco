@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import realestate as R
+from vasco.errors import AdapterParseError
 
 FX = Path(__file__).parent / "fixtures" / "realestate"
 
@@ -83,9 +84,11 @@ def test_vivareal_detail_parses_product() -> None:
     assert ln["description"] and "dormit" in ln["description"]
 
 
-def test_vivareal_list_returns_empty_without_itemlist() -> None:
-    # The detail fixture has a Product, not an ItemList.
-    assert R._vivareal_list(_fx("vivareal_detail.html")) == []
+def test_vivareal_list_raises_without_itemlist() -> None:
+    # The detail fixture has a Product, not an ItemList — the list parser's
+    # anchor is absent, which signals scraper-rot, not an empty result.
+    with pytest.raises(AdapterParseError):
+        R._vivareal_list(_fx("vivareal_detail.html"))
 
 
 # --- binda (CSS cards) -----------------------------------------------------
@@ -193,3 +196,38 @@ async def test_fetch_passes_through_escalation_failure() -> None:
 
     assert env["failure"]["reason"] == R.FailureReason.TIMEOUT.value
     assert "wayback" in env["failure"]["message"]
+
+
+async def test_fetch_list_rot_returns_parse_failed() -> None:
+    """200 OK but the provider's list anchor is gone → PARSE_FAILED, not a silent
+    empty success."""
+
+    async def fake_fetch_html(_url: str):
+        return (
+            "<html><body>no cards</body></html>",
+            200,
+            {},
+            R.FailureReason.OK,
+            "http",
+        )
+
+    env = await R.fetch_realestate(BINDA_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" in env
+    assert env["failure"]["reason"] == R.FailureReason.PARSE_FAILED.value
+    assert ".pgl-property" in env["failure"]["message"]
+
+
+async def test_fetch_list_genuine_empty_warns_no_results() -> None:
+    """Anchor cards present but none carry a usable link → a real empty result:
+    success with a `no_results` warning."""
+    html = '<html><body><div class="pgl-property"></div></body></html>'
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, R.FailureReason.OK, "http"
+
+    env = await R.fetch_realestate(BINDA_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" not in env
+    assert env["quality"]["result_count"] == 0
+    assert "no_results" in env["warnings"]

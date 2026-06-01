@@ -43,7 +43,7 @@ from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 
 from .. import envelope
-from ..errors import FailureReason
+from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
 log = logging.getLogger(__name__)
@@ -239,15 +239,25 @@ def _attributes(props: dict[str, Any], vertical: str) -> dict[str, Any]:
 
 
 def _parse_next_data(html: str) -> list[dict[str, Any]]:
-    """List pages: ``props.pageProps.ads[]`` from the Next.js data blob."""
+    """List pages: ``props.pageProps.ads[]`` from the Next.js data blob.
+
+    Raises ``AdapterParseError`` when the ``__NEXT_DATA__`` anchor is absent or
+    unparseable (scraper-rot); an empty-but-present ``ads`` array returns ``[]``
+    (a genuinely empty result page).
+    """
     soup = BeautifulSoup(html, "html.parser")
     tag = soup.find("script", id="__NEXT_DATA__")
     if not (tag and tag.string):
-        return []
+        raise AdapterParseError(
+            "list page: <script id='__NEXT_DATA__'> not found — site structure "
+            "may have changed"
+        )
     try:
         data = json.loads(tag.string)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        raise AdapterParseError(
+            f"list page: __NEXT_DATA__ JSON malformed ({exc})"
+        ) from exc
     ads = (((data.get("props") or {}).get("pageProps") or {}).get("ads")) or []
     return [a for a in ads if isinstance(a, dict)]
 
@@ -563,18 +573,31 @@ async def fetch_olx(
                 ]
             else:
                 fallback = _jsonld_detail(html_src, url, vertical)
-                listings = [fallback] if fallback else []
+                if fallback is None:
+                    raise AdapterParseError(
+                        "detail page: no <script id='initial-data'> or schema.org "
+                        "Offer found — site structure may have changed"
+                    )
+                listings = [fallback]
+    except AdapterParseError as exc:
+        log.warning("olx parse anchor missing (%s/%s): %s", vertical, page_type, exc)
+        return _failure_envelope(
+            url, FailureReason.PARSE_FAILED, f"olx {exc}", http_status=status
+        )
     except Exception as exc:
         log.warning("olx parse failed (%s/%s): %s", vertical, page_type, exc)
         return _failure_envelope(
             url,
-            FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            f"parse failed: {type(exc).__name__}: {exc}",
+            FailureReason.PARSE_FAILED,
+            f"olx parse failed: {type(exc).__name__}: {exc}",
             http_status=status,
         )
 
     from .. import io as io_mod
 
+    # Anchor present but zero items: a genuinely empty list page (vs. the rot
+    # case above, which raised). Flag it so an agent can tell the two apart.
+    warnings = ["no_results"] if page_type == "list" and not listings else []
     markdown = _render_markdown(listings, vertical)
     title = (
         listings[0].get("title")
@@ -600,7 +623,7 @@ async def fetch_olx(
                 "result_count": len(listings),
                 "listings": listings,
             },
-            "warnings": [],
+            "warnings": warnings,
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),
     )

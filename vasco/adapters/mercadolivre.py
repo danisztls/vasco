@@ -49,7 +49,7 @@ from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 
 from .. import envelope
-from ..errors import FailureReason
+from ..errors import AdapterParseError, FailureReason
 from ..fetch import browser
 
 log = logging.getLogger(__name__)
@@ -261,9 +261,15 @@ def _search_product(item: dict[str, Any], position: int) -> dict[str, Any] | Non
 
 
 def _parse_search(html: str) -> list[dict[str, Any]]:
+    items = _jsonld_products(html)
+    if not items:
+        raise AdapterParseError(
+            "search page: no schema.org Product JSON-LD found — site structure "
+            "may have changed"
+        )
     out: list[dict[str, Any]] = []
     position = 0
-    for item in _jsonld_products(html):
+    for item in items:
         position += 1
         parsed = _search_product(item, position)
         if parsed is not None:
@@ -364,7 +370,10 @@ def _free_shipping(offers: dict[str, Any]) -> bool | None:
 def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     products = _jsonld_products(html)
     if not products:
-        return []
+        raise AdapterParseError(
+            "product page: no schema.org Product JSON-LD found — site structure "
+            "may have changed"
+        )
     item = products[0]
     offers = item.get("offers") if isinstance(item.get("offers"), dict) else {}
     rating, review_count = _rating(item)
@@ -578,16 +587,25 @@ async def fetch_mercadolivre(
             products = _parse_product(html_src, url)
         else:
             products = _parse_search(html_src)
+    except AdapterParseError as exc:
+        log.warning("mercadolivre parse anchor missing (%s): %s", page_type, exc)
+        return _failure_envelope(
+            url, FailureReason.PARSE_FAILED, f"mercadolivre {exc}", http_status=status
+        )
     except Exception as exc:
         log.warning("mercadolivre parse failed (%s): %s", page_type, exc)
         return _failure_envelope(
             url,
-            FailureReason.UNSUPPORTED_CONTENT_TYPE,
-            f"parse failed: {type(exc).__name__}: {exc}",
+            FailureReason.PARSE_FAILED,
+            f"mercadolivre parse failed: {type(exc).__name__}: {exc}",
             http_status=status,
         )
 
     from .. import io as io_mod
+
+    # Anchor present but zero parsed products on a search page: a genuinely
+    # empty result set (the rot case raised above). Flag it for agents.
+    warnings = ["no_results"] if page_type == "search" and not products else []
 
     currency = next(
         (p["currency"] for p in products if p.get("currency")),
@@ -619,7 +637,7 @@ async def fetch_mercadolivre(
                 "result_count": len(products),
                 "products": products,
             },
-            "warnings": [],
+            "warnings": warnings,
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),
     )

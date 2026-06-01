@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import browser as browser_mod
+from .netblock import load_netblock
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ async def _serve_fetch(
     url: str,
     mobile: bool,
     timeout: float,
+    netblock: frozenset[str] | None = None,
 ) -> tuple[str, int, dict[str, str]]:
     """Fetch a page, relaunching the browser once if the driver connection drops.
 
@@ -152,6 +154,7 @@ async def _serve_fetch(
                 mobile=mobile,
                 timeout=timeout,
                 is_persistent=supervisor.is_persistent,
+                netblock=netblock,
             )
         except Exception as exc:
             last_exc = exc
@@ -181,6 +184,7 @@ async def _handle_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     supervisor: _BrowserSupervisor,
+    netblock: frozenset[str] | None = None,
 ) -> None:
     try:
         while True:
@@ -197,7 +201,11 @@ async def _handle_client(
 
             try:
                 html, status, headers = await _serve_fetch(
-                    supervisor, url=url, mobile=mobile, timeout=timeout
+                    supervisor,
+                    url=url,
+                    mobile=mobile,
+                    timeout=timeout,
+                    netblock=netblock,
                 )
                 await _write_msg(
                     writer, {"html": html, "status": status, "headers": headers}
@@ -216,6 +224,7 @@ async def _fetch_page(
     mobile: bool = False,
     timeout: float = 30.0,
     is_persistent: bool = False,
+    netblock: frozenset[str] | None = None,
 ) -> tuple[str, int, dict[str, str]]:
     """Thin wrapper over the shared `browser.fetch_page`. Kept as a stable seam
     the request handler calls and the server tests monkeypatch."""
@@ -225,6 +234,7 @@ async def _fetch_page(
         deadline_monotonic=time.monotonic() + timeout,
         mobile=mobile,
         is_persistent=is_persistent,
+        netblock=netblock,
     )
 
 
@@ -368,6 +378,22 @@ async def run_server(cfg: Any | None = None) -> None:
     _patch_playwright_driver()
     kwargs, is_persistent = _build_launch_kwargs(cfg)
 
+    # Resolve the tracker blocklist once at startup; the handler then only does
+    # an O(1) set membership test per request.
+    block_trackers = True
+    network_blocklist_paths: tuple[str, ...] = ()
+    if cfg is not None:
+        try:
+            block_trackers = bool(cfg.browser.block_trackers)
+            network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
+        except Exception:
+            pass
+    netblock = await asyncio.to_thread(
+        load_netblock, block_trackers, network_blocklist_paths
+    )
+    if netblock:
+        log.info("tracker blocking enabled (%d domains)", len(netblock))
+
     sock = _socket_path()
     sock.parent.mkdir(parents=True, exist_ok=True)
     if sock.exists():
@@ -379,7 +405,7 @@ async def run_server(cfg: Any | None = None) -> None:
     await supervisor.start()
     try:
         server = await asyncio.start_unix_server(
-            lambda r, w: _handle_client(r, w, supervisor),
+            lambda r, w: _handle_client(r, w, supervisor, netblock),
             path=str(sock),
         )
         os.chmod(str(sock), 0o600)

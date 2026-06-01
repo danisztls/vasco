@@ -26,6 +26,10 @@ SEED_STRATEGIES: dict[str, str] = {
     # list pages (`/aluguel`, `/venda`, ...) are not and are left to be learned
     # (they resolve at the cheap http tier).
     "vivareal.com.br/imovel": "browser",
+    # OLX is Cloudflare-protected site-wide; the http tier reliably gets a 403
+    # challenge, so start at the browser for every OLX route (list + every
+    # regional detail subdomain — the bare-domain key covers them all).
+    "olx.com.br": "browser",
 }
 
 

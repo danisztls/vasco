@@ -23,12 +23,19 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import browser as browser_mod
-from .netblock import load_netblock
+from ..cache import registered_domain
+from .netblock import load_netblock, should_block
 
 log = logging.getLogger(__name__)
 
 _HEADER = struct.Struct("!I")
+
+_MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 "
+    "Mobile/15E148 Safari/604.1"
+)
+_MOBILE_VIEWPORT = {"width": 393, "height": 852}
 
 
 # --- Playwright Firefox driver patch -------------------------------------
@@ -217,6 +224,108 @@ async def _handle_client(
         await writer.wait_closed()
 
 
+async def _extract_headers(response: Any) -> dict[str, str]:
+    """Best-effort response header extraction, with a fallback path."""
+    if response is None:
+        return {}
+    try:
+        raw = await response.all_headers()
+        return {str(k): str(v) for k, v in raw.items()}
+    except Exception:
+        try:
+            return {str(k): str(v) for k, v in (response.headers or {}).items()}
+        except Exception:
+            return {}
+
+
+async def _install_netblock_route(
+    page: Any, url: str, netblock: frozenset[str]
+) -> None:
+    """Install a `page.route` handler that aborts third-party tracker requests.
+
+    First-party requests (same registered domain as `url`) always pass, so a
+    page's own resources are never blocked. The handler is an O(1) set membership
+    test; interception errors are swallowed so they can never kill a fetch.
+    """
+    page_domain = registered_domain(url)
+
+    async def _route(route: Any) -> None:
+        try:
+            if should_block(route.request.url, page_domain, netblock):
+                await route.abort()
+            else:
+                await route.continue_()
+        except Exception:
+            try:
+                await route.continue_()
+            except Exception:
+                pass
+
+    await page.route("**/*", _route)
+
+
+async def fetch_page(
+    browser_or_context: Any,
+    url: str,
+    *,
+    deadline_monotonic: float,
+    mobile: bool = False,
+    is_persistent: bool = False,
+    netblock: frozenset[str] | None = None,
+) -> tuple[str, int, dict[str, str]]:
+    """Open a page, navigate to `url`, and return (html, status, headers).
+
+    Honours `deadline_monotonic` (an absolute ``time.monotonic()`` value) for
+    both the navigation and the networkidle settle. When `netblock` is
+    non-empty, third-party tracker/ad requests are aborted via a `page.route`
+    handler.
+    """
+    context = None
+    if mobile and not is_persistent:
+        context = await browser_or_context.new_context(
+            user_agent=_MOBILE_USER_AGENT,
+            viewport=_MOBILE_VIEWPORT,
+            device_scale_factor=3,
+        )
+        page = await context.new_page()
+    else:
+        page = await browser_or_context.new_page()
+        if mobile:
+            await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
+            await page.set_viewport_size(_MOBILE_VIEWPORT)
+    try:
+        if netblock:
+            await _install_netblock_route(page, url, netblock)
+        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
+        response = await page.goto(
+            url, wait_until="domcontentloaded", timeout=remaining_ms
+        )
+
+        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
+        if remaining_ms > 0:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=remaining_ms)
+            except Exception:
+                pass
+
+        html = await page.content()
+        status = int(response.status) if response is not None else 0
+        headers = await _extract_headers(response)
+        return html, status, headers
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:
+                pass
+
+
 async def _fetch_page(
     browser: Any,
     url: str,
@@ -226,9 +335,9 @@ async def _fetch_page(
     is_persistent: bool = False,
     netblock: frozenset[str] | None = None,
 ) -> tuple[str, int, dict[str, str]]:
-    """Thin wrapper over the shared `browser.fetch_page`. Kept as a stable seam
-    the request handler calls and the server tests monkeypatch."""
-    return await browser_mod.fetch_page(
+    """Thin wrapper over `fetch_page`. Kept as a stable seam the request handler
+    calls and the server tests monkeypatch."""
+    return await fetch_page(
         browser,
         url,
         deadline_monotonic=time.monotonic() + timeout,

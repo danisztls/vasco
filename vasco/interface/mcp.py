@@ -52,8 +52,9 @@ async def _lifespan(_server: FastMCP):  # type: ignore[no-untyped-def]
                 int((_monotonic() - t0) * 1000),
             )
         except Exception as exc:
-            # A prewarm failure (e.g. camoufox not installed) must not kill the
-            # server — HTTP-tier fetches still work without the browser.
+            # A prewarm failure (e.g. the browser server isn't running) must not
+            # kill the server — HTTP-tier fetches still work, and browser-tier
+            # ones fail cleanly as BROWSER_UNAVAILABLE until the peer is up.
             log.warning("vasco MCP browser pre-warm failed: %s", exc)
     log.info("vasco MCP server ready")
     try:

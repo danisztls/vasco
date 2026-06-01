@@ -26,6 +26,13 @@ class FailureReason(StrEnum):
     # content type) so it can carry a short, self-healing negative-cache TTL.
     # `bot_detect.classify` never emits this; only the content adapters do.
     PARSE_FAILED = "parse_failed"
+    # The browser tier runs as a separate peer service (``vasco browser-server``);
+    # this means it wasn't reachable when a browser-tier fetch was needed. An
+    # operational/transient condition (start the server, it comes back), so it
+    # carries a short self-healing negative-cache TTL — distinct from a true
+    # upstream SERVER_ERROR. ``bot_detect.classify`` maps the browser tier's
+    # ``_failure_hint`` to it; it is not derived from any HTTP status.
+    BROWSER_UNAVAILABLE = "browser_unavailable"
 
 
 class AdapterParseError(Exception):
@@ -36,4 +43,16 @@ class AdapterParseError(Exception):
     opposed to an anchor that is present but legitimately empty (zero results).
     The adapter's ``fetch_*`` turns this into a ``PARSE_FAILED`` failure
     envelope with this message — short and informative, never raw HTML.
+    """
+
+
+class BrowserServerUnavailable(RuntimeError):
+    """The persistent browser server isn't reachable.
+
+    The browser tier is a separate peer service (``vasco browser-server``) that
+    owns the Camoufox process; the client (``vasco/fetch/browser.py``) only
+    proxies to it. Raised by ``BrowserPool`` when the server socket is missing
+    or the handshake fails — there is no in-process browser fallback. The fetch
+    chain turns this into a ``BROWSER_UNAVAILABLE`` failure and escalates to the
+    next tier (wayback) instead of crashing.
     """

@@ -1,12 +1,17 @@
-"""Camoufox browser pool with optional remote server connection.
+"""Browser-tier client: proxies fetches to the persistent browser server.
 
-If a browser server is running (UNIX socket at $XDG_RUNTIME_DIR/vasco/browser.sock),
-fetch requests are proxied to it — zero cold start, shared browser instance across
-all consumers. Otherwise, falls back to launching a local Camoufox instance.
+The browser tier runs as a separate, long-lived peer service
+(``vasco browser-server`` → ``vasco/fetch/browser_server.py``) that owns the
+Camoufox process. This module is a thin client: ``BrowserPool`` connects to the
+server's UNIX socket (``$XDG_RUNTIME_DIR/vasco/browser.sock``) and proxies fetch
+requests to it.
 
-Lazy-starts on first `.fetch()`. Pages are created per URL and closed after content
-extraction. Shutdown is the caller's responsibility — `fetch.fetch_one` / `fetch_many`
-call `.close()` in a `finally` block.
+There is **no in-process browser fallback** — camoufox is a dependency of the
+server only, not of this module — so when the server isn't running the browser
+tier raises ``BrowserServerUnavailable``, which the fetch chain turns into a
+``BROWSER_UNAVAILABLE`` failure (and escalates to the next tier, wayback). All
+browser configuration (locale, persistent profile, tracker blocking) lives with
+the server; the client passes only the URL and a deadline.
 """
 
 from __future__ import annotations
@@ -17,25 +22,11 @@ import logging
 import os
 import struct
 import time
-from pathlib import Path
 from typing import Any
 
-from ..cache import registered_domain
-from .netblock import load_netblock, should_block
-
-try:  # pragma: no cover - camoufox is an optional dep at import time.
-    from camoufox.async_api import AsyncCamoufox
-except Exception:  # pragma: no cover
-    AsyncCamoufox = None  # type: ignore[assignment]
+from ..errors import BrowserServerUnavailable
 
 log = logging.getLogger(__name__)
-
-_MOBILE_USER_AGENT = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 "
-    "Mobile/15E148 Safari/604.1"
-)
-_MOBILE_VIEWPORT = {"width": 393, "height": 852}
 
 _HEADER = struct.Struct("!I")
 
@@ -61,140 +52,31 @@ async def _send_request(sock_path: str, request: dict) -> dict:
         await writer.wait_closed()
 
 
-async def _extract_headers(response: Any) -> dict[str, str]:
-    """Best-effort response header extraction, with a fallback path."""
-    if response is None:
-        return {}
-    try:
-        raw = await response.all_headers()
-        return {str(k): str(v) for k, v in raw.items()}
-    except Exception:
-        try:
-            return {str(k): str(v) for k, v in (response.headers or {}).items()}
-        except Exception:
-            return {}
-
-
-async def _install_netblock_route(
-    page: Any, url: str, netblock: frozenset[str]
-) -> None:
-    """Install a `page.route` handler that aborts third-party tracker requests.
-
-    First-party requests (same registered domain as `url`) always pass, so a
-    page's own resources are never blocked. The handler is an O(1) set membership
-    test; interception errors are swallowed so they can never kill a fetch.
-    """
-    page_domain = registered_domain(url)
-
-    async def _route(route: Any) -> None:
-        try:
-            if should_block(route.request.url, page_domain, netblock):
-                await route.abort()
-            else:
-                await route.continue_()
-        except Exception:
-            try:
-                await route.continue_()
-            except Exception:
-                pass
-
-    await page.route("**/*", _route)
-
-
-async def fetch_page(
-    browser_or_context: Any,
-    url: str,
-    *,
-    deadline_monotonic: float,
-    mobile: bool = False,
-    is_persistent: bool = False,
-    netblock: frozenset[str] | None = None,
-) -> tuple[str, int, dict[str, str]]:
-    """Open a page, navigate to `url`, and return (html, status, headers).
-
-    Honours `deadline_monotonic` (an absolute ``time.monotonic()`` value) for
-    both the navigation and the networkidle settle. Shared by the in-process
-    `BrowserPool` and the socket `browser_server` so the two behave identically.
-    When `netblock` is non-empty, third-party tracker/ad requests are aborted via
-    a `page.route` handler.
-    """
-    context = None
-    if mobile and not is_persistent:
-        context = await browser_or_context.new_context(
-            user_agent=_MOBILE_USER_AGENT,
-            viewport=_MOBILE_VIEWPORT,
-            device_scale_factor=3,
-        )
-        page = await context.new_page()
-    else:
-        page = await browser_or_context.new_page()
-        if mobile:
-            await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
-            await page.set_viewport_size(_MOBILE_VIEWPORT)
-    try:
-        if netblock:
-            await _install_netblock_route(page, url, netblock)
-        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
-        if remaining_ms <= 0:
-            raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
-        response = await page.goto(
-            url, wait_until="domcontentloaded", timeout=remaining_ms
-        )
-
-        remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
-        if remaining_ms > 0:
-            try:
-                await page.wait_for_load_state("networkidle", timeout=remaining_ms)
-            except Exception:
-                pass
-
-        html = await page.content()
-        status = int(response.status) if response is not None else 0
-        headers = await _extract_headers(response)
-        return html, status, headers
-    finally:
-        try:
-            await page.close()
-        except Exception:
-            pass
-        if context is not None:
-            try:
-                await context.close()
-            except Exception:
-                pass
-
-
 class BrowserPool:
-    """Owns one Camoufox browser context, or proxies to a remote server."""
+    """Client handle to the shared browser server.
 
-    def __init__(
-        self,
-        *,
-        headless: bool = True,
-        locale: str = "en-US",
-        user_data_dir: str = "",
-        block_trackers: bool = True,
-        network_blocklist_paths: tuple[str, ...] = (),
-    ) -> None:
-        self._headless = headless
-        self._locale = locale
-        self._user_data_dir = _expand_profile_dir(user_data_dir)
-        self._is_persistent = bool(self._user_data_dir)
-        self._block_trackers = block_trackers
-        self._network_blocklist_paths = network_blocklist_paths
-        self._netblock: frozenset[str] | None = None
+    Holds no browser of its own — ``fetch`` proxies to the server over the UNIX
+    socket. Kept as a class (rather than free functions) for API stability:
+    callers do ``get_browser(cfg).fetch(...)`` / ``.close()`` exactly as before.
+    ``cfg`` is accepted at the factory for call-site compatibility but unused on
+    the client; the server owns all browser configuration.
+    """
+
+    def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._cm: Any | None = None
-        self._browser: Any | None = None
         self._remote: bool = False
 
     async def _ensure_started(self) -> None:
-        if self._browser is not None or self._remote:
+        """Establish (and cache) the connection to the browser server.
+
+        Raises ``BrowserServerUnavailable`` if the server socket is missing or
+        the handshake fails — there is no local fallback.
+        """
+        if self._remote:
             return
         async with self._lock:
-            if self._browser is not None or self._remote:
+            if self._remote:
                 return
-
             sock = _socket_path()
             if os.path.exists(sock):
                 try:
@@ -207,54 +89,19 @@ class BrowserPool:
                         return
                 except Exception:
                     pass
-
-            if AsyncCamoufox is None:
-                raise RuntimeError(
-                    "camoufox is not installed; cannot start browser tier"
-                )
-            # Resolve the tracker blocklist once, off the event loop (a configured
-            # remote list may consolidate; the bundled default is a quick read).
-            # Only the local path needs it — a remote browser server applies its own.
-            if self._netblock is None:
-                self._netblock = await asyncio.to_thread(
-                    load_netblock,
-                    self._block_trackers,
-                    self._network_blocklist_paths,
-                )
-            kwargs: dict[str, Any] = {
-                "headless": self._headless,
-                "locale": (self._locale,),
-            }
-            if self._is_persistent:
-                os.makedirs(self._user_data_dir, exist_ok=True)
-                kwargs["persistent_context"] = True
-                kwargs["user_data_dir"] = self._user_data_dir
-            try:
-                self._cm = AsyncCamoufox(**kwargs)
-                self._browser = await self._cm.__aenter__()
-            except Exception as exc:
-                if self._is_persistent and "already running" in str(exc):
-                    log.warning(
-                        "persistent profile locked, falling back to ephemeral browser"
-                    )
-                    self._cm = None
-                    self._is_persistent = False
-                    fallback = {
-                        "headless": self._headless,
-                        "locale": (self._locale,),
-                    }
-                    self._cm = AsyncCamoufox(**fallback)
-                    self._browser = await self._cm.__aenter__()
-                else:
-                    raise
+            raise BrowserServerUnavailable(
+                f"browser server not reachable at {sock}; "
+                "start it with `vasco browser-server`"
+            )
 
     async def fetch(
         self, url: str, *, deadline_monotonic: float, mobile: bool = False
     ) -> tuple[str, int, dict[str, str]]:
-        """Fetch a URL via the browser tier.
+        """Fetch a URL via the browser server.
 
-        Returns (html, status, headers). Raises asyncio.TimeoutError if the
-        deadline has already passed.
+        Returns (html, status, headers). Raises ``asyncio.TimeoutError`` if the
+        deadline has already passed, or ``BrowserServerUnavailable`` if the
+        server isn't running.
         """
         remaining = deadline_monotonic - time.monotonic()
         if remaining <= 0:
@@ -263,87 +110,32 @@ class BrowserPool:
             )
 
         await self._ensure_started()
-
-        if self._remote:
-            resp = await _send_request(
-                _socket_path(),
-                {"url": url, "mobile": mobile, "timeout": remaining},
-            )
-            if "error" in resp:
-                raise RuntimeError(resp["error"])
-            return resp.get("html", ""), resp.get("status", 0), resp.get("headers", {})
-
-        assert self._browser is not None
-        return await fetch_page(
-            self._browser,
-            url,
-            deadline_monotonic=deadline_monotonic,
-            mobile=mobile,
-            is_persistent=self._is_persistent,
-            netblock=self._netblock,
+        resp = await _send_request(
+            _socket_path(),
+            {"url": url, "mobile": mobile, "timeout": remaining},
         )
+        if "error" in resp:
+            raise RuntimeError(resp["error"])
+        return resp.get("html", ""), resp.get("status", 0), resp.get("headers", {})
 
     async def close(self) -> None:
-        if self._remote:
-            self._remote = False
-            return
-        if self._cm is None:
-            return
-        try:
-            await self._cm.__aexit__(None, None, None)
-        except Exception:
-            pass
-        finally:
-            self._cm = None
-            self._browser = None
+        self._remote = False
 
 
 _pool: BrowserPool | None = None
 
 
-def _expand_profile_dir(raw: str) -> str:
-    raw = (raw or "").strip()
-    if not raw:
-        return ""
-    # expandvars leaves unknown vars as literals; provide XDG fallback so that
-    # "$XDG_DATA_HOME/..." works even in subprocess envs that strip XDG vars.
-    if "XDG_DATA_HOME" not in os.environ:
-        xdg = str(Path.home() / ".local" / "share")
-        raw = raw.replace("${XDG_DATA_HOME}", xdg).replace("$XDG_DATA_HOME", xdg)
-    return os.path.abspath(os.path.expanduser(os.path.expandvars(raw)))
-
-
 def get_browser(cfg: Any | None = None) -> BrowserPool:
-    """Return the process-wide BrowserPool singleton.
+    """Return the process-wide ``BrowserPool`` singleton (a client to the browser
+    server).
 
-    First call constructs the object (consulting cfg.browser if provided) but
-    does NOT start Firefox; the browser is started on the first `.fetch()`.
-    Subsequent calls return the same instance; passed cfg is ignored once the
-    pool exists.
+    ``cfg`` is accepted for call-site compatibility but unused — the server owns
+    browser configuration. The browser is *not* started here; the connection is
+    established lazily on the first ``.fetch()`` / ``._ensure_started()``.
     """
     global _pool
     if _pool is None:
-        headless = True
-        locale = "en-US"
-        user_data_dir = ""
-        block_trackers = True
-        network_blocklist_paths: tuple[str, ...] = ()
-        if cfg is not None:
-            try:
-                headless = bool(cfg.browser.headless)
-                locale = str(cfg.browser.locale)
-                user_data_dir = str(cfg.browser.user_data_dir or "")
-                block_trackers = bool(cfg.browser.block_trackers)
-                network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
-            except Exception:
-                pass
-        _pool = BrowserPool(
-            headless=headless,
-            locale=locale,
-            user_data_dir=user_data_dir,
-            block_trackers=block_trackers,
-            network_blocklist_paths=network_blocklist_paths,
-        )
+        _pool = BrowserPool()
     return _pool
 
 

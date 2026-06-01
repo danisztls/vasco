@@ -1,6 +1,12 @@
-"""Tests for the persistent browser server's wedge-recovery logic."""
+"""Tests for the persistent browser server: wedge-recovery, page-driving
+(`fetch_page` tracker interception), and launch-kwargs assembly."""
 
 from __future__ import annotations
+
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -103,3 +109,139 @@ async def test_disconnect_still_relaunches_immediately(monkeypatch):
     )
     assert (html, status) == ("<html>ok</html>", 200)
     assert sup.relaunches == 1
+
+
+# ── Page driving / tracker-blocking request interception (fetch_page) ──────────
+
+
+class _FakeResponse:
+    status = 200
+
+    async def all_headers(self) -> dict[str, str]:
+        return {}
+
+
+class _FakeRoute:
+    """Records the action the route handler takes for a given request URL."""
+
+    def __init__(self, url: str) -> None:
+        self.request = type("Req", (), {"url": url})()
+        self.action: str | None = None
+
+    async def abort(self) -> None:
+        self.action = "abort"
+
+    async def continue_(self) -> None:
+        self.action = "continue"
+
+
+class _FakePage:
+    def __init__(self) -> None:
+        self.routes: list[tuple[str, Any]] = []
+        self.closed = False
+
+    async def route(self, pattern: str, handler: Any) -> None:
+        self.routes.append((pattern, handler))
+
+    async def goto(self, url: str, **_: Any) -> _FakeResponse:
+        return _FakeResponse()
+
+    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def content(self) -> str:
+        return "<html>ok</html>"
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self, page: _FakePage) -> None:
+        self._page = page
+
+    async def new_page(self) -> _FakePage:
+        return self._page
+
+
+async def test_fetch_page_installs_route_and_blocks_third_party_tracker() -> None:
+    page = _FakePage()
+    html, status, _ = await bs.fetch_page(
+        _FakeBrowser(page),
+        "https://example.com",
+        deadline_monotonic=time.monotonic() + 5,
+        netblock=frozenset({"tracker.com"}),
+    )
+    assert (html, status) == ("<html>ok</html>", 200)
+    assert len(page.routes) == 1
+    pattern, handler = page.routes[0]
+    assert pattern == "**/*"
+
+    # Drive the captured handler: third-party tracker aborted, first-party passes.
+    tracker = _FakeRoute("https://tracker.com/t.js")
+    await handler(tracker)
+    assert tracker.action == "abort"
+
+    first_party = _FakeRoute("https://example.com/app.js")
+    await handler(first_party)
+    assert first_party.action == "continue"
+
+
+async def test_fetch_page_no_route_when_netblock_empty_or_none() -> None:
+    for netblock in (frozenset(), None):
+        page = _FakePage()
+        await bs.fetch_page(
+            _FakeBrowser(page),
+            "https://example.com",
+            deadline_monotonic=time.monotonic() + 5,
+            netblock=netblock,
+        )
+        assert page.routes == []
+
+
+# ── Launch-kwargs assembly (_build_launch_kwargs) ─────────────────────────────
+
+
+def _cfg(**browser: Any) -> SimpleNamespace:
+    # _build_launch_kwargs reads headless/locale/user_data_dir in one try-block,
+    # so a partial namespace would AttributeError into the defaults — supply all.
+    fields = {"headless": True, "locale": "en-US", "user_data_dir": ""}
+    fields.update(browser)
+    return SimpleNamespace(browser=SimpleNamespace(**fields))
+
+
+def test_build_launch_kwargs_default_omits_persistent_context() -> None:
+    kwargs, is_persistent = bs._build_launch_kwargs(None)
+    assert kwargs == {"headless": True, "locale": ("en-US",)}
+    assert is_persistent is False
+
+
+def test_build_launch_kwargs_user_data_dir_enables_persistent_context(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "camoufox-profile"
+    kwargs, is_persistent = bs._build_launch_kwargs(_cfg(user_data_dir=str(profile)))
+    assert is_persistent is True
+    assert kwargs["persistent_context"] is True
+    assert kwargs["user_data_dir"] == str(profile)
+    assert profile.is_dir()  # created
+
+
+def test_build_launch_kwargs_expands_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VASCO_TEST_PROFILE", str(tmp_path / "p"))
+    kwargs, _ = bs._build_launch_kwargs(_cfg(user_data_dir="$VASCO_TEST_PROFILE"))
+    assert kwargs["user_data_dir"] == str(tmp_path / "p")
+
+
+def test_build_launch_kwargs_expands_xdg_data_home_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """$XDG_DATA_HOME must expand even when the env var is absent (subprocess env)."""
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    kwargs, _ = bs._build_launch_kwargs(
+        _cfg(user_data_dir="$XDG_DATA_HOME/vasco/profile")
+    )
+    expected = str(Path.home() / ".local" / "share" / "vasco" / "profile")
+    assert kwargs["user_data_dir"] == expected

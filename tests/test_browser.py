@@ -1,201 +1,156 @@
-"""Tests for the Camoufox kwargs assembled by BrowserPool.
+"""Tests for the browser-tier client (`BrowserPool` proxying to the server).
 
-These stub `AsyncCamoufox` to a recording mock so we don't actually launch
-Firefox — what we care about is which kwargs are passed.
+The client holds no browser of its own — it connects to the browser server's
+UNIX socket and proxies fetch requests. These tests stand up a tiny fake server
+on a tmp socket and assert the proxy round-trip, plus the no-server failure mode.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import struct
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 
+from vasco.errors import BrowserServerUnavailable
 from vasco.fetch import browser as browser_mod
 from vasco.fetch.browser import BrowserPool
 
-
-class _RecordingCM:
-    """Async context manager that records the kwargs it was constructed with."""
-
-    instances: list[_RecordingCM] = []
-
-    def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
-        type(self).instances.append(self)
-
-    async def __aenter__(self) -> object:
-        # Return a stand-in that has `.new_page()` / `.new_context()` so the
-        # rest of BrowserPool doesn't blow up if anything calls them. None of
-        # these tests do, but it's free insurance.
-        class _Stub:
-            async def new_page(self) -> object:
-                raise AssertionError("page creation not exercised in this test")
-
-            async def new_context(self, **_: Any) -> object:
-                raise AssertionError("context creation not exercised in this test")
-
-        return _Stub()
-
-    async def __aexit__(self, *_: Any) -> None:
-        return None
+_HEADER = struct.Struct("!I")
 
 
 @pytest.fixture(autouse=True)
-def _reset_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _RecordingCM.instances = []
-    monkeypatch.setattr(browser_mod, "AsyncCamoufox", _RecordingCM)
-    # Point the socket path at a guaranteed-missing file so a real browser
-    # server running on the dev machine doesn't divert `_ensure_started`
-    # away from the recording mock.
-    monkeypatch.setattr(
-        browser_mod, "_socket_path", lambda: str(tmp_path / "nonexistent.sock")
-    )
+def _reset() -> None:
+    browser_mod._reset_for_tests()
+    yield
     browser_mod._reset_for_tests()
 
 
-@pytest.mark.asyncio
-async def test_default_kwargs_omit_persistent_context() -> None:
-    pool = BrowserPool()
-    await pool._ensure_started()
-    [cm] = _RecordingCM.instances
-    assert cm.kwargs == {"headless": True, "locale": ("en-US",)}
-    assert "persistent_context" not in cm.kwargs
-    assert "user_data_dir" not in cm.kwargs
+async def _start_fake_server(sock_path: Path, handler) -> asyncio.AbstractServer:
+    """A length-prefixed-JSON echo server matching the client's `_send_request`.
+
+    `handler(request_dict) -> response_dict`. One request per connection (the
+    client opens a fresh connection per `_send_request` call).
+    """
+
+    async def _cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            header = await reader.readexactly(_HEADER.size)
+            (length,) = _HEADER.unpack(header)
+            req = json.loads(await reader.readexactly(length))
+            resp = handler(req)
+            payload = json.dumps(resp).encode()
+            writer.write(_HEADER.pack(len(payload)) + payload)
+            await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    return await asyncio.start_unix_server(_cb, path=str(sock_path))
 
 
 @pytest.mark.asyncio
-async def test_user_data_dir_enables_persistent_context(tmp_path: Path) -> None:
-    profile = tmp_path / "camoufox-profile"
-    pool = BrowserPool(user_data_dir=str(profile))
-    await pool._ensure_started()
-    [cm] = _RecordingCM.instances
-    assert cm.kwargs["persistent_context"] is True
-    # Path is absolutized + expanded; tmp_path is already absolute, so equality
-    # holds. The dir must also have been created.
-    assert cm.kwargs["user_data_dir"] == str(profile)
-    assert profile.is_dir()
-
-
-@pytest.mark.asyncio
-async def test_empty_user_data_dir_is_not_persistent() -> None:
-    pool = BrowserPool(user_data_dir="   ")  # whitespace also disables
-    await pool._ensure_started()
-    [cm] = _RecordingCM.instances
-    assert "persistent_context" not in cm.kwargs
-    assert "user_data_dir" not in cm.kwargs
-
-
-@pytest.mark.asyncio
-async def test_user_data_dir_expands_env_and_user(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_ensure_started_raises_when_no_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("VASCO_TEST_PROFILE", str(tmp_path / "p"))
-    pool = BrowserPool(user_data_dir="$VASCO_TEST_PROFILE")
-    await pool._ensure_started()
-    [cm] = _RecordingCM.instances
-    assert cm.kwargs["user_data_dir"] == str(tmp_path / "p")
-
-
-@pytest.mark.asyncio
-async def test_user_data_dir_expands_xdg_data_home_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """$XDG_DATA_HOME must expand even when the env var is absent (MCP subprocess env)."""
-    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    pool = BrowserPool(user_data_dir="$XDG_DATA_HOME/vasco/profile")
-    await pool._ensure_started()
-    [cm] = _RecordingCM.instances
-    expected = str(Path.home() / ".local" / "share" / "vasco" / "profile")
-    assert cm.kwargs["user_data_dir"] == expected
-
-
-# ── Tracker-blocking request interception (fetch_page) ──────────────
-
-
-class _FakeResponse:
-    status = 200
-
-    async def all_headers(self) -> dict[str, str]:
-        return {}
-
-
-class _FakeRoute:
-    """Records the action the route handler takes for a given request URL."""
-
-    def __init__(self, url: str) -> None:
-        self.request = type("Req", (), {"url": url})()
-        self.action: str | None = None
-
-    async def abort(self) -> None:
-        self.action = "abort"
-
-    async def continue_(self) -> None:
-        self.action = "continue"
-
-
-class _FakePage:
-    def __init__(self) -> None:
-        self.routes: list[tuple[str, Any]] = []
-        self.closed = False
-
-    async def route(self, pattern: str, handler: Any) -> None:
-        self.routes.append((pattern, handler))
-
-    async def goto(self, url: str, **_: Any) -> _FakeResponse:
-        return _FakeResponse()
-
-    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
-        return None
-
-    async def content(self) -> str:
-        return "<html>ok</html>"
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _FakeBrowser:
-    def __init__(self, page: _FakePage) -> None:
-        self._page = page
-
-    async def new_page(self) -> _FakePage:
-        return self._page
-
-
-@pytest.mark.asyncio
-async def test_fetch_page_installs_route_and_blocks_third_party_tracker() -> None:
-    page = _FakePage()
-    html, status, _ = await browser_mod.fetch_page(
-        _FakeBrowser(page),
-        "https://example.com",
-        deadline_monotonic=time.monotonic() + 5,
-        netblock=frozenset({"tracker.com"}),
+    monkeypatch.setattr(
+        browser_mod, "_socket_path", lambda: str(tmp_path / "nonexistent.sock")
     )
-    assert (html, status) == ("<html>ok</html>", 200)
-    assert len(page.routes) == 1
-    pattern, handler = page.routes[0]
-    assert pattern == "**/*"
-
-    # Drive the captured handler: third-party tracker aborted, first-party passes.
-    tracker = _FakeRoute("https://tracker.com/t.js")
-    await handler(tracker)
-    assert tracker.action == "abort"
-
-    first_party = _FakeRoute("https://example.com/app.js")
-    await handler(first_party)
-    assert first_party.action == "continue"
+    pool = BrowserPool()
+    with pytest.raises(BrowserServerUnavailable):
+        await pool._ensure_started()
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_no_route_when_netblock_empty_or_none() -> None:
-    for netblock in (frozenset(), None):
-        page = _FakePage()
-        await browser_mod.fetch_page(
-            _FakeBrowser(page),
-            "https://example.com",
-            deadline_monotonic=time.monotonic() + 5,
-            netblock=netblock,
+async def test_fetch_proxies_to_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sock = tmp_path / "browser.sock"
+    monkeypatch.setattr(browser_mod, "_socket_path", lambda: str(sock))
+
+    seen: list[dict] = []
+
+    def handler(req: dict) -> dict:
+        seen.append(req)
+        if req.get("url") == "about:blank":  # the _ensure_started handshake
+            return {"html": "", "status": 200, "headers": {}}
+        return {"html": "<html>ok</html>", "status": 200, "headers": {"x": "y"}}
+
+    server = await _start_fake_server(sock, handler)
+    try:
+        pool = BrowserPool()
+        html, status, headers = await pool.fetch(
+            "https://example.com", deadline_monotonic=time.monotonic() + 5
         )
-        assert page.routes == []
+        assert (html, status, headers) == ("<html>ok</html>", 200, {"x": "y"})
+        # The real request carried through the mobile flag and the URL.
+        real = [r for r in seen if r.get("url") == "https://example.com"]
+        assert real and real[0]["mobile"] is False
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_fetch_passes_mobile_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sock = tmp_path / "browser.sock"
+    monkeypatch.setattr(browser_mod, "_socket_path", lambda: str(sock))
+
+    seen: list[dict] = []
+
+    def handler(req: dict) -> dict:
+        seen.append(req)
+        return {"html": "", "status": 200, "headers": {}}
+
+    server = await _start_fake_server(sock, handler)
+    try:
+        pool = BrowserPool()
+        await pool.fetch(
+            "https://example.com", deadline_monotonic=time.monotonic() + 5, mobile=True
+        )
+        real = [r for r in seen if r.get("url") == "https://example.com"]
+        assert real and real[0]["mobile"] is True
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_runtimeerror_on_server_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sock = tmp_path / "browser.sock"
+    monkeypatch.setattr(browser_mod, "_socket_path", lambda: str(sock))
+
+    def handler(req: dict) -> dict:
+        if req.get("url") == "about:blank":
+            return {"html": "", "status": 200, "headers": {}}
+        return {"error": "boom"}
+
+    server = await _start_fake_server(sock, handler)
+    try:
+        pool = BrowserPool()
+        with pytest.raises(RuntimeError, match="boom"):
+            await pool.fetch(
+                "https://example.com", deadline_monotonic=time.monotonic() + 5
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_timeout_when_deadline_passed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(browser_mod, "_socket_path", lambda: str(tmp_path / "x.sock"))
+    pool = BrowserPool()
+    with pytest.raises(asyncio.TimeoutError):
+        await pool.fetch("https://example.com", deadline_monotonic=time.monotonic() - 1)

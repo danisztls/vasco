@@ -7,20 +7,17 @@ import re
 import sys
 from dataclasses import asdict, is_dataclass
 from time import monotonic as _monotonic
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
-from vasco import cache as _cache
-from vasco import config as _config
-from vasco import extract as _extract
-from vasco import fetch as _fetch
-from vasco import io as _io
-from vasco import map as _map
-from vasco import search as _search
-from vasco import summarize as _summarize
-from vasco import telemetry as _telemetry
-from vasco.telemetry import logstats as _logstats
+# Heavy `vasco.*` submodules (fetch stack → trafilatura/httpx/bs4, etc.) are
+# imported lazily inside the command bodies, not at module load, so `vasco
+# --help` and the light commands don't pay for the whole fetch pipeline. Only
+# stdlib + typer are imported up front. See plan: startup-speed lazy imports.
+if TYPE_CHECKING:
+    from vasco.cache import Cache
+    from vasco.config import Config
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -76,7 +73,9 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
     }
 
 
-def _open_cache(cfg: _config.Config) -> _cache.Cache:
+def _open_cache(cfg: Config) -> Cache:
+    from vasco import cache as _cache
+
     path = cfg.cache.path or None
     return _cache.Cache(path)
 
@@ -97,6 +96,10 @@ def search(
     json_: Annotated[bool, typer.Option("--json", help="Emit a JSON array.")] = False,
 ) -> None:
     """Query the web and stream title/url/snippet records."""
+    from vasco import config as _config
+    from vasco import search as _search
+    from vasco import telemetry as _telemetry
+
     cfg = _config.load_config()
     effective_backend = backend or cfg.search.default_backend
     started = _monotonic()
@@ -158,8 +161,12 @@ async def _run_fetch_many(
     concat: bool,
     json_: bool,
     cache: Any | None,
-    cfg: _config.Config,
+    cfg: Config,
 ) -> None:
+    from vasco import fetch as _fetch
+    from vasco import io as _io
+    from vasco import telemetry as _telemetry
+
     envelopes: list[dict[str, Any]] = []
     async for env in _fetch.fetch_many(
         urls,
@@ -219,6 +226,11 @@ def fetch(
     ] = False,
 ) -> None:
     """Fetch one or more URLs and emit envelopes."""
+    from vasco import config as _config
+    from vasco import fetch as _fetch
+    from vasco import io as _io
+    from vasco import telemetry as _telemetry
+
     cfg = _config.load_config()
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
@@ -301,6 +313,10 @@ def extract(
     """Fetch a URL and print ranked passages as pretty JSON."""
     if rank not in ("bm25", "semantic"):
         raise typer.BadParameter("--rank must be one of: bm25, semantic")
+    from vasco import config as _config
+    from vasco import extract as _extract
+    from vasco import telemetry as _telemetry
+
     cfg = _config.load_config()
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
@@ -383,6 +399,10 @@ def answer(
     ] = False,
 ) -> None:
     """Fetch a URL and print an LLM answer/summary over its content as JSON."""
+    from vasco import config as _config
+    from vasco import summarize as _summarize
+    from vasco import telemetry as _telemetry
+
     cfg = _config.load_config()
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
@@ -455,6 +475,11 @@ def map_(
     ] = None,
 ) -> None:
     """Discover URLs on a site and stream NDJSON records."""
+    from vasco import config as _config
+    from vasco import io as _io
+    from vasco import map as _map
+    from vasco import telemetry as _telemetry
+
     cfg = _config.load_config()
     started = _monotonic()
     count = 0
@@ -484,6 +509,8 @@ def map_(
 @app.command()
 def normalize(url: Annotated[str, typer.Argument(help="URL to canonicalize.")]) -> None:
     """Print the canonical form used as the cache key."""
+    from vasco import cache as _cache
+
     print(_cache.normalize_url(url))
 
 
@@ -501,6 +528,9 @@ app.add_typer(cache_app, name="cache")
 @cache_app.command("list")
 def cache_list() -> None:
     """Stream NDJSON of cache entries."""
+    from vasco import config as _config
+    from vasco import io as _io
+
     cfg = _config.load_config()
     c = _open_cache(cfg)
     try:
@@ -526,6 +556,8 @@ def cache_purge(
     ] = None,
 ) -> None:
     """Delete cached entries, by domain and/or older than a duration."""
+    from vasco import config as _config
+
     cfg = _config.load_config()
     c = _open_cache(cfg)
     try:
@@ -545,6 +577,8 @@ def cache_purge(
 @cache_app.command("stats")
 def cache_stats() -> None:
     """Print cache stats as JSON."""
+    from vasco import config as _config
+
     cfg = _config.load_config()
     c = _open_cache(cfg)
     try:
@@ -566,6 +600,8 @@ app.add_typer(config_app, name="config")
 @config_app.command("show")
 def config_show() -> None:
     """Print the effective config (defaults + YAML + env overrides) as JSON."""
+    from vasco import config as _config
+
     cfg = _config.load_config()
     json.dump(asdict(cfg), sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
@@ -587,6 +623,9 @@ def logs_stats(
     ] = 1,
 ) -> None:
     """Print a rollup of telemetry events as JSON."""
+    from vasco import config as _config
+    from vasco.telemetry import logstats as _logstats
+
     cfg = _config.load_config()
     summary = _logstats.summarize(cfg, days=days)
     json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)

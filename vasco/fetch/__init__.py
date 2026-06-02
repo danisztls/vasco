@@ -424,6 +424,9 @@ _FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
     FailureReason.ROBOTS_DISALLOW: 96.0,
     FailureReason.INVALID_URL: 96.0,
     FailureReason.UNSUPPORTED_CONTENT_TYPE: 96.0,
+    # A category-landing hub is a stable property of the URL shape (no listings
+    # there, ever), so pin it long like the other structural permanents.
+    FailureReason.CATEGORY_LANDING: 96.0,
     FailureReason.PAYWALL_HARD: 24.0,  # ~6h
     FailureReason.LOGIN_REQUIRED: 24.0,
     FailureReason.BLOCKED_BOT: 4.0,  # ~1h

@@ -26,6 +26,14 @@ class FailureReason(StrEnum):
     # content type) so it can carry a short, self-healing negative-cache TTL.
     # `bot_detect.classify` never emits this; only the content adapters do.
     PARSE_FAILED = "parse_failed"
+    # Adapter-produced: the URL is a valid marketplace page but a *category
+    # landing / navigation hub* (e.g. OLX ``/imoveis/estado-sp``), not a
+    # search-results listing — it carries no extractable items by design. Kept
+    # distinct from PARSE_FAILED (which means scraper-rot on a page that *should*
+    # parse) so it doesn't pollute the rot signal, and from a genuinely-empty
+    # search (success + ``no_results``). A stable property of the URL shape, so
+    # it gets a long negative-cache TTL. ``bot_detect.classify`` never emits it.
+    CATEGORY_LANDING = "category_landing"
     # The browser tier runs as a separate peer service (``vasco browser-server``);
     # this means it wasn't reachable when a browser-tier fetch was needed. An
     # operational/transient condition (start the server, it comes back), so it

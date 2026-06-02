@@ -27,6 +27,13 @@ OLX sits behind Cloudflare, so the plain http tier is challenged (403);
 Shopping) so the chain skips the guaranteed-failing http attempt. HTML is still
 obtained through the shared escalation chain via the injected ``fetch_html`` —
 the seed only picks the *starting* tier; learning can still flip it.
+
+Bare category-landing **hub** pages (``/imoveis/estado-sp``, ``/autos-e-pecas``)
+are App-Router navigation pages with no embedded listing JSON and nothing to
+extract. They are matched (``is_olx_url`` stays true) but short-circuit to a
+``CATEGORY_LANDING`` failure — a clear, accurate signal ("not a listing page;
+narrow the URL") distinct from ``PARSE_FAILED`` (scraper-rot) — *before* any
+fetch, since the hub is a stable property of the URL shape (``_is_category_hub``).
 """
 
 from __future__ import annotations
@@ -91,6 +98,31 @@ def _vertical(url: str) -> str | None:
         if seg in _VERTICAL_SEGMENTS:
             return _VERTICAL_SEGMENTS[seg]
     return None
+
+
+def _is_category_hub(url: str) -> bool:
+    """Bare OLX category-landing hub pages (App-Router, no listings).
+
+    These render promo carousels + filter navigation, not a search-results ad
+    list, and ship no ``__NEXT_DATA__``. Verified shapes (www host only)::
+
+        /imoveis            /autos-e-pecas            -> 0 trailing segments
+        /imoveis/estado-sp  /autos-e-pecas/estado-sp  -> single state-location seg
+
+    Any further refinement (transaction type ``/venda``/``/aluguel``, a
+    subcategory, or a deeper location drill-down) is a real Pages-Router listing
+    and is **not** a hub. Restricted to the www/bare host; regional subdomains
+    carry detail + region lists and stay matched.
+    """
+    if _host(url) not in ("www.olx.com.br", "olx.com.br"):
+        return False
+    segs = [s for s in (urlsplit(url).path or "").lower().split("/") if s]
+    if not segs or segs[0] not in _VERTICAL_SEGMENTS:
+        return False
+    rest = segs[1:]
+    if not rest:
+        return True
+    return len(rest) == 1 and re.fullmatch(r"estado-[a-z]{2}", rest[0]) is not None
 
 
 def is_olx_url(url: str) -> bool:
@@ -536,6 +568,18 @@ async def fetch_olx(
     if vertical is None:  # pragma: no cover - routing guards this
         return _failure_envelope(
             url, FailureReason.INVALID_URL, "not a supported OLX vertical"
+        )
+    if _is_category_hub(url):
+        # An App-Router navigation hub (no embedded listing JSON, nothing to
+        # extract). Stable from the URL alone — fail clearly without spending a
+        # browser fetch, and don't let it masquerade as scraper-rot.
+        return _failure_envelope(
+            url,
+            FailureReason.CATEGORY_LANDING,
+            "OLX category-landing hub page — no listings to extract. Narrow the "
+            "URL with a transaction type (e.g. /imoveis/venda, /imoveis/aluguel), "
+            "a subcategory, or a deeper location (e.g. "
+            "/imoveis/estado-sp/sao-paulo-e-regiao).",
         )
     page_type = _page_type(url)
 

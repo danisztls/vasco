@@ -27,6 +27,10 @@ def _fx(name: str) -> str:
             True,
         ),
         ("https://sp.olx.com.br/x/autos-e-pecas/carros/fiat-1483248894", True),
+        # category-landing hubs are still OLX URLs (matched); fetch_olx returns a
+        # CATEGORY_LANDING failure for them (see test below), not PARSE_FAILED.
+        ("https://www.olx.com.br/imoveis/estado-sp", True),
+        ("https://www.olx.com.br/imoveis", True),
         # other OLX categories fall through to the normal fetch path
         ("https://www.olx.com.br/eletronicos-e-celulares/estado-sp", False),
         ("https://www.olx.com.br/", False),
@@ -37,6 +41,33 @@ def _fx(name: str) -> str:
 )
 def test_is_olx_url(url: str, expected: bool) -> None:
     assert O.is_olx_url(url) is expected
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        # hubs: bare vertical, or vertical + single state-location segment
+        ("https://www.olx.com.br/imoveis", True),
+        ("https://www.olx.com.br/imoveis/estado-sp", True),
+        ("https://www.olx.com.br/autos-e-pecas/estado-rj", True),
+        ("https://olx.com.br/imoveis/estado-sp", True),  # bare host
+        # not hubs: transaction type, deeper drill-down, or subcategory
+        ("https://www.olx.com.br/imoveis/venda", False),
+        ("https://www.olx.com.br/imoveis/aluguel/estado-sp", False),
+        ("https://www.olx.com.br/imoveis/estado-sp/sao-paulo-e-regiao", False),
+        (
+            "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios/estado-sp",
+            False,
+        ),
+        # regional subdomains (detail + region lists) are never treated as hubs
+        ("https://sp.olx.com.br/imoveis/estado-sp", False),
+        # non-OLX / non-vertical
+        ("https://example.com/imoveis/estado-sp", False),
+        ("https://www.olx.com.br/eletronicos-e-celulares/estado-sp", False),
+    ],
+)
+def test_is_category_hub(url: str, expected: bool) -> None:
+    assert O._is_category_hub(url) is expected
 
 
 @pytest.mark.parametrize(
@@ -298,3 +329,25 @@ async def test_fetch_list_genuine_empty_warns_no_results() -> None:
     assert "failure" not in env
     assert env["quality"]["result_count"] == 0
     assert "no_results" in env["warnings"]
+
+
+async def test_fetch_category_hub_short_circuits_without_fetch() -> None:
+    """A bare category-landing hub (/imoveis/estado-sp) is App-Router with no
+    listings: fetch_olx returns CATEGORY_LANDING *without* fetching, and never
+    masquerades as PARSE_FAILED scraper-rot."""
+    fetched = False
+
+    async def fake_fetch_html(_url: str):  # pragma: no cover - must not run
+        nonlocal fetched
+        fetched = True
+        return "", 200, {}, O.FailureReason.OK, "browser"
+
+    env = await O.fetch_olx(
+        "https://www.olx.com.br/imoveis/estado-sp", fetch_html=fake_fetch_html
+    )
+
+    assert fetched is False  # short-circuited before any (browser) fetch
+    assert env["mode_used"] == "olx"
+    assert env["failure"]["reason"] == O.FailureReason.CATEGORY_LANDING.value
+    assert env["failure"]["reason"] != O.FailureReason.PARSE_FAILED.value
+    assert "narrow" in env["failure"]["message"].lower()

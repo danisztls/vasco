@@ -41,6 +41,13 @@ class FailureReason(StrEnum):
     # upstream SERVER_ERROR. ``bot_detect.classify`` maps the browser tier's
     # ``_failure_hint`` to it; it is not derived from any HTTP status.
     BROWSER_UNAVAILABLE = "browser_unavailable"
+    # Post-conversion verdict: a 200 OK from *some* tier whose extracted text was
+    # empty (``word_count == 0``) after the auto chain exhausted its content tiers
+    # — typically an unrendered JS shell the browser tier couldn't fill either.
+    # Like PARSE_FAILED it is produced in core fetch *after* conversion, never by
+    # ``bot_detect.classify`` (which only sees raw HTML). Transient TTL: the page
+    # may render later, or the browser server may simply have been down.
+    EMPTY_BODY = "empty_body"
 
 
 class AdapterParseError(Exception):

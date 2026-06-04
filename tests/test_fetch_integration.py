@@ -346,3 +346,113 @@ def test_browser_tier_unavailable_degrades_cleanly(
     )
     assert "failure" in env
     assert env["failure"]["reason"] == "browser_unavailable"
+
+
+# --- word_count escalation + EMPTY_BODY ---------------------------------------
+
+# A marker-less unrendered shell: classify() returns OK (no "requires JavaScript"
+# notice), but trafilatura extracts zero words. This is the Facebook/empty-SPA
+# shape that bot_detect cannot see and the post-conversion word_count check must.
+_EMPTY_SHELL = (
+    "<html><head><title>App</title></head><body>"
+    '<div id="root"></div>'
+    "<script>" + ("x=1;" * 500) + "</script>"
+    "</body></html>"
+)
+
+
+def _stub_browser(
+    monkeypatch: pytest.MonkeyPatch, html: str, status: int = 200
+) -> None:
+    class _Pool:
+        async def fetch(
+            self, url: str, *, deadline_monotonic: float, mobile: bool = False
+        ) -> tuple[str, int, dict[str, str]]:
+            return html, status, {"_url_final": url}
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _Pool())
+
+
+def _stub_browser_must_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Pool:
+        async def fetch(self, *a: Any, **kw: Any) -> tuple[str, int, dict[str, str]]:
+            raise AssertionError(
+                "browser tier must not run for a content-ful http page"
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _Pool())
+
+
+def test_empty_http_shell_escalates_to_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An http 200 that converts to zero words is escalated to the browser tier,
+    which renders real content — the Facebook case."""
+    content = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
+    _stub_browser(monkeypatch, content, 200)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one("https://example.com/post", cache=cache, deadline=10.0)
+        )
+        assert "failure" not in env
+        assert env["mode_used"] == "browser"
+        assert env["escalated_from"] == "http"
+        assert env["word_count"] > 0
+        assert env["markdown"]
+    finally:
+        cache.close()
+
+
+def test_empty_everywhere_yields_empty_body_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """http shell escalates, but the browser also renders no text → a clean
+    fetch-level EMPTY_BODY failure, not a cached 0-word success."""
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
+    _stub_browser(monkeypatch, "", 200)  # browser 200 but no readable text
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one("https://example.com/post", cache=cache, deadline=10.0)
+        )
+        assert "failure" in env
+        assert env["failure"]["reason"] == "empty_body"
+    finally:
+        cache.close()
+
+
+def test_contentful_http_page_is_not_escalated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real server-rendered page (word_count > 0) stays at the http tier and
+    never touches the browser — the WMF VitePress regression guard."""
+    content = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(content, 200))
+    _stub_browser_must_not_run(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://example.com/article", cache=cache, deadline=10.0
+            )
+        )
+        assert "failure" not in env
+        assert env["mode_used"] == "http"
+        assert "escalated_from" not in env
+        assert env["attempts"] == 1
+        assert env["word_count"] > 0
+    finally:
+        cache.close()

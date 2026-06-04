@@ -197,5 +197,7 @@ def test_failure_ttl_scales_per_reason() -> None:
     # Scraper-rot is fixed by a code change — short TTL so a fixed adapter heals
     # fast instead of being pinned to the stale failure for ~24h.
     assert _ttl_for(env("parse_failed"), None) == int(base * 0.33)
+    # Empty body (JS-only page / browser was down): transient, heals on re-render.
+    assert _ttl_for(env("empty_body"), None) == int(base * 0.33)
     # Unknown reasons fall back to the base TTL.
     assert _ttl_for(env("totally_made_up"), None) == base

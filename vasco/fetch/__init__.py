@@ -128,8 +128,44 @@ class _Phases:
     extras: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class _HtmlOutcome:
+    """Terminal result of the html fetch state machine (`_do_fetch_html`).
+
+    Carries the raw tier result. For a *kept* http-tier success in auto/http mode
+    it also carries the trafilatura conversion (`markdown`/`meta`) so the caller
+    reuses it instead of converting the same html twice — the common-path
+    optimization that keeps word_count escalation "basically free". Every other
+    tier leaves these None and is converted once downstream.
+    """
+
+    html: str
+    status: int
+    headers: dict[str, str]
+    reason: FailureReason
+    mode_used: str
+    browser_started: bool
+    markdown: str | None = None
+    meta: dict[str, Any] | None = None
+
+
 def _ms_since(monotonic_started: float) -> int:
     return int((time.monotonic() - monotonic_started) * 1000)
+
+
+def _convert_html(html: str, url: str, phases: _Phases) -> tuple[str, dict[str, Any]]:
+    """Convert html→markdown with parse-phase timing; never raises.
+
+    On any conversion error returns ``("", {"word_count": 0})`` so callers treat
+    it as empty content (and escalate) rather than crash.
+    """
+    t0 = time.monotonic()
+    try:
+        markdown, meta = convert.html_to_markdown(html, url=url)
+    except Exception:
+        markdown, meta = "", {"word_count": 0}
+    phases.parse_ms += _ms_since(t0)
+    return markdown, meta
 
 
 def _stamp_phases(
@@ -442,6 +478,9 @@ _FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
     # Browser server not running: transient/operational, heals as soon as the
     # peer service is back — retry soon rather than pinning the failure.
     FailureReason.BROWSER_UNAVAILABLE: 0.33,
+    # Empty body: a 200 that rendered no text — a JS shell may render later, or
+    # the browser tier may simply have been down. Expire fast so a retry heals.
+    FailureReason.EMPTY_BODY: 0.33,
 }
 
 
@@ -568,14 +607,8 @@ async def _do_fetch_html(
     cache: Any | None,
     cfg: Any | None,
     phases: _Phases,
-) -> tuple[
-    str,  # html
-    int,  # status
-    dict[str, str],  # headers
-    FailureReason,  # final reason
-    str,  # final mode_used
-    bool,  # browser_started (so caller can close)
-]:
+    raw: bool = False,
+) -> _HtmlOutcome:
     """Execute the fetch state machine; returns the terminal result.
 
     Caller mode semantics:
@@ -589,6 +622,14 @@ async def _do_fetch_html(
     Updates `phases` in place: bumps `attempts` for each network call,
     accumulates `network_ms`, and records `escalated_from` if the http tier
     was tried first then escalated.
+
+    Content escalation: in auto mode (and not `raw`), an http-tier 200 is
+    converted here and, if it extracts zero words (an unrendered shell that
+    `bot_detect` couldn't flag — it only sees raw HTML), the chain escalates to
+    the browser tier instead of accepting an empty success. The conversion is
+    returned on the `_HtmlOutcome` so a kept http result is never converted
+    twice. `raw` skips this entirely (callers want html verbatim — including the
+    content adapters, which parse embedded JSON, not prose).
     """
     route = _route_key(url)
     strategy: str | None = None
@@ -616,7 +657,7 @@ async def _do_fetch_html(
             route=route,
             bump=True,
         )
-        return html, status, headers, reason, mode, True
+        return _HtmlOutcome(html, status, headers, reason, mode, True)
 
     # --- Explicit terminal: wayback -----------------------------------------
     if mode == "wayback":
@@ -628,8 +669,10 @@ async def _do_fetch_html(
         )
         if result is not None:
             html, status, headers, reason = result
-            return html, status, headers, reason, "wayback", browser_started
-        return (
+            return _HtmlOutcome(
+                html, status, headers, reason, "wayback", browser_started
+            )
+        return _HtmlOutcome(
             "",
             0,
             {"_failure_hint": "wayback_miss"},
@@ -655,34 +698,73 @@ async def _do_fetch_html(
         reason = bot_detect.classify(status, html, headers)
 
         if reason == FailureReason.OK:
-            if cache is not None and hasattr(cache, "bump"):
-                try:
-                    cache.bump(route, mode="http", success=True)
-                except Exception:
-                    pass
-            return html, status, headers, reason, "http", browser_started
+            # Content-sufficiency check: a 200 that converts to zero words is an
+            # unrendered shell (often marker-less, so bot_detect can't flag it).
+            # Convert here so the verdict uses trafilatura's authoritative
+            # word_count; the conversion rides back on the outcome so a kept http
+            # result isn't converted twice. Skip for raw mode (verbatim html) and
+            # non-HTML payloads (pdf/doc redirects) where word_count is meaningless.
+            url_final = (
+                headers.get("_url_final") if isinstance(headers, dict) else None
+            ) or url
+            markdown = meta = None
+            escalate_empty = False
+            if (
+                not raw
+                and not _is_pdf(url_final, headers)
+                and _pandoc_format(url_final, headers) is None
+            ):
+                markdown, meta = _convert_html(html, url_final, phases)
+                escalate_empty = (
+                    mode == "auto"
+                    and meta.get("word_count", 0) == 0
+                    and (deadline_monotonic - time.monotonic()) >= BROWSER_MIN_BUDGET
+                )
+            if not escalate_empty:
+                if cache is not None and hasattr(cache, "bump"):
+                    try:
+                        cache.bump(route, mode="http", success=True)
+                    except Exception:
+                        pass
+                return _HtmlOutcome(
+                    html,
+                    status,
+                    headers,
+                    reason,
+                    "http",
+                    browser_started,
+                    markdown,
+                    meta,
+                )
+            # Empty unrendered shell → escalate to the browser tier. Discard the
+            # wasted shell conversion and do not record an http success (so the
+            # route doesn't learn to start at http for a page that needs a render).
+            phases.escalated_from = "http"
 
-        if mode == "http":
+        if mode == "http" and reason != FailureReason.OK:
             # Caller-explicit http: terminal.
             if cache is not None and hasattr(cache, "bump"):
                 try:
                     cache.bump(route, mode="http", success=False)
                 except Exception:
                     pass
-            return html, status, headers, reason, "http", browser_started
+            return _HtmlOutcome(html, status, headers, reason, "http", browser_started)
 
         # The server gave a definitive "this URL doesn't exist" answer; no
         # later tier can conjure the resource back.
         if reason == FailureReason.NOT_FOUND:
-            return html, status, headers, reason, "http", browser_started
+            return _HtmlOutcome(html, status, headers, reason, "http", browser_started)
 
-        if (deadline_monotonic - time.monotonic()) < BROWSER_MIN_BUDGET:
+        if (
+            reason != FailureReason.OK
+            and (deadline_monotonic - time.monotonic()) < BROWSER_MIN_BUDGET
+        ):
             if cache is not None and hasattr(cache, "bump"):
                 try:
                     cache.bump(route, mode="http", success=False)
                 except Exception:
                     pass
-            return (
+            return _HtmlOutcome(
                 html,
                 status,
                 headers,
@@ -707,7 +789,9 @@ async def _do_fetch_html(
     browser_started = True
 
     if b_reason == FailureReason.OK or b_reason not in _RECOVERABLE_REASONS:
-        return b_html, b_status, b_headers, b_reason, "browser", browser_started
+        return _HtmlOutcome(
+            b_html, b_status, b_headers, b_reason, "browser", browser_started
+        )
 
     # --- Recovery tier 1: browser + mobile ----------------------------------
     last_html, last_status, last_headers, last_reason = (
@@ -739,7 +823,7 @@ async def _do_fetch_html(
             m_html = m_status = m_headers = None  # type: ignore[assignment]
         else:
             if m_reason == FailureReason.OK:
-                return (
+                return _HtmlOutcome(
                     m_html,
                     m_status,
                     m_headers,
@@ -751,7 +835,7 @@ async def _do_fetch_html(
                 # Mobile surfaced a different (non-block) failure — that
                 # fresher signal is more useful than the original browser
                 # block.
-                return (
+                return _HtmlOutcome(
                     m_html,
                     m_status,
                     m_headers,
@@ -773,10 +857,14 @@ async def _do_fetch_html(
         )
         if wb is not None:
             wb_html, wb_status, wb_headers, wb_reason = wb
-            return wb_html, wb_status, wb_headers, wb_reason, "wayback", browser_started
+            return _HtmlOutcome(
+                wb_html, wb_status, wb_headers, wb_reason, "wayback", browser_started
+            )
 
     # All recovery tiers exhausted. Return the prior browser failure.
-    return last_html, last_status, last_headers, last_reason, last_mode, browser_started
+    return _HtmlOutcome(
+        last_html, last_status, last_headers, last_reason, last_mode, browser_started
+    )
 
 
 def _make_adapter_fetcher(
@@ -809,7 +897,11 @@ def _make_adapter_fetcher(
     state = {"browser_started": False}
 
     async def fetch_html(target: str):
-        html, status, headers, reason, mode_used, started = await _do_fetch_html(
+        # raw=True: adapters parse embedded JSON, not prose, so the word_count
+        # escalation must not apply (a valid listing page can have little prose
+        # but rich JSON). They run their own fetch/parse and share only the tier
+        # chain, so they want the html verbatim with no trafilatura conversion.
+        outcome = await _do_fetch_html(
             target,
             base=base,
             mode=mode,
@@ -817,9 +909,16 @@ def _make_adapter_fetcher(
             cache=cache,
             cfg=cfg,
             phases=phases,
+            raw=True,
         )
-        state["browser_started"] = state["browser_started"] or started
-        return html, status, headers, reason, mode_used
+        state["browser_started"] = state["browser_started"] or outcome.browser_started
+        return (
+            outcome.html,
+            outcome.status,
+            outcome.headers,
+            outcome.reason,
+            outcome.mode_used,
+        )
 
     return fetch_html, state
 
@@ -1284,14 +1383,7 @@ async def _fetch_one_body(
     # --- HTML auto-mode escalation ------------------------------------------
     browser_started = False
     try:
-        (
-            html,
-            status,
-            headers,
-            reason,
-            mode_used,
-            browser_started,
-        ) = await _do_fetch_html(
+        outcome = await _do_fetch_html(
             url,
             base=base,
             mode=mode,
@@ -1299,7 +1391,14 @@ async def _fetch_one_body(
             cache=cache,
             cfg=cfg,
             phases=phases,
+            raw=raw,
         )
+        html = outcome.html
+        status = outcome.status
+        headers = outcome.headers
+        reason = outcome.reason
+        mode_used = outcome.mode_used
+        browser_started = outcome.browser_started
 
         base["http_status"] = int(status or 0)
         base["mode_used"] = mode_used
@@ -1380,9 +1479,32 @@ async def _fetch_one_body(
                 token_count_estimate=io_mod.estimate_tokens(html or ""),
             )
         else:
-            t_parse = time.monotonic()
-            markdown, meta = convert.html_to_markdown(html, url=base["url_final"])
-            phases.parse_ms += _ms_since(t_parse)
+            # Reuse the http-tier conversion when the chain already did it (the
+            # word_count escalation needs it, so a kept http result rides back on
+            # the outcome) — otherwise convert the winning tier's html once here.
+            if outcome.meta is not None:
+                markdown, meta = outcome.markdown or "", outcome.meta
+            else:
+                markdown, meta = _convert_html(html, base["url_final"], phases)
+            # No extractable text after the auto chain exhausted its content
+            # tiers: an unrendered shell the browser tier couldn't fill either.
+            # Surface a clean fetch-level failure (PARSE_FAILED-style, produced
+            # post-conversion) instead of caching an empty "success".
+            if meta.get("word_count", 0) == 0:
+                envelope = _failure_envelope(
+                    base=base,
+                    reason=FailureReason.EMPTY_BODY,
+                    message=(
+                        f"200 OK from {mode_used} tier but no readable text was "
+                        "extracted — likely a JavaScript-only page the browser "
+                        "tier could not render (or the browser server was down)."
+                    ),
+                )
+                if use_cache and cache is not None:
+                    _cache_put(
+                        cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
+                    )
+                return envelope, browser_started, phases
             quality_cfg = cfg.quality if cfg is not None else QualityCfg()
             if quality_cfg is not None:
                 quality_scores = quality_mod.score(

@@ -16,7 +16,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 
 | File | Role |
 |---|---|
-| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `search`/`fetch`/`extract`/`answer`/`map`/`normalize` commands + `cache` and `logs` sub-apps + `serve` (run vascod) and `browser-server`. CLI commands run **in-process** (not routed through vascod) so the CLI stays the daemon-free ground-truth/debug path |
+| `vasco/interface/cli.py` | Typer app, TTY-aware output, parses `--deadline`/`--older-than`; `search`/`fetch`/`extract`/`answer`/`map`/`normalize` commands + `cache` and `logs` sub-apps + `serve` (run vascod) and `browser-server`. CLI commands run **in-process** (not routed through vascod) so the CLI stays the daemon-free ground-truth/debug path. Output auto-detects the TTY: rich human rendering (`vasco/render.py`) on a terminal, machine JSON/NDJSON when piped; shared `--human/-H` (force pretty, even piped) and `--json` (force machine, even on a terminal) options gate it via `_resolve_output` → `io.resolve_human`. **Machine output is byte-for-byte unchanged** from before |
 | `vasco/interface/mcp.py` | MCP server (stdio); tools `search`/`fetch`/`fetch_many`/`extract`/`answer`/`map`; opt-in browser prewarm; `fetch_many` defaults to `metadata_only=true`; llms.txt taint warning on `map` results. Every tool routes through `service.client.request_or` (vascod when reachable, else in-process fallback); telemetry stays at the tool layer |
 | `vasco/service/protocol.py` | Wire protocol for vascod — single home for the socket contract: `PROTOCOL_VERSION`, length-prefixed JSON framing (`read_msg`/`write_msg`), `socket_path()` (`$XDG_RUNTIME_DIR/vasco/vascod.sock`, `VASCO_SERVICE_SOCKET` override), op constants. The *payload* model is the envelope itself (already JSON) |
 | `vasco/service/daemon.py` | `run_daemon(cfg)` = vascod: loads one `Config`+`Cache`, serves the full API over a UNIX socket (chmod 0600, 10 MiB frame cap). `Dispatcher` routes ops to existing entry points; `fetch`/`fetch_many` go through the coordinator (fetch_many = coordinated gather over fetch). A fetch failure crosses the wire as `ok=true` + failure envelope; `ok=false` is reserved for transport/unexpected errors |
@@ -56,7 +56,8 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 | `vasco/errors.py` | `FailureReason` enum |
 | `vasco/envelope.py` | Single source of truth for the fetch envelope: `FetchEnvelope` TypedDict + `base_envelope`/`success_envelope`/`failure_envelope`/`now_epoch`. Core fetch **and** every adapter build through these, so the shape lives in one place |
 | `vasco/config.py` | `load_config()` → YAML + `VASCO_*` env vars |
-| `vasco/io.py` | TTY detection, NDJSON/JSON/markdown writers, token estimator |
+| `vasco/io.py` | TTY detection, NDJSON/JSON/markdown writers, token estimator; `resolve_human(human, machine, stream)` decides human-vs-machine output (`--human` wins, `--json` forces machine, else auto by TTY) |
+| `vasco/render.py` | Rich human-readable rendering for the CLI (imported lazily, only on the human branch, so `--help`/machine paths never import `rich`). `make_console` + per-shape renderers: `render_fetch` (rendered Markdown / adapter table / failure panel), `render_search`, `render_listings`/`render_products`, `render_answer`, `render_extract`, `render_json` (highlighted JSON), `render_map`/`render_cache_list` (streamed styled lines). Presentation-only — never raises on failure/empty data |
 
 ## Invariants
 
@@ -100,6 +101,13 @@ uv run vasco normalize "https://Example.COM:443/foo/?utm_source=x&b=2&a=1#frag"
 
 uv run vasco fetch https://example.com | jq '.from_cache, .word_count'
 uv run vasco fetch https://example.com | jq '.from_cache, .cache_age_seconds'   # second call hits cache
+
+uv run vasco fetch https://example.com                # on a TTY: rich-rendered Markdown
+uv run vasco fetch https://example.com | cat          # piped: JSON, byte-for-byte unchanged
+uv run vasco fetch https://example.com --human | cat  # force pretty (ANSI) even when piped
+uv run vasco fetch https://example.com --json         # force machine JSON even on a terminal
+uv run vasco search "kindle paperwhite"               # TTY: results table; piped/--json: array/text
+# human-vs-machine is auto by TTY across all commands; --human forces pretty, --json forces machine
 
 uv run vasco fetch https://httpbin.org/status/404 | jq '.failure.reason'        # → "not_found"
 

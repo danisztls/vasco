@@ -12,6 +12,19 @@ def is_tty(stream: TextIO = sys.stdout) -> bool:
         return False
 
 
+def resolve_human(human: bool, machine: bool, stream: TextIO = sys.stdout) -> bool:
+    """Decide whether to emit human-readable (rich) output.
+
+    ``--human`` wins; ``--json``/machine forces machine output; otherwise auto by
+    TTY (pretty on a terminal, machine when piped).
+    """
+    if human:
+        return True
+    if machine:
+        return False
+    return is_tty(stream)
+
+
 def write_markdown(envelope: dict, stream: TextIO = sys.stdout) -> None:
     markdown = envelope.get("markdown", "") or ""
     stream.write(markdown)

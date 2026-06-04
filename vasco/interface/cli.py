@@ -80,6 +80,30 @@ def _open_cache(cfg: Config) -> Cache:
     return _cache.Cache(path)
 
 
+# Shared output-format options. ``--human`` forces the rich (pretty) path even
+# when piped; ``--json`` forces machine output even on a terminal; default is
+# auto by TTY. See ``vasco.io.resolve_human``.
+HumanOpt = Annotated[
+    bool,
+    typer.Option("--human", "-H", help="Force human-readable output even when piped."),
+]
+JsonOpt = Annotated[
+    bool,
+    typer.Option(
+        "--json", help="Force machine output (JSON/NDJSON) even on a terminal."
+    ),
+]
+
+
+def _resolve_output(human: bool, json_: bool) -> bool:
+    """True → render human/pretty output; False → machine. Guards exclusivity."""
+    if human and json_:
+        raise typer.BadParameter("--human and --json are mutually exclusive")
+    from vasco import io as _io
+
+    return _io.resolve_human(human, json_)
+
+
 # ---------------------------------------------------------------------------
 # search
 # ---------------------------------------------------------------------------
@@ -94,6 +118,7 @@ def search(
     site: Annotated[str | None, typer.Option(help="Restrict to a domain.")] = None,
     backend: Annotated[str | None, typer.Option(help="Search backend.")] = None,
     json_: Annotated[bool, typer.Option("--json", help="Emit a JSON array.")] = False,
+    human: HumanOpt = False,
 ) -> None:
     """Query the web and stream title/url/snippet records."""
     from vasco import config as _config
@@ -132,6 +157,12 @@ def search(
 
     rows = [_result_to_dict(r) for r in results]
 
+    if _resolve_output(human, json_):
+        from vasco import render as _render
+
+        _render.render_search(rows)
+        return
+
     if json_:
         json.dump(rows, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
@@ -159,7 +190,7 @@ async def _run_fetch_many(
     deadline: float,
     raw: bool,
     concat: bool,
-    json_: bool,
+    is_human: bool,
     cache: Any | None,
     cfg: Config,
 ) -> None:
@@ -167,7 +198,14 @@ async def _run_fetch_many(
     from vasco import io as _io
     from vasco import telemetry as _telemetry
 
+    con = None
+    if is_human:
+        from vasco import render as _render
+
+        con = _render.make_console()
+
     envelopes: list[dict[str, Any]] = []
+    first = True
     async for env in _fetch.fetch_many(
         urls,
         workers=workers,
@@ -185,13 +223,18 @@ async def _run_fetch_many(
             _telemetry.record_success(
                 cfg, "fetch_many", **_telemetry.fetch_success_fields(env)
             )
-        if concat:
+        if is_human:
+            if not first:
+                con.rule(style="dim")
+            _render.render_fetch(env, con)
+            first = False
+        elif concat:
             envelopes.append(env)
         else:
             _io.write_ndjson(env)
             sys.stdout.flush()
 
-    if concat:
+    if concat and not is_human:
         chunks = [(e.get("markdown") or "") for e in envelopes]
         sys.stdout.write("\n---\n\n".join(chunks))
         if chunks and not chunks[-1].endswith("\n"):
@@ -224,14 +267,15 @@ def fetch(
     concat: Annotated[
         bool, typer.Option("--concat", help="Concatenate markdown for multi-URL.")
     ] = False,
+    human: HumanOpt = False,
 ) -> None:
     """Fetch one or more URLs and emit envelopes."""
     from vasco import config as _config
     from vasco import fetch as _fetch
-    from vasco import io as _io
     from vasco import telemetry as _telemetry
 
     cfg = _config.load_config()
+    is_human = _resolve_output(human, json_)
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
     )
@@ -260,10 +304,14 @@ def fetch(
                 _telemetry.record_success(
                     cfg, "fetch", **_telemetry.fetch_success_fields(env)
                 )
-            if json_ or not _io.is_tty():
-                _io.write_json(env)
+            if is_human:
+                from vasco import render as _render
+
+                _render.render_fetch(env)
             else:
-                _io.write_markdown(env)
+                from vasco import io as _io
+
+                _io.write_json(env)
             return
 
         asyncio.run(
@@ -276,7 +324,7 @@ def fetch(
                 deadline=deadline_seconds,
                 raw=raw,
                 concat=concat,
-                json_=json_,
+                is_human=is_human,
                 cache=cache,
                 cfg=cfg,
             )
@@ -309,10 +357,13 @@ def extract(
         str, typer.Option("--rank", help="Ranking: bm25|semantic.")
     ] = "bm25",
     deadline: Annotated[str | None, typer.Option(help="Deadline e.g. 15s, 1m.")] = None,
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
 ) -> None:
-    """Fetch a URL and print ranked passages as pretty JSON."""
+    """Fetch a URL and print ranked passages."""
     if rank not in ("bm25", "semantic"):
         raise typer.BadParameter("--rank must be one of: bm25, semantic")
+    is_human = _resolve_output(human, json_)
     from vasco import config as _config
     from vasco import extract as _extract
     from vasco import telemetry as _telemetry
@@ -370,8 +421,13 @@ def extract(
                 passage_count=len(passages),
                 duration_ms=duration_ms,
             )
-        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
-        sys.stdout.write("\n")
+        if is_human:
+            from vasco import render as _render
+
+            _render.render_extract(result)
+        else:
+            json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+            sys.stdout.write("\n")
     finally:
         cache.close()
 
@@ -397,13 +453,16 @@ def answer(
     refresh: Annotated[
         bool, typer.Option("--refresh", help="Ignore cache on read; still write.")
     ] = False,
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
 ) -> None:
-    """Fetch a URL and print an LLM answer/summary over its content as JSON."""
+    """Fetch a URL and print an LLM answer/summary over its content."""
     from vasco import config as _config
     from vasco import summarize as _summarize
     from vasco import telemetry as _telemetry
 
     cfg = _config.load_config()
+    is_human = _resolve_output(human, json_)
     deadline_seconds = (
         parse_duration(deadline) if deadline is not None else cfg.fetch.deadline_seconds
     )
@@ -448,8 +507,13 @@ def answer(
                 from_cache=result.get("from_cache"),
                 duration_ms=duration_ms,
             )
-        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
-        sys.stdout.write("\n")
+        if is_human:
+            from vasco import render as _render
+
+            _render.render_answer(result)
+        else:
+            json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+            sys.stdout.write("\n")
     finally:
         cache.close()
 
@@ -473,21 +537,30 @@ def map_(
             help="Substring(s) to filter out (repeatable). E.g. --exclude /team/ --exclude /tag/.",
         ),
     ] = None,
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
 ) -> None:
-    """Discover URLs on a site and stream NDJSON records."""
+    """Discover URLs on a site and stream the records."""
     from vasco import config as _config
     from vasco import io as _io
     from vasco import map as _map
     from vasco import telemetry as _telemetry
 
     cfg = _config.load_config()
+    is_human = _resolve_output(human, json_)
     started = _monotonic()
     count = 0
     try:
-        for record in _map.map_site(url, source=source, limit=limit, exclude=exclude):
-            _io.write_ndjson(record)
-            sys.stdout.flush()
-            count += 1
+        records = _map.map_site(url, source=source, limit=limit, exclude=exclude)
+        if is_human:
+            from vasco import render as _render
+
+            count = _render.render_map(records)
+        else:
+            for record in records:
+                _io.write_ndjson(record)
+                sys.stdout.flush()
+                count += 1
     except Exception as exc:
         _telemetry.record_exception(cfg, "map", exc, url=url, source=source)
         raise
@@ -526,17 +599,26 @@ app.add_typer(cache_app, name="cache")
 
 
 @cache_app.command("list")
-def cache_list() -> None:
-    """Stream NDJSON of cache entries."""
+def cache_list(
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
+) -> None:
+    """List cache entries (NDJSON when piped, styled lines on a terminal)."""
     from vasco import config as _config
     from vasco import io as _io
 
     cfg = _config.load_config()
+    is_human = _resolve_output(human, json_)
     c = _open_cache(cfg)
     try:
-        for entry in c.list_entries():
-            _io.write_ndjson(entry)
-            sys.stdout.flush()
+        if is_human:
+            from vasco import render as _render
+
+            _render.render_cache_list(c.list_entries())
+        else:
+            for entry in c.list_entries():
+                _io.write_ndjson(entry)
+                sys.stdout.flush()
     finally:
         c.close()
 
@@ -575,17 +657,27 @@ def cache_purge(
 
 
 @cache_app.command("stats")
-def cache_stats() -> None:
-    """Print cache stats as JSON."""
+def cache_stats(
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
+) -> None:
+    """Print cache stats."""
     from vasco import config as _config
 
     cfg = _config.load_config()
+    is_human = _resolve_output(human, json_)
     c = _open_cache(cfg)
     try:
-        json.dump(c.stats(), sys.stdout, indent=2, ensure_ascii=False)
-        sys.stdout.write("\n")
+        stats = c.stats()
     finally:
         c.close()
+    if is_human:
+        from vasco import render as _render
+
+        _render.render_json(stats)
+    else:
+        json.dump(stats, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -598,13 +690,22 @@ app.add_typer(config_app, name="config")
 
 
 @config_app.command("show")
-def config_show() -> None:
-    """Print the effective config (defaults + YAML + env overrides) as JSON."""
+def config_show(
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
+) -> None:
+    """Print the effective config (defaults + YAML + env overrides)."""
     from vasco import config as _config
 
     cfg = _config.load_config()
-    json.dump(asdict(cfg), sys.stdout, indent=2, ensure_ascii=False)
-    sys.stdout.write("\n")
+    data = asdict(cfg)
+    if _resolve_output(human, json_):
+        from vasco import render as _render
+
+        _render.render_json(data)
+    else:
+        json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -621,15 +722,22 @@ def logs_stats(
     days: Annotated[
         int, typer.Option("--days", help="Days of history to include (default 1).")
     ] = 1,
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
 ) -> None:
-    """Print a rollup of telemetry events as JSON."""
+    """Print a rollup of telemetry events."""
     from vasco import config as _config
     from vasco.telemetry import logstats as _logstats
 
     cfg = _config.load_config()
     summary = _logstats.summarize(cfg, days=days)
-    json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
-    sys.stdout.write("\n")
+    if _resolve_output(human, json_):
+        from vasco import render as _render
+
+        _render.render_json(summary)
+    else:
+        json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
 
 
 # ---------------------------------------------------------------------------

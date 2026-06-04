@@ -68,27 +68,20 @@ _HARD_PAYWALL_SCHEMA = re.compile(
     re.IGNORECASE,
 )
 
-# SPA mount-point / framework markers. A 200 carrying one of these but almost no
-# visible text is an unrendered JS shell — the server returned the app bootstrap,
-# not content. Bare `id="root"`/`id="app"` is matched (not just the empty
-# `<div ...></div>` form) because frameworks like MercadoLivre ship
-# `<div id="root">` with a "requires JavaScript" notice inside, not an empty div.
-# The visible-text gate below is what prevents false positives on real content
-# pages that merely embed a framework marker.
-_JS_APP_MARKERS: tuple[str, ...] = (
-    "__next_data__",
-    "__nuxt__",
-    "ng-version",
-    "data-reactroot",
-    'id="root"',
-    "id='root'",
-    'id="app"',
-    "id='app'",
-)
-
 # Explicit "you need JavaScript" notices an SPA shell renders as its no-JS
 # fallback. Very high precision — real content pages don't surface these in their
 # visible text — so any one of them flags an unrendered shell on its own.
+#
+# We deliberately do NOT classify shells from bare mount-point markers
+# (`id="root"`/`id="app"`/`__next_data__`/…) anymore: that rule both over-fired
+# (a server-rendered VitePress page mounts into `id="app"` yet has real content)
+# and under-fired (Facebook ships ~1.2 MB of obfuscated script with no marker we
+# enumerate). The robust "did anything render" signal is trafilatura's
+# post-conversion `word_count`, which the fetch chain uses to escalate
+# marker-less empty shells to the browser tier. This list stays because it
+# catches the case word_count can't: a shell whose only text is boilerplate
+# (MercadoLivre's no-JS notice converts to ~60 junk words, indistinguishable by
+# count from a real thin page — but the explicit notice is unambiguous).
 _JS_REQUIRED_MARKERS: tuple[str, ...] = (
     "requires javascript",
     "please enable javascript",
@@ -219,16 +212,15 @@ def classify(
                 return FailureReason.PAYWALL_HARD
             return FailureReason.PAYWALL_SOFT_WITH_PARTIAL
 
-        # A 200 that's really an unrendered SPA shell: the server returned the JS
-        # bootstrap, not content. Detect by tiny visible text plus either an SPA
-        # mount-point marker or an explicit "enable JavaScript" notice — robust to
-        # body size (a shell can be many KB of inline script, so the old raw-length
-        # gate missed e.g. MercadoLivre's ~8KB shell). Escalating lets the auto
-        # chain render it in the browser tier instead of caching an empty 200 as
-        # success (and stops a stale http-success from training the route to http).
-        if len(_visible_text(body)) < _JS_SHELL_MAX_VISIBLE_CHARS and (
-            _has_any(body_lc, _JS_APP_MARKERS)
-            or _has_any(body_lc, _JS_REQUIRED_MARKERS)
+        # A 200 carrying an explicit "enable/requires JavaScript" notice but almost
+        # no visible text is an unrendered SPA shell rendering its no-JS fallback.
+        # Escalating lets the auto chain render it in the browser tier instead of
+        # caching an empty 200 as success. This handles the shell whose no-JS
+        # boilerplate converts to a handful of junk words (e.g. MercadoLivre); the
+        # marker-less empty shell (e.g. Facebook) is caught downstream by the
+        # post-conversion `word_count == 0` escalation instead.
+        if len(_visible_text(body)) < _JS_SHELL_MAX_VISIBLE_CHARS and _has_any(
+            body_lc, _JS_REQUIRED_MARKERS
         ):
             return FailureReason.JS_APP_NEEDS_INTERACTION
 

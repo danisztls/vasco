@@ -113,9 +113,12 @@ def test_mercadolivre_http_shell_is_js_app_needs_interaction() -> None:
     assert classify(200, html, {}) == FailureReason.JS_APP_NEEDS_INTERACTION
 
 
-def test_large_spa_shell_with_tiny_visible_text_is_js_app() -> None:
-    """Body size is irrelevant: a multi-KB shell that's almost all inline script
-    but renders no content is still an unrendered SPA shell."""
+def test_markerless_mount_point_shell_is_ok_defers_to_word_count() -> None:
+    """A bare `<div id="root">` shell with no "requires JavaScript" notice now
+    classifies OK — bot_detect only sees raw HTML and a mount-point marker is not
+    a reliable shell signal (real SSG pages mount into `id="root"`/`id="app"`).
+    Such empty shells are escalated downstream by the post-conversion
+    `word_count == 0` check in the fetch chain, not by `classify`."""
     shell = (
         "<html><head><title>App</title></head><body>"
         '<div id="root"></div>'
@@ -123,7 +126,21 @@ def test_large_spa_shell_with_tiny_visible_text_is_js_app() -> None:
         "</body></html>"
     )
     assert len(shell) > 1024
-    assert classify(200, shell, {}) == FailureReason.JS_APP_NEEDS_INTERACTION
+    assert classify(200, shell, {}) == FailureReason.OK
+
+
+def test_facebook_style_markerless_shell_is_ok() -> None:
+    """A large obfuscated shell (Facebook-shaped: lots of inline script, almost no
+    visible text, none of our markers) is OK at the classify layer — it has no
+    "requires JavaScript" notice. The word_count==0 escalation catches it later."""
+    shell = (
+        "<html><head><title>Big App</title></head><body>"
+        "<span>Loading</span>"
+        "<script>" + ("var a=" + "0," * 60000 + "1;") + "</script>"
+        "</body></html>"
+    )
+    assert len(shell) > 100_000  # heavy like the real thing
+    assert classify(200, shell, {}) == FailureReason.OK
 
 
 def test_enable_javascript_notice_alone_is_js_app() -> None:

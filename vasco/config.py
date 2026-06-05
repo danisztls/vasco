@@ -96,14 +96,17 @@ class ShoppingCfg:
 
 @dataclass(frozen=True)
 class ServiceCfg:
-    """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside
-    and on by default; per-domain rate limiting is an opt-in politeness policy
-    (0 disables it — no added latency unless asked)."""
+    """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside.
+    The per-domain concurrency cap is on by default (caps simultaneous
+    connections to one origin); per-domain rate limiting is opt-in. Both pacing
+    knobs gate *before* the per-fetch deadline starts, so queue wait never eats a
+    fetch's budget. 0 / non-positive disables a knob."""
 
     single_flight: bool = True
     rate_limit_rps: float = (
-        0.0  # max network fetches/sec per registered domain; 0 = off
+        0.0  # max network fetch *starts*/sec per registered domain; 0 = off
     )
+    max_concurrent_per_domain: int = 2  # max simultaneous in-flight network fetches per registered domain; 0 = unlimited
 
 
 @dataclass(frozen=True)

@@ -47,7 +47,13 @@ def _stub_http(html: str, status: int = 200, headers: dict | None = None):
 
 
 def _cfg(tmp_path: Path) -> Config:
-    return Config(cache=CacheCfg(path=str(tmp_path / "cache.db")))
+    # Per-domain pacing (rate limit + concurrency cap) is on by default now;
+    # disable it for the protocol/single-flight tests so the queue doesn't slow
+    # or perturb them. Pacing has its own dedicated tests below.
+    return Config(
+        cache=CacheCfg(path=str(tmp_path / "cache.db")),
+        service=ServiceCfg(rate_limit_rps=0.0, max_concurrent_per_domain=0),
+    )
 
 
 @asynccontextmanager
@@ -325,7 +331,9 @@ async def test_single_flight_disabled_runs_each_fetch(
 
     cfg = Config(
         cache=CacheCfg(path=str(tmp_path / "cache.db")),
-        service=ServiceCfg(single_flight=False),
+        service=ServiceCfg(
+            single_flight=False, rate_limit_rps=0.0, max_concurrent_per_domain=0
+        ),
     )
     sock = tmp_path / "vascod.sock"
     url = "https://dup.test/a"
@@ -358,3 +366,80 @@ async def test_domain_rate_limiter_independent_domains() -> None:
     await lim.acquire("a")
     await lim.acquire("b")  # different domain — must not wait behind "a"
     assert loop.time() - t0 < 0.1
+
+
+async def test_domain_concurrency_caps_simultaneous_same_domain() -> None:
+    lim = coordinator_mod._DomainConcurrencyLimiter(2)
+    assert lim.enabled
+    held = []
+    release = asyncio.Event()
+
+    async def worker() -> None:
+        async with lim.slot("d"):
+            held.append(1)
+            await release.wait()
+            held.pop()
+
+    t1 = asyncio.create_task(worker())
+    t2 = asyncio.create_task(worker())
+    await asyncio.sleep(0.02)
+    assert len(held) == 2  # both slots in use
+
+    t3 = asyncio.create_task(worker())
+    await asyncio.sleep(0.02)
+    assert len(held) == 2  # third is blocked at the cap
+
+    release.set()
+    await asyncio.gather(t1, t2, t3)
+    assert held == []
+
+
+async def test_domain_concurrency_independent_domains() -> None:
+    lim = coordinator_mod._DomainConcurrencyLimiter(1)  # cap of 1 per domain
+
+    async def grab_b() -> bool:
+        async with lim.slot("b"):
+            return True
+
+    async with lim.slot("a"):
+        # A different domain must not block behind "a" holding its only slot;
+        # a shared cap (the bug) would deadlock and trip the timeout.
+        assert await asyncio.wait_for(grab_b(), timeout=0.5) is True
+
+
+async def test_domain_concurrency_disabled_is_unbounded() -> None:
+    lim = coordinator_mod._DomainConcurrencyLimiter(0)
+    assert not lim.enabled
+    # Many concurrent "slots" on one domain, none block (each is a no-op ctx).
+    async with lim.slot("d"), lim.slot("d"), lim.slot("d"):
+        pass
+
+
+async def test_queue_wait_does_not_shrink_fetch_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pacing gates run before fetch_one arms its deadline, so a request that
+    waits in the queue still receives its full budget — the coordinator passes
+    `deadline` through unchanged regardless of queue time."""
+    seen: list[float] = []
+
+    async def _fake(url: str, **kw: Any) -> dict:
+        seen.append(kw["deadline"])
+        return {"url_requested": url}
+
+    monkeypatch.setattr(coordinator_mod, "_fetch_one", _fake)
+
+    class _MissCache:
+        def get(self, *_a: Any, **_k: Any) -> None:
+            return None
+
+    cfg = Config(service=ServiceCfg(rate_limit_rps=10.0, max_concurrent_per_domain=2))
+    coord = coordinator_mod.Coordinator(cfg, _MissCache())
+
+    # Two same-domain fetches: the 2nd is paced ~100ms behind the 1st, yet both
+    # see the full 30s deadline (queue time isn't subtracted from the budget).
+    await asyncio.gather(
+        coord.fetch("https://q.test/1", deadline=30.0),
+        coord.fetch("https://q.test/2", deadline=30.0),
+    )
+    assert seen == [30.0, 30.0]

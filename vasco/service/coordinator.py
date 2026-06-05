@@ -12,6 +12,15 @@ resident process:
   Applied only when the fetch will actually hit the network — a cache hit skips
   it (using the same ``cache.get`` the pipeline uses, so "hit" means the same
   thing here as in ``fetch_one``).
+- **Per-domain concurrency cap:** a registered domain can be limited to N
+  simultaneous in-flight network fetches (a per-domain semaphore), so one origin
+  never gets a wall of concurrent connections (the bot tell) and can't hog every
+  global browser slot. Different domains never block each other; cache hits skip
+  it too.
+
+Both pacing gates run *before* ``fetch_one`` is called, and ``fetch_one`` starts
+its own deadline clock internally (``now + deadline``) — so time spent waiting in
+the queue is never charged against a fetch's budget.
 
 Scope: the ``fetch`` op, and ``fetch_many`` (which the daemon runs as a
 coordinated gather over ``fetch``). ``extract``/``answer``/``map`` call
@@ -66,6 +75,42 @@ class _DomainRateLimiter:
             await asyncio.sleep(wait)
 
 
+class _DomainConcurrencyLimiter:
+    """Per-registered-domain cap on simultaneous in-flight fetches.
+
+    Each domain gets its own lazily-created ``asyncio.Semaphore(n)``; different
+    domains never contend. ``acquire(domain)`` is an async context manager held
+    for the duration of the fetch. Disabled (a no-op) when ``n <= 0``.
+    """
+
+    def __init__(self, n: int) -> None:
+        self._n = n if n and n > 0 else 0
+        self._sems: dict[str, asyncio.Semaphore] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self._n > 0
+
+    def slot(self, domain: str) -> Any:
+        if self._n <= 0:
+            return _nullcontext()
+        sem = self._sems.get(domain)
+        if sem is None:
+            sem = asyncio.Semaphore(self._n)
+            self._sems[domain] = sem
+        return sem
+
+
+class _nullcontext:
+    """Async no-op context manager (the limiter-disabled path)."""
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
 class Coordinator:
     """Owns the resident cache and coordinates fetches across all consumers."""
 
@@ -76,6 +121,9 @@ class Coordinator:
         self._single_flight = bool(getattr(svc, "single_flight", True))
         self._limiter = _DomainRateLimiter(
             float(getattr(svc, "rate_limit_rps", 0.0) or 0.0)
+        )
+        self._concurrency = _DomainConcurrencyLimiter(
+            int(getattr(svc, "max_concurrent_per_domain", 0) or 0)
         )
         self._inflight: dict[tuple[Any, ...], asyncio.Task] = {}
 
@@ -122,10 +170,37 @@ class Coordinator:
         refresh: bool,
         raw: bool,
     ) -> dict[str, Any]:
-        if self._limiter.enabled and not self._is_cache_hit(
-            url, use_cache=use_cache, refresh=refresh
-        ):
-            await self._limiter.acquire(_cache_mod.registered_domain(url))
+        kw = dict(
+            mode=mode, deadline=deadline, use_cache=use_cache, refresh=refresh, raw=raw
+        )
+        # Pacing only matters for fetches that will hit the network — a cache hit
+        # does no I/O, so it skips the queue entirely.
+        pace = (self._limiter.enabled or self._concurrency.enabled) and not (
+            self._is_cache_hit(url, use_cache=use_cache, refresh=refresh)
+        )
+        if not pace:
+            return await self._fetch(url, **kw)
+
+        domain = _cache_mod.registered_domain(url)
+        # The concurrency slot is held for the whole fetch (caps simultaneous
+        # connections to one origin); the min-interval spaces the *starts* within
+        # it. Both gate here, before `_fetch_one` arms its own deadline, so a
+        # request that waits in the queue keeps its full fetch budget.
+        async with self._concurrency.slot(domain):
+            if self._limiter.enabled:
+                await self._limiter.acquire(domain)
+            return await self._fetch(url, **kw)
+
+    async def _fetch(
+        self,
+        url: str,
+        *,
+        mode: str,
+        deadline: float,
+        use_cache: bool,
+        refresh: bool,
+        raw: bool,
+    ) -> dict[str, Any]:
         return await _fetch_one(
             url,
             mode=mode,

@@ -60,6 +60,6 @@
 
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)
-#   rate_limit_rps: 0.0            # max network fetch starts/sec per registered domain; 0 disables
+#   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables
 #   max_concurrent_per_domain: 2  # max simultaneous in-flight fetches per registered domain; 0 = unlimited
 #                                  # both pace before the fetch deadline starts, so queue wait is free

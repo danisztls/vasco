@@ -87,7 +87,11 @@ WAYBACK_MIN_BUDGET: float = 4.0
 # caps are what users feel in practice. Each tier's effective deadline is
 # `min(global_kill_switch, now + tier_cap)`.
 HTTP_MAX_BUDGET: float = 5.0
-BROWSER_MAX_BUDGET: float = 8.0
+# 12s (not 8) gives heavy-but-loadable pages a fair shot at reaching
+# domcontentloaded. The chain still fits the 30s kill-switch: 5+12+5+6 = 28s,
+# and the MIN-budget gates below self-truncate mobile/wayback when little time
+# remains. Don't raise past 12 without also bumping the default deadline.
+BROWSER_MAX_BUDGET: float = 12.0
 MOBILE_MAX_BUDGET: float = 5.0
 WAYBACK_MAX_BUDGET: float = 6.0
 

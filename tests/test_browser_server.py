@@ -15,13 +15,20 @@ from vasco.fetch import browser_server as bs
 
 
 class _FakeSupervisor:
-    """Stand-in for `_BrowserSupervisor` that records relaunch calls."""
+    """Stand-in for `_BrowserSupervisor` that records relaunch + probe calls.
+
+    `wedged` controls the liveness-probe verdict: True (default) keeps the
+    relaunch-path tests valid; set False to simulate a healthy browser whose
+    timeouts are the *site*, not a wedge.
+    """
 
     is_persistent = False
 
-    def __init__(self) -> None:
+    def __init__(self, wedged: bool = True) -> None:
         self._consecutive_timeouts = 0
         self.relaunches = 0
+        self.wedged = wedged
+        self.probes = 0
 
     async def get_browser(self):  # pragma: no cover - trivial
         return object()
@@ -36,9 +43,14 @@ class _FakeSupervisor:
     def reset_timeouts(self) -> None:
         self._consecutive_timeouts = 0
 
+    async def is_wedged(self) -> bool:
+        self.probes += 1
+        return self.wedged
 
-async def test_timeout_streak_relaunches_then_retries(monkeypatch):
-    """A consecutive-timeout streak past the threshold forces one relaunch+retry."""
+
+async def test_timeout_streak_wedged_probe_relaunches_then_retries(monkeypatch):
+    """A timeout streak whose liveness probe also fails (a real wedge) forces one
+    relaunch+retry."""
     calls = {"n": 0}
 
     async def fake_fetch_page(browser, url, **kw):
@@ -49,21 +61,44 @@ async def test_timeout_streak_relaunches_then_retries(monkeypatch):
         return ("<html>ok</html>", 200, {})
 
     monkeypatch.setattr(bs, "_fetch_page", fake_fetch_page)
-    sup = _FakeSupervisor()
+    sup = _FakeSupervisor(wedged=True)  # probe says wedged → relaunch
 
-    # First N-1 requests time out and re-raise without relaunching.
+    # First N-1 requests time out and re-raise without probing or relaunching.
     for _ in range(bs._TIMEOUT_RELAUNCH_THRESHOLD - 1):
         with pytest.raises(RuntimeError):
             await bs._serve_fetch(sup, url="https://x", mobile=False, timeout=8.0)
         assert sup.relaunches == 0
 
-    # The request that crosses the threshold relaunches and the retry succeeds.
+    # The request that crosses the threshold probes, finds a wedge, and retries.
     html, status, _ = await bs._serve_fetch(
         sup, url="https://x", mobile=False, timeout=8.0
     )
     assert (html, status) == ("<html>ok</html>", 200)
+    assert sup.probes == 1
     assert sup.relaunches == 1
     assert sup._consecutive_timeouts == 0  # reset after success
+
+
+async def test_timeout_streak_healthy_probe_does_not_relaunch(monkeypatch):
+    """The regression for the watchdog cascade: a burst of slow-site timeouts whose
+    liveness probe SUCCEEDS must NOT relaunch — the slow-fetch timeout just
+    propagates, leaving the browser (and its healthy sibling pages) untouched."""
+
+    async def fake_fetch_page(browser, url, **kw):
+        raise RuntimeError("Page.goto: Timeout 8000ms exceeded.")
+
+    monkeypatch.setattr(bs, "_fetch_page", fake_fetch_page)
+    sup = _FakeSupervisor(wedged=False)  # probe says healthy → site is just slow
+
+    # Three same-site timeouts: the third crosses the threshold, probes, and —
+    # because the browser is healthy — re-raises the timeout without relaunching.
+    for _ in range(bs._TIMEOUT_RELAUNCH_THRESHOLD):
+        with pytest.raises(RuntimeError):
+            await bs._serve_fetch(sup, url="https://slow", mobile=False, timeout=8.0)
+
+    assert sup.relaunches == 0  # browser preserved, siblings not torn down
+    assert sup.probes == 1  # probed exactly once, at the threshold crossing
+    assert sup._consecutive_timeouts == 0  # streak consumed by the probe
 
 
 async def test_success_resets_timeout_streak(monkeypatch):
@@ -191,6 +226,45 @@ async def test_close_timeout_force_kills_browser_tree(monkeypatch) -> None:
     await sup._close_locked()
     assert killed["n"] == 1
     assert sup._cm is None and sup._browser is None
+
+
+async def test_is_wedged_probe_distinguishes_healthy_from_hung(monkeypatch) -> None:
+    """The about:blank liveness probe: fast load → not wedged; a hung goto or no
+    browser → wedged."""
+    monkeypatch.setattr(bs, "_PROBE_TIMEOUT", 0.05)
+
+    class _ProbePage:
+        def __init__(self, delay: float) -> None:
+            self._delay = delay
+            self.closed = False
+
+        async def goto(self, url: str, **_: Any) -> None:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _ProbeBrowser:
+        def __init__(self, delay: float) -> None:
+            self.page = _ProbePage(delay)
+
+        async def new_page(self) -> _ProbePage:
+            return self.page
+
+    # Healthy: about:blank returns well within the probe timeout.
+    sup = bs._BrowserSupervisor({}, is_persistent=False)
+    sup._browser = _ProbeBrowser(delay=0.0)
+    assert await sup.is_wedged() is False
+    assert sup._browser.page.closed  # probe cleans up its page
+
+    # Wedged: goto hangs past the probe's outer guard.
+    sup._browser = _ProbeBrowser(delay=1.0)
+    assert await sup.is_wedged() is True
+
+    # No browser at all is treated as wedged.
+    sup._browser = None
+    assert await sup.is_wedged() is True
 
 
 # ── Page driving / tracker-blocking request interception (fetch_page) ──────────

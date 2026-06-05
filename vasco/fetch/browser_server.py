@@ -59,6 +59,15 @@ _CLOSE_TIMEOUT = 10.0
 # `_serve_fetch`'s disconnect path, same as any mid-flight browser death.
 _RECYCLE_AFTER_PAGES = 150
 
+# Cap on the post-navigation `networkidle` settle. On ad/beacon-heavy pages
+# networkidle never goes quiet, so an uncapped wait would burn the entire
+# browser budget even though `page.content()` was ready at domcontentloaded —
+# a throughput killer under bursts. 3s still covers typical SPA hydration (the
+# JSON-LD the structured adapters depend on lands well inside it); a page that
+# settles sooner returns sooner, one that never settles returns its
+# domcontentloaded HTML at the cap instead of at the full budget.
+_NETWORKIDLE_SETTLE_CAP = 3.0
+
 
 # --- Playwright Firefox driver patch -------------------------------------
 # Playwright's Firefox PageError dispatcher reads `pageError.location.url`
@@ -154,9 +163,20 @@ def _is_timeout(exc: BaseException) -> bool:
 # A wedged browser (renderer hung after suspend/resume or a bad tab) stays
 # `is_connected()`-alive but every `page.goto` times out — so `_alive()` never
 # trips and the server serves nothing but timeouts until manually restarted.
-# After this many *consecutive* goto timeouts we treat the browser as wedged
-# and force a relaunch. One slow page is normal; a streak across requests is not.
+# After this many *consecutive* goto timeouts we run a liveness probe to decide
+# whether to relaunch. A raw timeout count alone can't tell a wedged browser
+# (every URL hangs) from a merely-slow site (these URLs hang): a burst of
+# concurrent fetches at one heavy/Cloudflare site would all time out and falsely
+# trip a relaunch, tearing down the healthy sibling pages. One slow page is
+# normal; a streak is the cue to *check*, not to assume the worst.
 _TIMEOUT_RELAUNCH_THRESHOLD = 3
+
+# `about:blank` loads in <100ms on a healthy browser and has no network/site/
+# captcha to be slow on, so it's a clean "is this browser process responsive?"
+# probe: success means the timeouts are the site (don't relaunch), a hang means
+# the browser is genuinely wedged (relaunch). The whole probe is bounded so a
+# `new_page` that itself hangs can't exceed this ceiling.
+_PROBE_TIMEOUT = 2.0
 
 
 async def _serve_fetch(
@@ -198,13 +218,22 @@ async def _serve_fetch(
                 if attempt == 0 and _is_timeout(exc):
                     streak = supervisor.note_timeout()
                     if streak >= _TIMEOUT_RELAUNCH_THRESHOLD:
-                        log.warning(
-                            "browser timed out %d× consecutively — wedged, relaunching",
+                        # Consume the streak either way; the probe decides whether
+                        # this is a real wedge or just a run of slow-site fetches.
+                        supervisor.reset_timeouts()
+                        if await supervisor.is_wedged():
+                            log.warning(
+                                "browser wedged (liveness probe failed after %d× "
+                                "timeouts) — relaunching",
+                                streak,
+                            )
+                            await supervisor.mark_dead()
+                            continue
+                        log.info(
+                            "browser healthy (about:blank ok) after %d× site "
+                            "timeouts — not relaunching",
                             streak,
                         )
-                        await supervisor.mark_dead()
-                        supervisor.reset_timeouts()
-                        continue
                 raise
             else:
                 supervisor.reset_timeouts()
@@ -336,12 +365,15 @@ async def fetch_page(
         remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
         if remaining_ms > 0:
             # networkidle is load-bearing for the JS-heavy structured adapters
-            # (e.g. MercadoLivre injects its JSON-LD @graph after hydration), so we
-            # let it run to the tier deadline rather than capping it short. The
-            # auto-chain's browser budget (~8s) already bounds it; the concurrency
-            # semaphore bounds how many pages settle at once.
+            # (e.g. MercadoLivre injects its JSON-LD @graph after hydration), but
+            # an uncapped wait lets a never-settling ad/beacon-heavy page eat the
+            # whole browser budget. Cap it: typical hydration lands inside the cap,
+            # and `page.content()` below still captures whatever rendered even if
+            # the settle times out — so a non-settling page returns its
+            # domcontentloaded HTML at the cap instead of at the tier deadline.
+            settle_ms = min(remaining_ms, int(_NETWORKIDLE_SETTLE_CAP * 1000))
             try:
-                await page.wait_for_load_state("networkidle", timeout=remaining_ms)
+                await page.wait_for_load_state("networkidle", timeout=settle_ms)
             except Exception:
                 pass
 
@@ -577,6 +609,43 @@ class _BrowserSupervisor:
             if self._cm is None or self._cm is not stale:
                 return
             await self._close_locked()
+
+    async def is_wedged(self) -> bool:
+        """Probe browser responsiveness with an `about:blank` navigation.
+
+        Returns True only when the probe fails (no browser, hang, or error) —
+        a genuine wedge that warrants a relaunch. A fast success means the
+        browser is fine and the caller's timeouts are the *site*, so the slow
+        fetch's timeout should just propagate without tearing the browser (and
+        its healthy sibling pages) down.
+
+        Deliberately does NOT take `self._lock` (held by mark_dead/get_browser/
+        _close_locked — holding it here would block the very relaunch we might
+        ask for). It only needs `_CREATE_LOCK` to serialize page creation, the
+        same invariant `fetch_page` honours, and reads `self._browser` directly.
+        """
+        browser = self._browser
+        if browser is None:
+            return True
+
+        async def _probe() -> bool:
+            async with _CREATE_LOCK:
+                page = await browser.new_page()
+            try:
+                await page.goto("about:blank", timeout=int(_PROBE_TIMEOUT * 1000))
+                return True
+            finally:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+        try:
+            # Outer guard slightly larger than the goto timeout, in case the
+            # `new_page` itself hangs before goto can start.
+            return not await asyncio.wait_for(_probe(), timeout=_PROBE_TIMEOUT + 0.5)
+        except Exception:
+            return True
 
     async def close(self) -> None:
         async with self._lock:

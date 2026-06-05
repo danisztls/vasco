@@ -26,6 +26,11 @@ from vasco.strategy import SEED_STRATEGIES, seed_strategy
         ("olx.com.br/autos-e-pecas/*", "browser"),
         ("olx.com.br/sao-paulo-e-regiao/*", "browser"),
         ("olx.com.br", "browser"),
+        # captcha/consent-walled sites are deliberately NOT seeded: the browser
+        # tier fails on them too, so seeding would only waste the expensive tier.
+        ("poder360.com.br/poder-brasil/*", None),
+        ("jornalfolha1.com.br/2026/*", None),
+        ("arstechnica.com/security/*", None),
         # unrelated routes
         ("example.com/foo", None),
         # trailing-slash guard: no partial-segment false match

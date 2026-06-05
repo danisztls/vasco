@@ -35,6 +35,16 @@ SEED_STRATEGIES: dict[str, str] = {
     # produto. to mercadolivre.com.br, so this bare-domain key covers product +
     # search + category routes via seed_strategy's prefix match.
     "mercadolivre.com.br": "browser",
+    # NOT seeded on purpose: sites the browser tier *also* fails on. Seeding only
+    # helps where the browser succeeds — for a captcha/consent-walled site it just
+    # spends the expensive tier on a doomed fetch and skips the cheap http
+    # fail-fast. Leave them at the default (http first) so the chain fails cheap
+    # and the per-reason negative cache backs off.
+    #   - poder360.com.br / jornalfolha1.com.br: Cloudflare-Turnstile/hCaptcha —
+    #     headless can't solve the challenge (→ blocked_captcha at the browser).
+    #   - arstechnica.com: JS/consent wall — even the rendered browser gets a
+    #     "requires JavaScript" shell (→ js_app_needs_interaction at the browser),
+    #     verified empirically with `--mode browser`.
 }
 
 

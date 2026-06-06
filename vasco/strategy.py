@@ -35,16 +35,22 @@ SEED_STRATEGIES: dict[str, str] = {
     # produto. to mercadolivre.com.br, so this bare-domain key covers product +
     # search + category routes via seed_strategy's prefix match.
     "mercadolivre.com.br": "browser",
-    # NOT seeded on purpose: sites the browser tier *also* fails on. Seeding only
-    # helps where the browser succeeds — for a captcha/consent-walled site it just
-    # spends the expensive tier on a doomed fetch and skips the cheap http
-    # fail-fast. Leave them at the default (http first) so the chain fails cheap
-    # and the per-reason negative cache backs off.
-    #   - poder360.com.br / jornalfolha1.com.br: Cloudflare-Turnstile/hCaptcha —
-    #     headless can't solve the challenge (→ blocked_captcha at the browser).
+    # NOT seeded on purpose: sites the browser tier *also* fails on (by default).
+    # Seeding only helps where the browser succeeds — spending the expensive tier
+    # on a doomed fetch and skipping the cheap http fail-fast is a net loss. Leave
+    # them at the default (http first) so the chain fails cheap and the per-reason
+    # negative cache backs off.
+    #   - poder360.com.br / jornalfolha1.com.br: Cloudflare-Turnstile/interstitial.
+    #     When `browser.solve_turnstile` is enabled (real virtual-display browser +
+    #     humanized checkbox click, see browser_server._maybe_solve_turnstile) the
+    #     browser tier CAN clear these — but the auto chain escalates http→browser
+    #     on its own, so the solve still runs there without a seed. Seeding is left
+    #     off so the default (solve disabled) doesn't waste the browser tier; flip
+    #     a route to "browser" here only to skip the doomed http hop once solving
+    #     is on and proven for that site.
     #   - arstechnica.com: JS/consent wall — even the rendered browser gets a
     #     "requires JavaScript" shell (→ js_app_needs_interaction at the browser),
-    #     verified empirically with `--mode browser`.
+    #     a different class from Turnstile; verified empirically with `--mode browser`.
 }
 
 

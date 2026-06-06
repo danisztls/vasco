@@ -25,6 +25,17 @@
 #   network_blocklist_paths:    # hostlists for tracker blocking; empty = bundled conservative default
 #     - ~/.config/vasco/netblock.txt
 #     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt
+#   # --- Cloudflare Turnstile solving (opt-in; all off = today's behavior) ---
+#   solve_turnstile: false      # click the challenge checkbox + wait for clearance
+#   virtual_display: false      # launch a real (non-headless) Firefox in Xvfb; REQUIRES Xvfb
+#                               #   installed on the host (e.g. `pacman -S xorg-server-xvfb`)
+#   humanize: true              # human-like (Bezier) cursor movement; needed to click the checkbox
+#   disable_coop: true          # allow clicking the cross-origin Turnstile iframe
+#   block_images: false         # skip image loading to cut the headful render cost
+#   window: [1280, 720]         # fixed window size; omit for a random one
+#   # NOTE: solving needs a persistent user_data_dir so the cf_clearance cookie is
+#   # reused across fetches once obtained. Set virtual_display+humanize+disable_coop
+#   # +solve_turnstile together; they're a unit.
 
 # cache:
 #   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite

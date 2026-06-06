@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -401,3 +402,211 @@ def test_build_launch_kwargs_expands_xdg_data_home_fallback(
     )
     expected = str(Path.home() / ".local" / "share" / "vasco" / "profile")
     assert kwargs["user_data_dir"] == expected
+
+
+# ── Turnstile-solving launch kwargs ───────────────────────────────────────────
+
+
+def test_build_launch_kwargs_omits_solve_kwargs_by_default() -> None:
+    """A cfg with none of the new fields set must not add any solve kwargs —
+    headless stays a bool, no humanize/disable_coop/window/block_images leak in."""
+    kwargs, _ = bs._build_launch_kwargs(_cfg())
+    assert kwargs == {"headless": True, "locale": ("en-US",)}
+
+
+def test_build_launch_kwargs_virtual_display_overrides_headless() -> None:
+    kwargs, _ = bs._build_launch_kwargs(_cfg(virtual_display=True))
+    assert kwargs["headless"] == "virtual"
+
+
+def test_build_launch_kwargs_solve_knobs_flow_through() -> None:
+    kwargs, _ = bs._build_launch_kwargs(
+        _cfg(
+            virtual_display=True,
+            humanize=True,
+            disable_coop=True,
+            block_images=True,
+            window=[1280, 720],
+        )
+    )
+    assert kwargs["headless"] == "virtual"
+    assert kwargs["humanize"] is True
+    assert kwargs["disable_coop"] is True
+    assert kwargs["block_images"] is True
+    assert kwargs["window"] == (1280, 720)
+
+
+def test_force_x11_scrubs_wayland_so_browser_stays_off_desktop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression for windows leaking onto the real desktop: a --user service
+    inherits WAYLAND_DISPLAY, which makes a virtual-display Firefox render to the
+    real compositor. The scrub must remove it (and DISPLAY) and pin X11."""
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
+    bs._force_x11_for_virtual_display()
+    assert "WAYLAND_DISPLAY" not in os.environ
+    assert "DISPLAY" not in os.environ  # Camoufox sets its own :N for the Xvfb
+    assert os.environ["MOZ_ENABLE_WAYLAND"] == "0"
+
+
+def test_build_launch_kwargs_window_coerces_and_guards() -> None:
+    # Env-var path yields strings; they must coerce to ints.
+    kwargs, _ = bs._build_launch_kwargs(_cfg(window=("800", "600")))
+    assert kwargs["window"] == (800, 600)
+    # A malformed window is dropped, not fatal.
+    kwargs, _ = bs._build_launch_kwargs(_cfg(window=["oops"]))
+    assert "window" not in kwargs
+
+
+# ── Turnstile challenge detection + solve (_maybe_solve_turnstile) ─────────────
+
+_CF_CHALLENGE_HTML = (
+    "<html><head><title>Just a moment...</title></head><body>"
+    "<div class='cf-turnstile'></div>"
+    "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js'></script>"
+    "</body></html>"
+)
+_CLEARED_HTML = (
+    "<html><body><article>" + ("real content " * 200) + "</article></body></html>"
+)
+
+
+def test_looks_challenged_detects_cf_and_passes_real_content() -> None:
+    assert bs._looks_challenged(200, _CF_CHALLENGE_HTML, {}) is True
+    assert bs._looks_challenged(200, _CLEARED_HTML, {}) is False
+
+
+class _CFFrame:
+    """frame_locator(...).locator(...) stand-in whose click clears the page."""
+
+    def __init__(self, page: "_CFChallengePage") -> None:
+        self._page = page
+
+    def locator(self, _sel: str) -> "_CFFrame":
+        return self
+
+    async def click(self, timeout: int | None = None) -> None:
+        self._page.clicks += 1
+        self._page.cleared = True
+
+
+class _CFChallengePage:
+    """A page that serves a CF challenge until its Turnstile checkbox is clicked."""
+
+    def __init__(self) -> None:
+        self.cleared = False
+        self.clicks = 0
+        self.frame_locator_calls = 0
+
+    def frame_locator(self, _sel: str) -> _CFFrame:
+        self.frame_locator_calls += 1
+        return _CFFrame(self)
+
+    async def content(self) -> str:
+        return _CLEARED_HTML if self.cleared else _CF_CHALLENGE_HTML
+
+
+async def test_maybe_solve_turnstile_clicks_and_clears() -> None:
+    page = _CFChallengePage()
+    cleared = await bs._maybe_solve_turnstile(
+        page,
+        status=200,
+        html=_CF_CHALLENGE_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert cleared is True
+    assert page.clicks == 1
+
+
+async def test_maybe_solve_turnstile_noop_when_not_challenged() -> None:
+    page = _CFChallengePage()
+    cleared = await bs._maybe_solve_turnstile(
+        page,
+        status=200,
+        html=_CLEARED_HTML,  # already real content
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert cleared is False
+    assert page.frame_locator_calls == 0  # never touched the page
+
+
+async def test_maybe_solve_turnstile_returns_false_when_no_budget() -> None:
+    """Past the deadline: no click, no clearance — degrades to a failed solve."""
+    page = _CFChallengePage()
+    cleared = await bs._maybe_solve_turnstile(
+        page,
+        status=403,
+        html=_CF_CHALLENGE_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() - 1,  # already elapsed
+    )
+    assert cleared is False
+    assert page.clicks == 0
+
+
+# ── fetch_page end-to-end with solving ────────────────────────────────────────
+
+
+class _CFResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    async def all_headers(self) -> dict[str, str]:
+        return {}
+
+
+class _CFFetchPage(_CFChallengePage):
+    """Adds the page-driving surface fetch_page needs on top of the challenge page."""
+
+    def __init__(self, status: int = 200) -> None:
+        super().__init__()
+        self._status = status
+        self.closed = False
+
+    async def route(self, _pattern: str, _handler: Any) -> None:  # pragma: no cover
+        return None
+
+    async def goto(self, _url: str, **_: Any) -> _CFResponse:
+        return _CFResponse(self._status)
+
+    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _CFBrowser:
+    def __init__(self, page: _CFFetchPage) -> None:
+        self._page = page
+
+    async def new_page(self) -> _CFFetchPage:
+        return self._page
+
+
+async def test_fetch_page_solves_challenge_when_enabled() -> None:
+    page = _CFFetchPage(status=403)
+    html, status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        "https://poder360.com.br",
+        deadline_monotonic=time.monotonic() + 5,
+        solve_turnstile=True,
+    )
+    assert page.clicks == 1
+    assert "real content" in html
+    assert status == 200  # cleared content reported as 200, not the 403 challenge
+
+
+async def test_fetch_page_skips_solve_when_disabled() -> None:
+    page = _CFFetchPage(status=200)
+    html, status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        "https://poder360.com.br",
+        deadline_monotonic=time.monotonic() + 5,
+        # solve_turnstile defaults False
+    )
+    assert page.clicks == 0
+    assert "challenges.cloudflare.com" in html  # untouched challenge HTML

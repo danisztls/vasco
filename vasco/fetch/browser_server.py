@@ -24,9 +24,17 @@ from pathlib import Path
 from typing import Any
 
 from ..cache import registered_domain
+from ..errors import FailureReason
+from . import bot_detect
 from .netblock import load_netblock, should_block
 
 log = logging.getLogger(__name__)
+
+# A page whose markers classify to one of these is a live Cloudflare challenge
+# we should try to solve (interstitial *or* Turnstile widget).
+_CHALLENGE_REASONS = frozenset(
+    {FailureReason.BLOCKED_CLOUDFLARE, FailureReason.BLOCKED_CAPTCHA}
+)
 
 _HEADER = struct.Struct("!I")
 
@@ -186,6 +194,7 @@ async def _serve_fetch(
     mobile: bool,
     timeout: float,
     netblock: frozenset[str] | None = None,
+    solve_turnstile: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Fetch a page, relaunching the browser once if the driver connection drops.
 
@@ -208,6 +217,7 @@ async def _serve_fetch(
                     timeout=timeout,
                     is_persistent=supervisor.is_persistent,
                     netblock=netblock,
+                    solve_turnstile=solve_turnstile,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -247,6 +257,7 @@ async def _handle_client(
     writer: asyncio.StreamWriter,
     supervisor: _BrowserSupervisor,
     netblock: frozenset[str] | None = None,
+    solve_turnstile: bool = False,
 ) -> None:
     try:
         while True:
@@ -268,6 +279,7 @@ async def _handle_client(
                     mobile=mobile,
                     timeout=timeout,
                     netblock=netblock,
+                    solve_turnstile=solve_turnstile,
                 )
                 await _write_msg(
                     writer, {"html": html, "status": status, "headers": headers}
@@ -319,6 +331,100 @@ async def _install_netblock_route(
     await page.route("**/*", _route)
 
 
+# --- Cloudflare Turnstile solve -----------------------------------------------
+# Selectors for the challenge iframe (host is contractually stable across all
+# Cloudflare customers) and the checkbox inside it. Loose on purpose: the inner
+# class names rotate, the iframe host and the checkbox role don't.
+_CF_IFRAME_SELECTOR = "iframe[src*='challenges.cloudflare.com']"
+_CF_CHECKBOX_SELECTOR = "input[type='checkbox']"
+_CF_CLICK_TIMEOUT_MS = 5000  # per click attempt, also clamped to the deadline
+_CF_POLL_INTERVAL = 0.5  # clearance re-check cadence
+
+
+def _remaining_ms(deadline_monotonic: float) -> int:
+    return int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
+
+
+def _looks_challenged(status: int, html: str, headers: dict[str, str]) -> bool:
+    """True when the response classifies as a live Cloudflare/captcha challenge.
+
+    Reuses the maintained `bot_detect.classify` so detection tracks the same
+    markers the fetch chain already trusts — no second copy of the signatures.
+    """
+    return bot_detect.classify(status, html, headers) in _CHALLENGE_REASONS
+
+
+async def _click_turnstile(page: Any, deadline_monotonic: float) -> None:
+    """Best-effort click of the Turnstile checkbox. Never raises.
+
+    Tries the checkbox inside the Cloudflare iframe first (needs disable_coop for
+    the cross-origin reach), then falls back to a humanized click near the
+    widget's left edge (where the checkbox sits) via the iframe bounding box.
+    """
+    timeout = min(_CF_CLICK_TIMEOUT_MS, _remaining_ms(deadline_monotonic))
+    if timeout <= 0:
+        return
+    try:
+        checkbox = page.frame_locator(_CF_IFRAME_SELECTOR).locator(
+            _CF_CHECKBOX_SELECTOR
+        )
+        await checkbox.click(timeout=timeout)
+        return
+    except Exception:
+        pass
+    try:
+        el = await page.query_selector(_CF_IFRAME_SELECTOR)
+        box = await el.bounding_box() if el is not None else None
+        if box:
+            # The checkbox sits ~30px from the widget's left, vertically centered.
+            await page.mouse.click(box["x"] + 30, box["y"] + box["height"] / 2)
+    except Exception:
+        pass
+
+
+async def _wait_for_clearance(page: Any, deadline_monotonic: float) -> bool:
+    """Poll until the challenge markers are gone (clearance), bounded by deadline.
+
+    Returns True once the page no longer classifies as challenged — i.e. the real
+    origin content rendered (and, with a persistent profile, cf_clearance landed).
+    """
+    while _remaining_ms(deadline_monotonic) > 0:
+        try:
+            html = await page.content()
+        except Exception:
+            return False
+        if not _looks_challenged(200, html, {}):
+            return True
+        await asyncio.sleep(_CF_POLL_INTERVAL)
+    return False
+
+
+async def _maybe_solve_turnstile(
+    page: Any,
+    *,
+    status: int,
+    html: str,
+    headers: dict[str, str],
+    deadline_monotonic: float,
+) -> bool:
+    """If the current page is a Cloudflare challenge, click it and wait for
+    clearance. Returns True only when the challenge cleared. Never raises — a
+    failed solve leaves the challenge HTML in place so the chain still reports
+    BLOCKED_CAPTCHA, exactly as before this feature existed.
+    """
+    if not _looks_challenged(status, html, headers):
+        return False
+    try:
+        # Managed challenges often pass non-interactively on a good fingerprint;
+        # the click is the fallback for the interactive checkbox a human also
+        # has to tick. Try the click, then wait for clearance either way.
+        await _click_turnstile(page, deadline_monotonic)
+        return await _wait_for_clearance(page, deadline_monotonic)
+    except Exception as exc:  # defensive: a solve must never kill the fetch
+        log.info("turnstile solve attempt failed: %s", exc)
+        return False
+
+
 async def fetch_page(
     browser_or_context: Any,
     url: str,
@@ -327,6 +433,7 @@ async def fetch_page(
     mobile: bool = False,
     is_persistent: bool = False,
     netblock: frozenset[str] | None = None,
+    solve_turnstile: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Open a page, navigate to `url`, and return (html, status, headers).
 
@@ -380,6 +487,18 @@ async def fetch_page(
         html = await page.content()
         status = int(response.status) if response is not None else 0
         headers = await _extract_headers(response)
+        if solve_turnstile and await _maybe_solve_turnstile(
+            page,
+            status=status,
+            html=html,
+            headers=headers,
+            deadline_monotonic=deadline_monotonic,
+        ):
+            # Cleared: re-read the now-rendered origin content. Report 200 — the
+            # challenge response's status/markers no longer describe the page we
+            # hold, and a stale 403 would re-trip the chain's bot classifier.
+            html = await page.content()
+            status = 200
         return html, status, headers
     finally:
         try:
@@ -401,6 +520,7 @@ async def _fetch_page(
     timeout: float = 30.0,
     is_persistent: bool = False,
     netblock: frozenset[str] | None = None,
+    solve_turnstile: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Thin wrapper over `fetch_page`. Kept as a stable seam the request handler
     calls and the server tests monkeypatch."""
@@ -411,14 +531,22 @@ async def _fetch_page(
         mobile=mobile,
         is_persistent=is_persistent,
         netblock=netblock,
+        solve_turnstile=solve_turnstile,
     )
 
 
 def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     """Resolve Camoufox launch kwargs and whether we run a persistent context."""
-    headless = True
+    headless: bool | str = True
     locale = "en-US"
     user_data_dir = ""
+    # Turnstile-solving knobs; read with getattr so a partial cfg/namespace (e.g.
+    # a test SimpleNamespace) falls back per-field instead of dropping the lot.
+    virtual_display = False
+    humanize = False
+    disable_coop = False
+    block_images = False
+    window: tuple[int, ...] = ()
     if cfg is not None:
         try:
             headless = bool(cfg.browser.headless)
@@ -426,6 +554,16 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
             user_data_dir = str(cfg.browser.user_data_dir or "")
         except Exception:
             pass
+        b = getattr(cfg, "browser", None)
+        if b is not None:
+            virtual_display = bool(getattr(b, "virtual_display", False))
+            humanize = bool(getattr(b, "humanize", False))
+            disable_coop = bool(getattr(b, "disable_coop", False))
+            block_images = bool(getattr(b, "block_images", False))
+            try:
+                window = tuple(int(x) for x in (getattr(b, "window", ()) or ()))[:2]
+            except (TypeError, ValueError):
+                window = ()
 
     if user_data_dir:
         if "XDG_DATA_HOME" not in os.environ:
@@ -437,13 +575,45 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
             os.path.expanduser(os.path.expandvars(user_data_dir))
         )
 
-    kwargs: dict[str, Any] = {"headless": headless, "locale": (locale,)}
+    # virtual_display launches a real (non-headless) Firefox inside Xvfb; it wins
+    # over the bool `headless` because clicking the Turnstile checkbox needs a
+    # genuine (not headless) browser, and Xvfb keeps that headless-server-safe.
+    kwargs: dict[str, Any] = {
+        "headless": "virtual" if virtual_display else headless,
+        "locale": (locale,),
+    }
+    if humanize:
+        kwargs["humanize"] = True
+    if disable_coop:
+        kwargs["disable_coop"] = True
+    if block_images:
+        kwargs["block_images"] = True
+    if len(window) == 2:
+        kwargs["window"] = window
     is_persistent = bool(user_data_dir)
     if is_persistent:
         os.makedirs(user_data_dir, exist_ok=True)
         kwargs["persistent_context"] = True
         kwargs["user_data_dir"] = user_data_dir
     return kwargs, is_persistent
+
+
+def _force_x11_for_virtual_display() -> None:
+    """Pin the browser to X11 so a virtual-display launch actually uses Xvfb.
+
+    Firefox prefers the Wayland backend whenever ``WAYLAND_DISPLAY`` is set — and a
+    ``systemctl --user`` service inherits it (plus ``DISPLAY``) from the graphical
+    session. With it set, ``headless="virtual"`` still starts an Xvfb, but Firefox
+    renders to the *real* Wayland compositor instead, popping visible browser
+    windows on the user's desktop (Xvfb only isolates the X11 path, not Wayland).
+    The server itself never needs a display, so scrub both display vars (Camoufox
+    sets its own ``DISPLAY=:N`` for the Xvfb it creates) and force the X11 backend.
+    Bonus: if the Xvfb ever fails to start, the browser then can't fall back to the
+    real desktop either — it just fails to launch.
+    """
+    for var in ("WAYLAND_DISPLAY", "DISPLAY"):
+        os.environ.pop(var, None)
+    os.environ["MOZ_ENABLE_WAYLAND"] = "0"
 
 
 def _kill_browser_processes() -> None:
@@ -661,22 +831,32 @@ async def run_server(cfg: Any | None = None) -> None:
 
     _patch_playwright_driver()
     kwargs, is_persistent = _build_launch_kwargs(cfg)
+    if kwargs.get("headless") == "virtual":
+        # Must run before Camoufox launches: keep the headful Xvfb browser off the
+        # real (Wayland) desktop. See _force_x11_for_virtual_display.
+        _force_x11_for_virtual_display()
 
     # Resolve the tracker blocklist once at startup; the handler then only does
     # an O(1) set membership test per request.
     block_trackers = True
     network_blocklist_paths: tuple[str, ...] = ()
+    solve_turnstile = False
     if cfg is not None:
         try:
             block_trackers = bool(cfg.browser.block_trackers)
             network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
         except Exception:
             pass
+        solve_turnstile = bool(
+            getattr(getattr(cfg, "browser", None), "solve_turnstile", False)
+        )
     netblock = await asyncio.to_thread(
         load_netblock, block_trackers, network_blocklist_paths
     )
     if netblock:
         log.info("tracker blocking enabled (%d domains)", len(netblock))
+    if solve_turnstile:
+        log.info("cloudflare turnstile solving enabled")
 
     sock = _socket_path()
     sock.parent.mkdir(parents=True, exist_ok=True)
@@ -689,7 +869,7 @@ async def run_server(cfg: Any | None = None) -> None:
     await supervisor.start()
     try:
         server = await asyncio.start_unix_server(
-            lambda r, w: _handle_client(r, w, supervisor, netblock),
+            lambda r, w: _handle_client(r, w, supervisor, netblock, solve_turnstile),
             path=str(sock),
         )
         os.chmod(str(sock), 0o600)

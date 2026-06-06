@@ -38,6 +38,16 @@ class BrowserCfg:
     # Hostlists for tracker blocking (local files or remote URLs); empty uses
     # the bundled conservative default.
     network_blocklist_paths: tuple[str, ...] = ()
+    # --- Cloudflare Turnstile solving (opt-in; off preserves today's behavior) --
+    # virtual_display needs Xvfb installed on the host; it launches a *real*
+    # (non-headless) Firefox inside an in-memory X display so headless detection
+    # goes away while still running on a headless box.
+    virtual_display: bool = False  # launch with headless="virtual" (Xvfb)
+    humanize: bool = False  # human-like (Bezier) cursor movement; needed to click
+    disable_coop: bool = False  # allow clicking the cross-origin Turnstile iframe
+    block_images: bool = False  # skip image loading to cut headful render cost
+    window: tuple[int, int] = ()  # fixed window size; () = Camoufox random
+    solve_turnstile: bool = False  # attempt the in-page challenge solve
 
 
 @dataclass(frozen=True)

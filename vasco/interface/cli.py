@@ -788,6 +788,65 @@ def browser_server() -> None:
         loop.close()
 
 
+@app.command("browser-solve")
+def browser_solve(
+    url: Annotated[str, typer.Argument(help="URL to open for manual captcha solving.")],
+    deadline: Annotated[
+        str | None, typer.Option(help="Overall deadline, e.g. 2m, 180s.")
+    ] = None,
+    human: HumanOpt = False,
+) -> None:
+    """Open a URL in the browser tier and hold it for manual captcha solving via VNC.
+
+    Requires the browser server running with `browser.manual_solve: true` (which
+    starts a sized Xvfb + x11vnc on localhost). If the page is a challenge the
+    auto-solver can't clear, vasco fires a desktop notification and holds the page
+    open so you can connect a VNC viewer to localhost:<vnc_port> and solve it by
+    hand; the resulting cf_clearance persists for later fetches.
+    """
+    from vasco import config as _config
+    from vasco import fetch as _fetch
+    from vasco import telemetry as _telemetry
+
+    cfg = _config.load_config()
+    deadline_seconds = parse_duration(deadline) if deadline is not None else 180.0
+    port = getattr(cfg.browser, "vnc_port", 5900)
+    typer.echo(
+        f"Opening {url} in the browser tier. If a captcha appears you'll get a "
+        f"notification — connect a VNC viewer to localhost:{port} to solve it.",
+        err=True,
+    )
+    cache = _open_cache(cfg)
+    try:
+        env = asyncio.run(
+            _fetch.fetch_one(
+                url,
+                mode="browser",
+                deadline=deadline_seconds,
+                use_cache=True,
+                refresh=True,  # don't return a negative-cached blocked_captcha
+                cache=cache,
+                cfg=cfg,
+            )
+        )
+    finally:
+        cache.close()
+
+    if "failure" in env:
+        _telemetry.record_failure(cfg, "fetch", env)
+    else:
+        _telemetry.record_success(cfg, "fetch", **_telemetry.fetch_success_fields(env))
+
+    if _resolve_output(human, False):
+        from vasco import render as _render
+
+        _render.render_fetch(env)
+    else:
+        from vasco import io as _io
+
+        _io.write_json(env)
+
+
 @app.command("serve")
 def serve() -> None:
     """Run vascod — the resident vasco daemon — on a UNIX socket.

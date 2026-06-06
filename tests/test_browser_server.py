@@ -610,3 +610,84 @@ async def test_fetch_page_skips_solve_when_disabled() -> None:
     )
     assert page.clicks == 0
     assert "challenges.cloudflare.com" in html  # untouched challenge HTML
+
+
+# ── Manual (human-in-the-loop) solve: notify + budget-suspended hold ───────────
+
+
+def test_pick_free_display_returns_unused_display() -> None:
+    d = bs._pick_free_display(":71")
+    assert d.startswith(":")
+    n = d.lstrip(":")
+    assert not os.path.exists(f"/tmp/.X11-unix/X{n}")  # genuinely free
+
+
+async def test_manual_solve_hold_notifies_and_clears(monkeypatch) -> None:
+    notified: list[str] = []
+
+    async def fake_notify(url: str) -> None:
+        notified.append(url)
+
+    monkeypatch.setattr(bs, "_notify_manual_solve", fake_notify)
+    monkeypatch.setattr(bs, "_manual_in_progress", False)
+    page = _CFChallengePage()
+    page.cleared = True  # human "solved it" → clearance detected on first poll
+    ok = await bs._manual_solve_hold(page, "https://x", timeout=5)
+    assert ok is True
+    assert notified == ["https://x"]
+
+
+async def test_manual_solve_hold_skips_when_already_in_progress(monkeypatch) -> None:
+    """Single-in-progress guard: a concurrent hold returns immediately, no notify."""
+    notified: list[str] = []
+
+    async def fake_notify(url: str) -> None:  # pragma: no cover - must not run
+        notified.append(url)
+
+    monkeypatch.setattr(bs, "_notify_manual_solve", fake_notify)
+    monkeypatch.setattr(bs, "_manual_in_progress", True)  # one already running
+    page = _CFChallengePage()
+    page.cleared = True
+    ok = await bs._manual_solve_hold(page, "https://x", timeout=5)
+    assert ok is False
+    assert notified == []  # never notified, never held
+
+
+async def test_maybe_solve_turnstile_manual_fallback(monkeypatch) -> None:
+    """When auto is skipped/failed and manual_solve is on, hold for the human."""
+    monkeypatch.setattr(bs, "_notify_manual_solve", lambda url: _noop())
+    monkeypatch.setattr(bs, "_manual_in_progress", False)
+    page = _CFChallengePage()
+    page.cleared = True  # human solves during the hold
+    ok = await bs._maybe_solve_turnstile(
+        page,
+        status=403,
+        html=_CF_CHALLENGE_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+        url="https://x",
+        solve_turnstile=False,  # skip auto-click; go straight to manual
+        manual_solve=True,
+        manual_solve_timeout=5,
+    )
+    assert ok is True
+
+
+async def test_maybe_solve_turnstile_no_manual_when_disabled() -> None:
+    """Auto fails to clear and manual_solve is off → no hold, returns False."""
+    page = _CFChallengePage()  # never clears (click is a no-op via _click fallback)
+    ok = await bs._maybe_solve_turnstile(
+        page,
+        status=403,
+        html=_CF_CHALLENGE_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() - 1,  # no budget → auto can't clear
+        url="https://x",
+        solve_turnstile=True,
+        manual_solve=False,
+    )
+    assert ok is False
+
+
+async def _noop() -> None:
+    return None

@@ -48,6 +48,15 @@ class BrowserCfg:
     block_images: bool = False  # skip image loading to cut headful render cost
     window: tuple[int, int] = ()  # fixed window size; () = Camoufox random
     solve_turnstile: bool = False  # attempt the in-page challenge solve
+    # --- Manual (human-in-the-loop) captcha solving via VNC ---------------------
+    # When on: vasco runs its own sized Xvfb + x11vnc (loopback), and a challenge
+    # the auto-solve can't clear escalates to a notify-send + a budget-suspended
+    # hold so you can VNC in and solve it by hand. Implies the headful path.
+    manual_solve: bool = False
+    manual_solve_timeout: float = 60.0  # human window before resuming as normal
+    vnc_display_size: tuple[int, int] = (1280, 720)  # managed Xvfb framebuffer
+    vnc_display: str = ":99"  # managed Xvfb display number (auto-fallback if taken)
+    vnc_port: int = 5900  # x11vnc loopback port
 
 
 @dataclass(frozen=True)

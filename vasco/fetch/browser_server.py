@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import struct
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -195,6 +196,8 @@ async def _serve_fetch(
     timeout: float,
     netblock: frozenset[str] | None = None,
     solve_turnstile: bool = False,
+    manual_solve: bool = False,
+    manual_solve_timeout: float = 60.0,
 ) -> tuple[str, int, dict[str, str]]:
     """Fetch a page, relaunching the browser once if the driver connection drops.
 
@@ -218,6 +221,8 @@ async def _serve_fetch(
                     is_persistent=supervisor.is_persistent,
                     netblock=netblock,
                     solve_turnstile=solve_turnstile,
+                    manual_solve=manual_solve,
+                    manual_solve_timeout=manual_solve_timeout,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -258,6 +263,8 @@ async def _handle_client(
     supervisor: _BrowserSupervisor,
     netblock: frozenset[str] | None = None,
     solve_turnstile: bool = False,
+    manual_solve: bool = False,
+    manual_solve_timeout: float = 60.0,
 ) -> None:
     try:
         while True:
@@ -280,6 +287,8 @@ async def _handle_client(
                     timeout=timeout,
                     netblock=netblock,
                     solve_turnstile=solve_turnstile,
+                    manual_solve=manual_solve,
+                    manual_solve_timeout=manual_solve_timeout,
                 )
                 await _write_msg(
                     writer, {"html": html, "status": status, "headers": headers}
@@ -406,20 +415,33 @@ async def _maybe_solve_turnstile(
     html: str,
     headers: dict[str, str],
     deadline_monotonic: float,
+    url: str = "",
+    solve_turnstile: bool = True,
+    manual_solve: bool = False,
+    manual_solve_timeout: float = 60.0,
 ) -> bool:
-    """If the current page is a Cloudflare challenge, click it and wait for
-    clearance. Returns True only when the challenge cleared. Never raises — a
-    failed solve leaves the challenge HTML in place so the chain still reports
-    BLOCKED_CAPTCHA, exactly as before this feature existed.
+    """If the current page is a Cloudflare challenge, try to clear it. Returns
+    True only when the challenge cleared. Never raises — a failed solve leaves the
+    challenge HTML in place so the chain still reports BLOCKED_CAPTCHA, exactly as
+    before this feature existed.
+
+    Order: auto-click (when `solve_turnstile`), then — if that didn't clear and
+    `manual_solve` is on — notify the user and hold the page for a human to solve
+    via VNC (budget-suspended, up to `manual_solve_timeout`).
     """
     if not _looks_challenged(status, html, headers):
         return False
     try:
-        # Managed challenges often pass non-interactively on a good fingerprint;
-        # the click is the fallback for the interactive checkbox a human also
-        # has to tick. Try the click, then wait for clearance either way.
-        await _click_turnstile(page, deadline_monotonic)
-        return await _wait_for_clearance(page, deadline_monotonic)
+        if solve_turnstile:
+            # Managed challenges often pass non-interactively on a good
+            # fingerprint; the click is the fallback for the interactive checkbox
+            # a human also has to tick.
+            await _click_turnstile(page, deadline_monotonic)
+            if await _wait_for_clearance(page, deadline_monotonic):
+                return True
+        if manual_solve:
+            return await _manual_solve_hold(page, url, manual_solve_timeout)
+        return False
     except Exception as exc:  # defensive: a solve must never kill the fetch
         log.info("turnstile solve attempt failed: %s", exc)
         return False
@@ -434,6 +456,8 @@ async def fetch_page(
     is_persistent: bool = False,
     netblock: frozenset[str] | None = None,
     solve_turnstile: bool = False,
+    manual_solve: bool = False,
+    manual_solve_timeout: float = 60.0,
 ) -> tuple[str, int, dict[str, str]]:
     """Open a page, navigate to `url`, and return (html, status, headers).
 
@@ -487,12 +511,16 @@ async def fetch_page(
         html = await page.content()
         status = int(response.status) if response is not None else 0
         headers = await _extract_headers(response)
-        if solve_turnstile and await _maybe_solve_turnstile(
+        if (solve_turnstile or manual_solve) and await _maybe_solve_turnstile(
             page,
             status=status,
             html=html,
             headers=headers,
             deadline_monotonic=deadline_monotonic,
+            url=url,
+            solve_turnstile=solve_turnstile,
+            manual_solve=manual_solve,
+            manual_solve_timeout=manual_solve_timeout,
         ):
             # Cleared: re-read the now-rendered origin content. Report 200 — the
             # challenge response's status/markers no longer describe the page we
@@ -521,6 +549,8 @@ async def _fetch_page(
     is_persistent: bool = False,
     netblock: frozenset[str] | None = None,
     solve_turnstile: bool = False,
+    manual_solve: bool = False,
+    manual_solve_timeout: float = 60.0,
 ) -> tuple[str, int, dict[str, str]]:
     """Thin wrapper over `fetch_page`. Kept as a stable seam the request handler
     calls and the server tests monkeypatch."""
@@ -532,6 +562,8 @@ async def _fetch_page(
         is_persistent=is_persistent,
         netblock=netblock,
         solve_turnstile=solve_turnstile,
+        manual_solve=manual_solve,
+        manual_solve_timeout=manual_solve_timeout,
     )
 
 
@@ -614,6 +646,124 @@ def _force_x11_for_virtual_display() -> None:
     for var in ("WAYLAND_DISPLAY", "DISPLAY"):
         os.environ.pop(var, None)
     os.environ["MOZ_ENABLE_WAYLAND"] = "0"
+
+
+# --- Managed display for manual (VNC) solving ---------------------------------
+# When manual_solve is on, vasco runs its OWN sized Xvfb (Camoufox's built-in
+# headless="virtual" display is 1x1 — fine for headless scraping, useless for
+# VNC) plus an x11vnc server on loopback, so a human can connect and solve a
+# challenge the auto-solver can't. The port is stashed module-side so the notify
+# message can name it without threading it through the whole fetch path.
+_VNC_PORT = 5900
+
+
+def _pick_free_display(preferred: str) -> str:
+    """Return a free X display string (e.g. ':99'), starting from `preferred`.
+
+    Probes the abstract/unix socket path Xvfb creates; an X server that owns a
+    display leaves `/tmp/.X11-unix/X<n>`. Falls back to scanning upward so we
+    never collide with an existing server (incl. the user's real :0)."""
+    try:
+        start = int(preferred.lstrip(":")) if preferred else 99
+    except ValueError:
+        start = 99
+    for n in range(max(start, 1), max(start, 1) + 64):
+        if not os.path.exists(f"/tmp/.X11-unix/X{n}"):
+            return f":{n}"
+    return f":{start}"
+
+
+def _start_managed_display(
+    preferred_display: str, size: tuple[int, int], port: int
+) -> tuple[str, subprocess.Popen, subprocess.Popen | None]:
+    """Start a sized Xvfb + a loopback x11vnc on it. Returns (display, xvfb, vnc).
+
+    Synchronous (called once at startup via ``asyncio.to_thread``). The x11vnc
+    handle may be None if it fails to start — VNC is best-effort; the sized Xvfb
+    is what the browser needs, VNC is only how the human views it.
+    """
+    display = _pick_free_display(preferred_display)
+    w, h = size
+    xvfb = subprocess.Popen(
+        ["Xvfb", display, "-screen", "0", f"{w}x{h}x24", "-ac", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Wait for the display socket so the browser/x11vnc don't race a cold Xvfb.
+    sock = f"/tmp/.X11-unix/X{display.lstrip(':')}"
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not os.path.exists(sock):
+        time.sleep(0.1)
+
+    vnc: subprocess.Popen | None = None
+    try:
+        vnc = subprocess.Popen(
+            [
+                "x11vnc",
+                "-display",
+                display,
+                "-localhost",
+                "-forever",
+                "-shared",
+                "-nopw",
+                "-rfbport",
+                str(port),
+                "-quiet",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:  # x11vnc missing / failed — keep the Xvfb anyway
+        log.warning("x11vnc failed to start (%s); manual solve has no viewer", exc)
+    return display, xvfb, vnc
+
+
+async def _notify_manual_solve(url: str) -> None:
+    """Fire a desktop notification that a captcha needs a human. Never raises."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "notify-send",
+            "-u",
+            "critical",
+            "vasco: solve captcha",
+            f"{url}\nConnect a VNC viewer to localhost:{_VNC_PORT} to solve.",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+    except Exception:
+        pass
+
+
+# Only one manual hold at a time: a burst of challenged fetches must not each pop
+# a notification or each pin a page-semaphore slot for a minute. Guarded by the
+# event loop's single-threadedness (no await between the check and the set).
+_manual_in_progress = False
+
+
+async def _manual_solve_hold(page: Any, url: str, timeout: float) -> bool:
+    """Notify the user and hold the page open for a human to solve, budget-suspended.
+
+    Returns True only if the challenge clears within `timeout`. Concurrent calls
+    while one hold is active return False immediately (resume as normal)."""
+    global _manual_in_progress
+    if _manual_in_progress:
+        log.info("manual solve already in progress; not holding for %s", url)
+        return False
+    _manual_in_progress = True
+    try:
+        log.warning(
+            "manual solve: holding %s up to %.0fs for a human (VNC localhost:%d)",
+            url,
+            timeout,
+            _VNC_PORT,
+        )
+        await _notify_manual_solve(url)
+        # Own clock, independent of the caller's fetch deadline — this is the
+        # "budget suspension": the page stays open for the human window.
+        return await _wait_for_clearance(page, time.monotonic() + timeout)
+    finally:
+        _manual_in_progress = False
 
 
 def _kill_browser_processes() -> None:
@@ -829,27 +979,65 @@ async def run_server(cfg: Any | None = None) -> None:
         log.error("camoufox is not installed")
         return
 
+    global _VNC_PORT
     _patch_playwright_driver()
     kwargs, is_persistent = _build_launch_kwargs(cfg)
-    if kwargs.get("headless") == "virtual":
-        # Must run before Camoufox launches: keep the headful Xvfb browser off the
-        # real (Wayland) desktop. See _force_x11_for_virtual_display.
-        _force_x11_for_virtual_display()
 
-    # Resolve the tracker blocklist once at startup; the handler then only does
-    # an O(1) set membership test per request.
+    # Resolve config once at startup.
     block_trackers = True
     network_blocklist_paths: tuple[str, ...] = ()
     solve_turnstile = False
+    manual_solve = False
+    manual_solve_timeout = 60.0
+    vnc_display = ":99"
+    vnc_size = (1280, 720)
     if cfg is not None:
         try:
             block_trackers = bool(cfg.browser.block_trackers)
             network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
         except Exception:
             pass
-        solve_turnstile = bool(
-            getattr(getattr(cfg, "browser", None), "solve_turnstile", False)
+        b = getattr(cfg, "browser", None)
+        solve_turnstile = bool(getattr(b, "solve_turnstile", False))
+        manual_solve = bool(getattr(b, "manual_solve", False))
+        try:
+            manual_solve_timeout = float(getattr(b, "manual_solve_timeout", 60.0))
+            _VNC_PORT = int(getattr(b, "vnc_port", 5900))
+            vnc_display = str(getattr(b, "vnc_display", ":99") or ":99")
+            vnc_size = tuple(
+                int(x) for x in (getattr(b, "vnc_display_size", ()) or ())
+            )[:2] or (1280, 720)
+        except (TypeError, ValueError):
+            pass
+
+    # Display setup. manual_solve needs a *viewable* display (Camoufox's built-in
+    # virtual display is 1x1), so vasco runs its own sized Xvfb + x11vnc and points
+    # the browser at it; this also keeps it off the real (Wayland) desktop.
+    managed: tuple[subprocess.Popen, subprocess.Popen | None] | None = None
+    if manual_solve:
+        # Scrub WAYLAND_DISPLAY *before* spawning x11vnc — x11vnc refuses to run if
+        # it sees a Wayland session env ("only supported via -rawfb"), even when its
+        # -display target is a real X server. Then point the browser at our Xvfb.
+        _force_x11_for_virtual_display()  # pops WAYLAND_DISPLAY/DISPLAY, MOZ=0
+        display, xvfb, vnc = await asyncio.to_thread(
+            _start_managed_display, vnc_display, vnc_size, _VNC_PORT
         )
+        os.environ["DISPLAY"] = display  # ...then point at our sized Xvfb
+        kwargs["headless"] = False  # headful so the page renders into the Xvfb
+        kwargs.pop("virtual_display", None)
+        managed = (xvfb, vnc)
+        log.info(
+            "manual-solve mode: Xvfb %s (%dx%d) + x11vnc on localhost:%d",
+            display,
+            vnc_size[0],
+            vnc_size[1],
+            _VNC_PORT,
+        )
+    elif kwargs.get("headless") == "virtual":
+        # Must run before Camoufox launches: keep the headful Xvfb browser off the
+        # real (Wayland) desktop. See _force_x11_for_virtual_display.
+        _force_x11_for_virtual_display()
+
     netblock = await asyncio.to_thread(
         load_netblock, block_trackers, network_blocklist_paths
     )
@@ -869,7 +1057,15 @@ async def run_server(cfg: Any | None = None) -> None:
     await supervisor.start()
     try:
         server = await asyncio.start_unix_server(
-            lambda r, w: _handle_client(r, w, supervisor, netblock, solve_turnstile),
+            lambda r, w: _handle_client(
+                r,
+                w,
+                supervisor,
+                netblock,
+                solve_turnstile,
+                manual_solve,
+                manual_solve_timeout,
+            ),
             path=str(sock),
         )
         os.chmod(str(sock), 0o600)
@@ -883,6 +1079,13 @@ async def run_server(cfg: Any | None = None) -> None:
             await server.wait_closed()
     finally:
         await supervisor.close()
+        if managed:
+            for proc in managed:
+                if proc is not None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
         if sock.exists():
             sock.unlink()
         log.info("browser server stopped")

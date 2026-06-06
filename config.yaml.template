@@ -36,6 +36,15 @@
 #   # NOTE: solving needs a persistent user_data_dir so the cf_clearance cookie is
 #   # reused across fetches once obtained. Set virtual_display+humanize+disable_coop
 #   # +solve_turnstile together; they're a unit.
+#   # --- Manual (human-in-the-loop) solving via VNC, for challenges the auto-solve
+#   # can't clear. When on, vasco runs its own sized Xvfb + x11vnc (loopback) and,
+#   # on an unsolvable challenge, fires notify-send + holds the page open so you can
+#   # connect a VNC viewer and solve by hand. `vasco browser-solve <url>` triggers it.
+#   manual_solve: false         # enable the notify + VNC hold fallback
+#   manual_solve_timeout: 60.0  # seconds to hold for a human before resuming as normal
+#   vnc_display_size: [1280, 720]
+#   vnc_display: ":99"          # managed Xvfb display (auto-falls back if taken)
+#   vnc_port: 5900              # x11vnc loopback port → connect to localhost:5900
 
 # cache:
 #   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite

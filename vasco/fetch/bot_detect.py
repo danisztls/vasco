@@ -189,15 +189,25 @@ def classify(
 
     # --- 2xx / 3xx: examine body ---------------------------------------------
     if 200 <= status < 400:
+        visible_len = len(_visible_text(body))
         # Cloudflare challenge served with a 200 status is common, but CF
         # monitoring JS (challenge-platform, cf_chl_opt) also appears on
         # legitimate pages. Only classify as blocked if the page is thin —
         # real challenge pages are <20KB with minimal visible text.
         if _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc:
-            if len(_visible_text(body)) < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
+            if visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
                 return FailureReason.BLOCKED_CLOUDFLARE
 
-        if _has_any(body_lc, _CAPTCHA_MARKERS):
+        # A captcha *challenge* page is thin — its body IS the widget. A
+        # content-rich page that merely EMBEDS a captcha (a login/comment form's
+        # Turnstile or reCAPTCHA) rendered fine and is NOT a challenge, so require
+        # the page to be thin here too — same guard as the Cloudflare branch.
+        # Without it, any full page bundling a Turnstile login widget (e.g.
+        # jornalfolha1.com.br) would be falsely flagged BLOCKED_CAPTCHA forever.
+        if (
+            _has_any(body_lc, _CAPTCHA_MARKERS)
+            and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS
+        ):
             return FailureReason.BLOCKED_CAPTCHA
 
         # Paywalls: hard if schema marker or near-empty body around paywall,
@@ -207,8 +217,7 @@ def classify(
             return FailureReason.PAYWALL_HARD
         if has_paywall:
             # If there's substantial pre-paywall content, treat as soft.
-            visible = _visible_text(body)
-            if len(visible) < _SOFT_PAYWALL_MIN_VISIBLE_CHARS:
+            if visible_len < _SOFT_PAYWALL_MIN_VISIBLE_CHARS:
                 return FailureReason.PAYWALL_HARD
             return FailureReason.PAYWALL_SOFT_WITH_PARTIAL
 
@@ -219,7 +228,7 @@ def classify(
         # boilerplate converts to a handful of junk words (e.g. MercadoLivre); the
         # marker-less empty shell (e.g. Facebook) is caught downstream by the
         # post-conversion `word_count == 0` escalation instead.
-        if len(_visible_text(body)) < _JS_SHELL_MAX_VISIBLE_CHARS and _has_any(
+        if visible_len < _JS_SHELL_MAX_VISIBLE_CHARS and _has_any(
             body_lc, _JS_REQUIRED_MARKERS
         ):
             return FailureReason.JS_APP_NEEDS_INTERACTION

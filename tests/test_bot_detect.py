@@ -79,6 +79,22 @@ def test_grecaptcha_at_200_is_blocked_captcha() -> None:
     assert classify(200, html, {}) == FailureReason.BLOCKED_CAPTCHA
 
 
+def test_full_page_embedding_turnstile_widget_is_not_a_challenge() -> None:
+    """A content-rich 200 that merely *embeds* a Turnstile/captcha widget (e.g. a
+    login form) rendered fine and must NOT be flagged BLOCKED_CAPTCHA. Regression
+    for jornalfolha1.com.br, whose real homepage bundles a Turnstile login widget;
+    without a content-size guard it was wrongly blocked forever."""
+    article = "<p>" + ("Noticia real de Baixo Guandu. " * 200) + "</p>"
+    html = (
+        "<html><body><nav>Home Politica Esporte</nav>"
+        + article
+        + '<form><div class="cf-turnstile" data-sitekey="x"></div>'
+        '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js">'
+        "</script></form></body></html>"
+    )
+    assert classify(200, html, {}) == FailureReason.OK
+
+
 # --- Bonus: sentinel statuses --------------------------------------------------
 
 

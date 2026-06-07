@@ -35,6 +35,15 @@ SEED_STRATEGIES: dict[str, str] = {
     # produto. to mercadolivre.com.br, so this bare-domain key covers product +
     # search + category routes via seed_strategy's prefix match.
     "mercadolivre.com.br": "browser",
+    # AliExpress runs Alibaba's baxia/x5sec punish stack: the http tier only ever
+    # gets the `_____tmd_____/punish` stub, so start at the browser for every route
+    # (pt./www./m. collapse to aliexpress.com via the bare-domain prefix match).
+    # NB: success depends on the persistent browser profile holding an earned
+    # x5secdata clearance — a cold profile gets the nc slider (which bot_detect now
+    # flags BLOCKED_CAPTCHA so the manual-VNC solve flow can re-earn it). Both the
+    # global domain (pt./www./m.) and the BR country domain are seeded.
+    "aliexpress.com": "browser",
+    "aliexpress.com.br": "browser",
     # NOT seeded on purpose: sites the browser tier *also* fails on (by default).
     # Seeding only helps where the browser succeeds — spending the expensive tier
     # on a doomed fetch and skipping the cheap http fail-fast is a net loss. Leave

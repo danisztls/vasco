@@ -95,6 +95,29 @@ def test_full_page_embedding_turnstile_widget_is_not_a_challenge() -> None:
     assert classify(200, html, {}) == FailureReason.OK
 
 
+def test_aliexpress_punish_page_is_blocked_captcha() -> None:
+    """AliExpress (Alibaba 'baxia'/'x5sec') serves a `_____tmd_____/punish` nc
+    slider as a 200. It must classify as BLOCKED_CAPTCHA so the chain stops
+    caching the junk shell as success and the manual-VNC solve flow can fire."""
+    html = (FIXTURES / "aliexpress_punish.html").read_text()
+    assert classify(200, html, {}) == FailureReason.BLOCKED_CAPTCHA
+
+
+def test_aliexpress_punish_markers_fire_regardless_of_size() -> None:
+    """The rendered slider is large (~230 KB) and would slip past the thin-text
+    guard the generic captcha branch uses; the Alibaba punish markers are
+    size-independent on purpose."""
+    big = "<div>" + ("filler text " * 5000) + "</div>"
+    stub = '<script>var u="//x/_____tmd_____/punish?x5secdata=tok";</script>'
+    assert classify(200, stub + big, {}) == FailureReason.BLOCKED_CAPTCHA
+
+
+def test_aliexpress_punish_at_403_is_blocked_captcha() -> None:
+    """Markers mean 'challenge' under any status, not just 200."""
+    html = '<html><body><div class="baxia-punish slidetounlock"></div></body></html>'
+    assert classify(403, html, {}) == FailureReason.BLOCKED_CAPTCHA
+
+
 # --- Bonus: sentinel statuses --------------------------------------------------
 
 

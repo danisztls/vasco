@@ -78,6 +78,13 @@
 #   base_url: https://api.deepseek.com/v1   # any OpenAI-compatible chat endpoint
 #   api_key: ""                 # or set DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
 
+# aliexpress:                    # AliExpress adapter (search cards + detail/reviews)
+#   currency: BRL               # label stamped on the envelope
+#   language: pt_BR             # AliExpress locale code (underscore); drives the reviews endpoint
+#   country: BR
+#   reviews_page_size: 6        # top reviews fetched per product page from feedback.aliexpress.com
+#                               # needs the browser tier with a warm/cleared persistent profile
+
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)
 #   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables

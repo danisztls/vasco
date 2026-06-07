@@ -26,6 +26,12 @@ from vasco.strategy import SEED_STRATEGIES, seed_strategy
         ("olx.com.br/autos-e-pecas/*", "browser"),
         ("olx.com.br/sao-paulo-e-regiao/*", "browser"),
         ("olx.com.br", "browser"),
+        # AliExpress is baxia/x5sec-walled site-wide: bare-domain seed covers
+        # search (/w, /wholesale) and item routes via prefix match.
+        ("aliexpress.com/item/*", "browser"),
+        ("aliexpress.com/w/*", "browser"),
+        ("aliexpress.com/wholesale", "browser"),
+        ("aliexpress.com", "browser"),
         # captcha/consent-walled sites are deliberately NOT seeded: the browser
         # tier fails on them too, so seeding would only waste the expensive tier.
         ("poder360.com.br/poder-brasil/*", None),
@@ -54,6 +60,11 @@ def test_seed_keys_match_real_route_keys() -> None:
     detail = route_key("https://www.vivareal.com.br/imovel/apto-2q-id-12345/")
     assert detail == "vivareal.com.br/imovel/*"
     assert seed_strategy(detail) == "browser"
+    # AliExpress: pt./www./m. all collapse to the aliexpress.com bare-domain seed
+    assert (
+        seed_strategy(route_key("https://pt.aliexpress.com/item/123.html")) == "browser"
+    )
+    assert seed_strategy(route_key("https://www.aliexpress.com/w/x.html")) == "browser"
 
 
 def test_every_seed_value_is_a_known_tier() -> None:

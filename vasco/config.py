@@ -114,6 +114,19 @@ class ShoppingCfg:
 
 
 @dataclass(frozen=True)
+class AliExpressCfg:
+    """AliExpress adapter knobs. `currency`/`language`/`country` label the envelope
+    and drive the reviews endpoint locale (note: `language` is the AliExpress
+    pt_BR-style code with an underscore). `reviews_page_size` caps how many top
+    reviews a product page fetches from feedback.aliexpress.com."""
+
+    currency: str = "BRL"
+    language: str = "pt_BR"
+    country: str = "BR"
+    reviews_page_size: int = 6
+
+
+@dataclass(frozen=True)
 class ServiceCfg:
     """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside;
     per-domain pacing (rate limit + concurrency cap) is a politeness/anti-bot
@@ -141,6 +154,7 @@ class Config:
     quality: QualityCfg | None = field(default_factory=QualityCfg)
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
+    aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
@@ -156,6 +170,7 @@ _SECTIONS: dict[str, type] = {
     "quality": QualityCfg,
     "answer": AnswerCfg,
     "shopping": ShoppingCfg,
+    "aliexpress": AliExpressCfg,
     "service": ServiceCfg,
 }
 

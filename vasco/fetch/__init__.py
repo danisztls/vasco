@@ -36,6 +36,7 @@ from vasco.envelope import (
 )
 from vasco.converters import convert, pandoc, pdf
 from vasco.adapters import (
+    aliexpress,
     google_shopping,
     mercadolivre,
     olx,
@@ -1338,6 +1339,33 @@ async def _fetch_one_body(
             normalized=normalized,
             raw=raw,
             service="mercadolivre",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        return envelope, state["browser_started"], phases
+
+    # --- AliExpress route (search cards + detail/reviews; HTML via the chain) -
+    if aliexpress.is_aliexpress_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await aliexpress.fetch_aliexpress(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="aliexpress",
             use_cache=use_cache,
             cache=cache,
             cfg=cfg,

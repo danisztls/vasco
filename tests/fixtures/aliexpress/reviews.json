@@ -1,0 +1,65 @@
+{
+  "data": {
+    "productEvaluationStatistic": {
+      "evarageStar": 4.9,
+      "evarageStarRage": 98.6,
+      "fiveStarNum": 29,
+      "fiveStarRate": 96.7,
+      "fourStarNum": 0,
+      "fourStarRate": 0.0,
+      "negativeNum": 0,
+      "negativeRate": 0.0,
+      "neutralNum": 1,
+      "neutralRate": 3.3,
+      "oneStarNum": 0,
+      "oneStarRate": 0.0,
+      "positiveNum": 29,
+      "positiveRate": 96.7,
+      "threeStarNum": 1,
+      "threeStarRate": 3.3,
+      "totalNum": 30,
+      "twoStarNum": 0,
+      "twoStarRate": 0.0
+    },
+    "evaViewList": [
+      {
+        "buyerName": "AliExpress Shopper",
+        "buyerCountry": "BR",
+        "buyerEval": 100,
+        "evalDate": "12 Dez 2025",
+        "buyerFeedback": "Chegou no dia seguinte à compra, lacrado\n\nótimo pra ler livros e mangás, sinceramente é a melhor compra que já fiz",
+        "buyerTranslationFeedback": "Chegou no dia seguinte à compra, lacrado \n \n ótimo pra ler livros e mangás, sinceramente é a melhor compra que já fiz",
+        "skuInfo": null,
+        "images": [
+          "https://ae-pic-a1.aliexpress-media.com/kf/A04a61da1806046a0885b3695458f7c12G.jpg",
+          "https://ae-pic-a1.aliexpress-media.com/kf/A23e220d603b948449629560f5cdbc46cM.jpg"
+        ]
+      },
+      {
+        "buyerName": "AliExpress Shopper",
+        "buyerCountry": "BR",
+        "buyerEval": 100,
+        "evalDate": "28 Ago 2025",
+        "buyerFeedback": "Produto sensacional, muito mais rapido, a tela de ótima  qualidade, é muito mais nítido  que os antigos, tem melhores opções de configuração, valeu mto a pena. O envio foi muito rapido, chegou no dia seguinte a compra. Recomendo.",
+        "buyerTranslationFeedback": "Produto sensacional, muito mais rapido, a tela de ótima  qualidade, é muito mais nítido  que os antigos, tem melhores opções de configuração, valeu mto a pena. O envio foi muito rapido, chegou no dia seguinte a compra. Recomendo.",
+        "skuInfo": null,
+        "images": [
+          "https://ae-pic-a1.aliexpress-media.com/kf/A32812e98b84a4f09990e9a2c3b97a4d3K.jpg",
+          "https://ae-pic-a1.aliexpress-media.com/kf/Aeae73cbb4423452892a1f369361ac924x.jpg"
+        ]
+      },
+      {
+        "buyerName": "AliExpress Shopper",
+        "buyerCountry": "BR",
+        "buyerEval": 100,
+        "evalDate": "26 Dez 2025",
+        "buyerFeedback": "Melhor leitor de ebooks do mercado. Top demais!",
+        "buyerTranslationFeedback": "Melhor leitor de ebooks do mercado. Top demais!",
+        "skuInfo": null,
+        "images": []
+      }
+    ],
+    "totalNum": 30,
+    "totalPage": 6
+  }
+}

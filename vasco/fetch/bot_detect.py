@@ -29,6 +29,24 @@ _CAPTCHA_MARKERS: tuple[str, ...] = (
     "class='g-recaptcha'",
     "challenges.cloudflare.com/turnstile",
 )
+
+# Alibaba's anti-bot ("baxia"/"x5sec") punish stack — served by AliExpress,
+# Taobao, 1688, etc. Unlike a generic embedded captcha widget, these strings
+# only appear on the interstitial *punish* page itself, never on a real content
+# page: `_____tmd_____/punish` is the redirect target, `x5secdata` the security
+# token, and the rest are the `nc` slider captcha's own markup / page title. They
+# fire regardless of page size — the rendered slider is large (~230 KB) and would
+# otherwise slip past the thin-text guard that gates the generic captcha branch,
+# while the http-tier stub is tiny. Either way it's a challenge, not content.
+_ALIBABA_PUNISH_MARKERS: tuple[str, ...] = (
+    "_____tmd_____",
+    "x5secdata",
+    "slidetounlock",
+    "baxia-punish",
+    "punish?x5secdata",
+    "nc-lang-cnt",
+    "captcha interception",
+)
 # Loading recaptcha/hcaptcha api.js alone is NOT a captcha challenge: tons of
 # normal sites embed these libraries for contact-form anti-spam, with the
 # widget rendered only after submit. The class markers above plus a Turnstile
@@ -155,6 +173,14 @@ def classify(
             return FailureReason.DNS_FAIL
         # Default to DNS_FAIL when we got literally nothing.
         return FailureReason.DNS_FAIL
+
+    # --- Alibaba "baxia"/"x5sec" punish interstitial -------------------------
+    # Checked before the status branches: AliExpress serves the punish/slider as
+    # a 200 (both the tiny http-tier redirect stub and the rendered nc slider),
+    # but the markers mean "challenge" under any status, so classify on the body
+    # regardless. Size-independent on purpose (see marker-set comment).
+    if _has_any(body_lc, _ALIBABA_PUNISH_MARKERS):
+        return FailureReason.BLOCKED_CAPTCHA
 
     # --- Hard HTTP statuses ---------------------------------------------------
     # 410 Gone is RFC 9110's "intentional 404": treat the same way so that

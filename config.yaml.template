@@ -85,6 +85,11 @@
 #   reviews_page_size: 6        # top reviews fetched per product page from feedback.aliexpress.com
 #                               # needs the browser tier with a warm/cleared persistent profile
 
+# shopify:                       # generic Shopify adapter (product/collection/search via platform JSON)
+#   domains: []                 # extra registered domains to always treat as Shopify (myshopify.com auto)
+#   autodetect: true            # probe unknown product/collection URLs; fall through to normal fetch on a miss
+#   collection_limit: 250       # products.json page size cap (Shopify hard-caps at 250)
+
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)
 #   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables

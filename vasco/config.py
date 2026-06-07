@@ -127,6 +127,18 @@ class AliExpressCfg:
 
 
 @dataclass(frozen=True)
+class ShopifyCfg:
+    """Generic Shopify adapter knobs. `domains` extends the built-in known set
+    (any registered domain listed here is treated as a Shopify store);
+    `autodetect` lets unknown product/collection URLs be probed against the
+    platform JSON endpoints; `collection_limit` caps products.json page size."""
+
+    domains: tuple[str, ...] = ()
+    autodetect: bool = True
+    collection_limit: int = 250
+
+
+@dataclass(frozen=True)
 class ServiceCfg:
     """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside;
     per-domain pacing (rate limit + concurrency cap) is a politeness/anti-bot
@@ -155,6 +167,7 @@ class Config:
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
     aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
+    shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
@@ -171,6 +184,7 @@ _SECTIONS: dict[str, type] = {
     "answer": AnswerCfg,
     "shopping": ShoppingCfg,
     "aliexpress": AliExpressCfg,
+    "shopify": ShopifyCfg,
     "service": ServiceCfg,
 }
 

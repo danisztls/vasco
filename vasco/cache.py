@@ -379,7 +379,24 @@ CREATE TABLE IF NOT EXISTS fetch_strategy (
   failure_count   INTEGER DEFAULT 0,
   last_updated    INTEGER
 );
+
+-- Per-domain adapter-applicability memo (e.g. "is this domain a Shopify store").
+-- Keyed by (provider, registered_domain); `is_match` 1/0. Lets the auto-probe
+-- adapters skip re-probing a domain across processes (CLI and vascod share this
+-- file). `updated_at` drives a staleness TTL so a re-platformed site self-heals.
+CREATE TABLE IF NOT EXISTS adapter_probe (
+  provider    TEXT,
+  domain      TEXT,
+  is_match    INTEGER,
+  updated_at  INTEGER,
+  PRIMARY KEY (provider, domain)
+);
 """
+
+# A probe verdict older than this is treated as unknown (re-probed), so a domain
+# that migrates onto or off of a platform heals within the window without a
+# manual cache purge.
+_PROBE_TTL_SECONDS = 30 * 86400
 
 # Columns added to fetch_cache after the initial release. `CREATE TABLE IF NOT
 # EXISTS` never alters an existing table, so these are ALTERed onto older
@@ -589,6 +606,32 @@ class Cache:
         )
         self._conn.commit()
 
+    def get_probe(self, provider: str, domain: str) -> bool | None:
+        """Persisted adapter-applicability verdict for a domain, or ``None`` if
+        unknown or stale (older than ``_PROBE_TTL_SECONDS``)."""
+        cur = self._conn.execute(
+            "SELECT is_match, updated_at FROM adapter_probe WHERE provider = ? AND domain = ?",
+            (provider, domain),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        updated = row["updated_at"]
+        if updated is not None and updated < int(time.time()) - _PROBE_TTL_SECONDS:
+            return None
+        return bool(row["is_match"])
+
+    def set_probe(self, provider: str, domain: str, is_match: bool) -> None:
+        """Persist (and refresh the timestamp of) an adapter-applicability verdict."""
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO adapter_probe (provider, domain, is_match, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (provider, domain, 1 if is_match else 0, int(time.time())),
+        )
+        self._conn.commit()
+
     def purge(self, older_than_seconds: int | None = None) -> int:
         if older_than_seconds is None:
             cur = self._conn.execute(
@@ -624,6 +667,9 @@ class Cache:
         cur = self._conn.execute(
             "DELETE FROM fetch_cache WHERE _registered_domain(url) = ?", (target,)
         )
+        # Forget any adapter-probe verdict for the domain too, so a re-fetch
+        # re-discovers it fresh rather than trusting a stale memo.
+        self._conn.execute("DELETE FROM adapter_probe WHERE domain = ?", (target,))
         self._conn.commit()
         return cur.rowcount
 

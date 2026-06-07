@@ -55,13 +55,20 @@ def _attr(listing: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _fmt_price(value: Any) -> str:
+# Currency code → display symbol for the compact price column. Absent / unknown
+# codes fall back to the bare code (or "R$" when no currency is known, preserving
+# the original Brazilian-adapter output).
+_CURRENCY_SYMBOLS = {"BRL": "R$", "USD": "$", "EUR": "€", "GBP": "£"}
+
+
+def _fmt_price(value: Any, currency: str | None = None) -> str:
     if value is None or value == "":
         return ""
     if isinstance(value, bool):
         return str(value)
+    symbol = _CURRENCY_SYMBOLS.get(currency or "BRL", currency or "R$")
     if isinstance(value, (int, float)):
-        return f"R$ {value:,.0f}".replace(",", ".")
+        return f"{symbol} {value:,.0f}".replace(",", ".")
     return str(value)
 
 
@@ -210,12 +217,13 @@ def render_listings(quality: dict[str, Any], console: Console | None = None) -> 
     table.add_column("Price", style="green", justify="right", no_wrap=True)
     table.add_column("Specs", ratio=1, overflow="fold")
     table.add_column("Location", style="dim", ratio=2, overflow="fold")
+    currency = quality.get("currency")
     for item in listings:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or item.get("type") or "")
         url = item.get("url")
-        price = _fmt_price(_first(item, "price"))
+        price = _fmt_price(_first(item, "price"), currency)
         table.add_row(_link(title, url), price, _specs(item), _location(item))
     con.print(table)
 
@@ -251,12 +259,13 @@ def render_products(quality: dict[str, Any], console: Console | None = None) -> 
     table.add_column("Price", style="green", justify="right", no_wrap=True)
     table.add_column("Store", style="dim", ratio=1, overflow="fold")
     table.add_column("Rating", justify="right", no_wrap=True)
+    currency = quality.get("currency")
     for item in products:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "")
         url = item.get("url")
-        price = _fmt_price(_first(item, "price", "price_brl", "price_range"))
+        price = _fmt_price(_first(item, "price", "price_brl", "price_range"), currency)
         table.add_row(_link(title, url), price, _store(item), _rating(item))
     con.print(table)
 

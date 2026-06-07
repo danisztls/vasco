@@ -41,6 +41,7 @@ from vasco.adapters import (
     mercadolivre,
     olx,
     realestate,
+    shopify,
     wayback,
     wikimedia,
     youtube,
@@ -1373,6 +1374,49 @@ async def _fetch_one_body(
         )
         return envelope, state["browser_started"], phases
 
+    # --- Shopify route (product/collection/search via platform JSON endpoints) -
+    # Known domains dispatch directly; unknown product/collection URLs are probed
+    # and fall through to a normal fetch on a miss (NotShopify), so a non-Shopify
+    # lookalike is never turned into a failure.
+    shopify_probe_browser = False
+    is_known_shopify = shopify.is_shopify_url(url, cfg, cache)
+    if is_known_shopify or shopify.is_shopify_candidate(url, cfg, cache):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        try:
+            envelope = await shopify.fetch_shopify(
+                url,
+                deadline=deadline,
+                cfg=cfg,
+                fetch_html=fetch_html,
+                cache=cache,
+                probe=not is_known_shopify,
+            )
+        except shopify.NotShopify:
+            # Probe miss → fall through to the normal fetch path below; carry the
+            # probe's browser usage forward so the pool is still closed.
+            shopify_probe_browser = state["browser_started"]
+        else:
+            envelope = _finalize_adapter_envelope(
+                envelope,
+                url=url,
+                normalized=normalized,
+                raw=raw,
+                service="shopify",
+                use_cache=use_cache,
+                cache=cache,
+                cfg=cfg,
+                phases=phases,
+            )
+            return envelope, state["browser_started"], phases
+
     base = _base_envelope(
         url_requested=url,
         url_normalized=normalized,
@@ -1413,7 +1457,7 @@ async def _fetch_one_body(
         return envelope, False, phases
 
     # --- HTML auto-mode escalation ------------------------------------------
-    browser_started = False
+    browser_started = shopify_probe_browser
     try:
         outcome = await _do_fetch_html(
             url,

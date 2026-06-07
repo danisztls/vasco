@@ -428,3 +428,126 @@ def test_contentful_http_page_is_not_escalated(
         assert env["word_count"] > 0
     finally:
         cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Shopify adapter (platform JSON endpoints fetched via the shared chain)
+# ---------------------------------------------------------------------------
+
+_SHOPIFY_FX = FIXTURES / "shopify"
+
+
+def _stub_http_dispatch(routes: dict[str, tuple[str, int]], default: tuple[str, int]):
+    """An _http_fetch stub that serves a body by URL-suffix match.
+
+    Shopify URLs route their *page* URL to a *different* JSON endpoint, so the
+    stub keys on what the adapter actually requests (…/products.json, …/.js,
+    …/cart.js). Anything unmatched gets `default` — used to model the page URL
+    after a probe miss falls through to a normal HTML fetch.
+    """
+
+    async def _fake(
+        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+    ) -> tuple[str, int, dict[str, str]]:
+        body, status = default
+        for suffix, payload in routes.items():
+            if suffix in url:
+                body, status = payload
+                break
+        return body, status, {"_url_final": url}
+
+    return _fake
+
+
+def test_shopify_collection_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known Shopify domain's collection URL → structured envelope through the
+    real cache, then a clean cache roundtrip."""
+    from vasco.adapters import shopify as shopify_mod
+
+    shopify_mod._reset_for_tests()
+    body = (_SHOPIFY_FX / "collection_products.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        fetch_mod,
+        "_http_fetch",
+        _stub_http_dispatch(
+            {"products.json": (body, 200), "cart.js": ('{"currency":"USD"}', 200)},
+            default=("<html></html>", 200),
+        ),
+    )
+    _disable_browser(monkeypatch)
+
+    url = "https://simwooddenim.com/collections/jeans"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "shopify"
+        assert "failure" not in env
+        assert env["quality"]["provider"] == "shopify"
+        assert env["quality"]["page_type"] == "collection"
+        assert env["quality"]["result_count"] == 3
+        assert env["quality"]["currency"] == "USD"
+
+        again = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert again["from_cache"] is True
+        assert again["quality"]["result_count"] == 3
+    finally:
+        cache.close()
+        shopify_mod._reset_for_tests()
+
+
+def test_shopify_rot_returns_parse_failed_short_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known Shopify product endpoint that 200s but isn't JSON → PARSE_FAILED
+    on the short self-healing TTL (scraper-rot heals on redeploy)."""
+    from vasco.adapters import shopify as shopify_mod
+
+    shopify_mod._reset_for_tests()
+    monkeypatch.setattr(
+        fetch_mod,
+        "_http_fetch",
+        _stub_http_dispatch({}, default=("<html>not shopify</html>", 200)),
+    )
+    _disable_browser(monkeypatch)
+
+    url = "https://simwooddenim.com/products/widget"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "shopify"
+        assert env["failure"]["reason"] == "parse_failed"
+        assert fetch_mod._ttl_for(env, None) == int(900 * 0.33)
+    finally:
+        cache.close()
+        shopify_mod._reset_for_tests()
+
+
+def test_shopify_probe_miss_falls_through_to_normal_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown domain's /products/<h> URL is probed; the probe sees HTML (not
+    Shopify), so the fetch falls through to a normal HTML→markdown envelope —
+    never a failure."""
+    from vasco.adapters import shopify as shopify_mod
+
+    shopify_mod._reset_for_tests()
+    article = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    # Every URL (the .js probe and the page itself) returns the same HTML article.
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(article, 200))
+    _disable_browser(monkeypatch)
+
+    url = "https://not-a-shop.example/products/widget"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "http"  # fell through to the normal path
+        assert "failure" not in env
+        assert env["word_count"] > 0
+        assert "quality" in env and env["quality"].get("provider") != "shopify"
+        # Probe proved it's not Shopify → negative-memoized.
+        assert shopify_mod._probe_memo.get("not-a-shop.example") is False
+    finally:
+        cache.close()
+        shopify_mod._reset_for_tests()

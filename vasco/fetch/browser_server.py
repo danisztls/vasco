@@ -198,6 +198,7 @@ async def _serve_fetch(
     solve_turnstile: bool = False,
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
+    block_images: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Fetch a page, relaunching the browser once if the driver connection drops.
 
@@ -223,6 +224,7 @@ async def _serve_fetch(
                     solve_turnstile=solve_turnstile,
                     manual_solve=manual_solve,
                     manual_solve_timeout=manual_solve_timeout,
+                    block_images=block_images,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -265,6 +267,7 @@ async def _handle_client(
     solve_turnstile: bool = False,
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
+    block_images: bool = False,
 ) -> None:
     try:
         while True:
@@ -289,6 +292,7 @@ async def _handle_client(
                     solve_turnstile=solve_turnstile,
                     manual_solve=manual_solve,
                     manual_solve_timeout=manual_solve_timeout,
+                    block_images=block_images,
                 )
                 await _write_msg(
                     writer, {"html": html, "status": status, "headers": headers}
@@ -314,23 +318,35 @@ async def _extract_headers(response: Any) -> dict[str, str]:
             return {}
 
 
-async def _install_netblock_route(
-    page: Any, url: str, netblock: frozenset[str]
+async def _install_route(
+    page: Any,
+    url: str,
+    netblock: frozenset[str] | None,
+    block_images: bool,
 ) -> None:
-    """Install a `page.route` handler that aborts third-party tracker requests.
+    """Install a `page.route` handler that aborts image requests (when
+    `block_images`) and/or third-party tracker requests (when `netblock`).
 
-    First-party requests (same registered domain as `url`) always pass, so a
-    page's own resources are never blocked. The handler is an O(1) set membership
-    test; interception errors are swallowed so they can never kill a fetch.
+    `block_images` lives here rather than as a Camoufox launch pref so it can be
+    *suspended at runtime* (`page.unroute`) — a human solving an image-based
+    captcha needs the puzzle image to render (see `_enable_images_for_solve`). For
+    netblock, first-party requests (same registered domain as `url`) always pass,
+    so a page's own resources are never blocked. Both checks are O(1); interception
+    errors are swallowed so they can never kill a fetch.
     """
     page_domain = registered_domain(url)
+    nb = netblock or frozenset()
 
     async def _route(route: Any) -> None:
         try:
-            if should_block(route.request.url, page_domain, netblock):
+            req = route.request
+            if block_images and req.resource_type == "image":
                 await route.abort()
-            else:
-                await route.continue_()
+                return
+            if nb and should_block(req.url, page_domain, nb):
+                await route.abort()
+                return
+            await route.continue_()
         except Exception:
             try:
                 await route.continue_()
@@ -338,6 +354,27 @@ async def _install_netblock_route(
                 pass
 
     await page.route("**/*", _route)
+
+
+async def _enable_images_for_solve(
+    page: Any, url: str, deadline_monotonic: float
+) -> None:
+    """Drop the image-block route and reload so a human can solve an image-based
+    captcha (the puzzle image is aborted on the image-blocked first load). Reuses
+    `block_images`'s route-handler design — engine-level blocking couldn't be
+    undone at runtime. Best-effort; never raises (a failed reload just leaves the
+    image-less page for the human, no worse than before)."""
+    try:
+        await page.unroute("**/*")
+    except Exception:
+        pass
+    try:
+        # Generous floor: this is the human-solve path (budget-suspended), and a
+        # near-exhausted caller deadline shouldn't starve the reload.
+        timeout = max(8000, _remaining_ms(deadline_monotonic))
+        await page.reload(wait_until="domcontentloaded", timeout=timeout)
+    except Exception as exc:
+        log.info("image-enable reload for manual solve failed: %s", exc)
 
 
 # --- Cloudflare Turnstile solve -----------------------------------------------
@@ -419,6 +456,7 @@ async def _maybe_solve_turnstile(
     solve_turnstile: bool = True,
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
+    block_images: bool = False,
 ) -> bool:
     """If the current page is a Cloudflare challenge, try to clear it. Returns
     True only when the challenge cleared. Never raises — a failed solve leaves the
@@ -427,7 +465,9 @@ async def _maybe_solve_turnstile(
 
     Order: auto-click (when `solve_turnstile`), then — if that didn't clear and
     `manual_solve` is on — notify the user and hold the page for a human to solve
-    via VNC (budget-suspended, up to `manual_solve_timeout`).
+    via VNC (budget-suspended, up to `manual_solve_timeout`). When `block_images`
+    is on, images are re-enabled (and the page reloaded) just before the human
+    hold, so an image-based captcha (e.g. a slider's puzzle) actually renders.
     """
     if not _looks_challenged(status, html, headers):
         return False
@@ -440,6 +480,8 @@ async def _maybe_solve_turnstile(
             if await _wait_for_clearance(page, deadline_monotonic):
                 return True
         if manual_solve:
+            if block_images:
+                await _enable_images_for_solve(page, url, deadline_monotonic)
             return await _manual_solve_hold(page, url, manual_solve_timeout)
         return False
     except Exception as exc:  # defensive: a solve must never kill the fetch
@@ -458,13 +500,14 @@ async def fetch_page(
     solve_turnstile: bool = False,
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
+    block_images: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Open a page, navigate to `url`, and return (html, status, headers).
 
     Honours `deadline_monotonic` (an absolute ``time.monotonic()`` value) for
-    both the navigation and the networkidle settle. When `netblock` is
-    non-empty, third-party tracker/ad requests are aborted via a `page.route`
-    handler.
+    both the navigation and the networkidle settle. When `netblock` is non-empty
+    or `block_images` is set, a `page.route` handler aborts the matching requests
+    (third-party trackers / images respectively).
     """
     context = None
     # Serialize page/context creation: concurrent `new_page`/`new_context` on one
@@ -484,8 +527,8 @@ async def fetch_page(
                 await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
                 await page.set_viewport_size(_MOBILE_VIEWPORT)
     try:
-        if netblock:
-            await _install_netblock_route(page, url, netblock)
+        if netblock or block_images:
+            await _install_route(page, url, netblock, block_images)
         remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
         if remaining_ms <= 0:
             raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
@@ -521,6 +564,7 @@ async def fetch_page(
             solve_turnstile=solve_turnstile,
             manual_solve=manual_solve,
             manual_solve_timeout=manual_solve_timeout,
+            block_images=block_images,
         ):
             # Cleared: re-read the now-rendered origin content. Report 200 — the
             # challenge response's status/markers no longer describe the page we
@@ -551,6 +595,7 @@ async def _fetch_page(
     solve_turnstile: bool = False,
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
+    block_images: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Thin wrapper over `fetch_page`. Kept as a stable seam the request handler
     calls and the server tests monkeypatch."""
@@ -564,6 +609,7 @@ async def _fetch_page(
         solve_turnstile=solve_turnstile,
         manual_solve=manual_solve,
         manual_solve_timeout=manual_solve_timeout,
+        block_images=block_images,
     )
 
 
@@ -577,7 +623,6 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     virtual_display = False
     humanize = False
     disable_coop = False
-    block_images = False
     window: tuple[int, ...] = ()
     if cfg is not None:
         try:
@@ -591,7 +636,6 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
             virtual_display = bool(getattr(b, "virtual_display", False))
             humanize = bool(getattr(b, "humanize", False))
             disable_coop = bool(getattr(b, "disable_coop", False))
-            block_images = bool(getattr(b, "block_images", False))
             try:
                 window = tuple(int(x) for x in (getattr(b, "window", ()) or ()))[:2]
             except (TypeError, ValueError):
@@ -618,8 +662,9 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
         kwargs["humanize"] = True
     if disable_coop:
         kwargs["disable_coop"] = True
-    if block_images:
-        kwargs["block_images"] = True
+    # NB: block_images is intentionally NOT a launch pref. It's applied per-page in
+    # `_install_route` so a manual captcha solve can re-enable images at runtime
+    # (an engine-level pref can't be undone mid-session). See `fetch_page`.
     if len(window) == 2:
         kwargs["window"] = window
     is_persistent = bool(user_data_dir)
@@ -989,6 +1034,7 @@ async def run_server(cfg: Any | None = None) -> None:
     solve_turnstile = False
     manual_solve = False
     manual_solve_timeout = 60.0
+    block_images = False
     vnc_display = ":99"
     vnc_size = (1280, 720)
     if cfg is not None:
@@ -1000,6 +1046,7 @@ async def run_server(cfg: Any | None = None) -> None:
         b = getattr(cfg, "browser", None)
         solve_turnstile = bool(getattr(b, "solve_turnstile", False))
         manual_solve = bool(getattr(b, "manual_solve", False))
+        block_images = bool(getattr(b, "block_images", False))
         try:
             manual_solve_timeout = float(getattr(b, "manual_solve_timeout", 60.0))
             _VNC_PORT = int(getattr(b, "vnc_port", 5900))
@@ -1043,6 +1090,8 @@ async def run_server(cfg: Any | None = None) -> None:
     )
     if netblock:
         log.info("tracker blocking enabled (%d domains)", len(netblock))
+    if block_images:
+        log.info("image blocking enabled (per-page; re-enabled during a manual solve)")
     if solve_turnstile:
         log.info("cloudflare turnstile solving enabled")
 
@@ -1065,6 +1114,7 @@ async def run_server(cfg: Any | None = None) -> None:
                 solve_turnstile,
                 manual_solve,
                 manual_solve_timeout,
+                block_images,
             ),
             path=str(sock),
         )

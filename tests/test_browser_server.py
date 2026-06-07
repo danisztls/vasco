@@ -281,8 +281,8 @@ class _FakeResponse:
 class _FakeRoute:
     """Records the action the route handler takes for a given request URL."""
 
-    def __init__(self, url: str) -> None:
-        self.request = type("Req", (), {"url": url})()
+    def __init__(self, url: str, resource_type: str = "script") -> None:
+        self.request = type("Req", (), {"url": url, "resource_type": resource_type})()
         self.action: str | None = None
 
     async def abort(self) -> None:
@@ -295,10 +295,18 @@ class _FakeRoute:
 class _FakePage:
     def __init__(self) -> None:
         self.routes: list[tuple[str, Any]] = []
+        self.unrouted = False
+        self.reloaded = False
         self.closed = False
 
     async def route(self, pattern: str, handler: Any) -> None:
         self.routes.append((pattern, handler))
+
+    async def unroute(self, pattern: str) -> None:
+        self.unrouted = True
+
+    async def reload(self, **_: Any) -> None:
+        self.reloaded = True
 
     async def goto(self, url: str, **_: Any) -> _FakeResponse:
         return _FakeResponse()
@@ -354,6 +362,62 @@ async def test_fetch_page_no_route_when_netblock_empty_or_none() -> None:
             netblock=netblock,
         )
         assert page.routes == []
+
+
+async def test_fetch_page_blocks_images_via_route() -> None:
+    """block_images installs the route (even without netblock) and aborts only
+    image requests; non-image requests pass."""
+    page = _FakePage()
+    await bs.fetch_page(
+        _FakeBrowser(page),
+        "https://example.com",
+        deadline_monotonic=time.monotonic() + 5,
+        netblock=None,
+        block_images=True,
+    )
+    assert len(page.routes) == 1
+    _, handler = page.routes[0]
+
+    img = _FakeRoute("https://example.com/photo.jpg", resource_type="image")
+    await handler(img)
+    assert img.action == "abort"
+
+    script = _FakeRoute("https://example.com/app.js", resource_type="script")
+    await handler(script)
+    assert script.action == "continue"
+
+
+async def test_route_blocks_images_and_trackers_together() -> None:
+    """With both on, images abort regardless of party, and first-party non-image
+    requests still pass while third-party trackers abort."""
+    page = _FakePage()
+    await bs.fetch_page(
+        _FakeBrowser(page),
+        "https://example.com",
+        deadline_monotonic=time.monotonic() + 5,
+        netblock=frozenset({"tracker.com"}),
+        block_images=True,
+    )
+    _, handler = page.routes[0]
+
+    first_party_img = _FakeRoute("https://example.com/p.jpg", resource_type="image")
+    await handler(first_party_img)
+    assert first_party_img.action == "abort"  # image, even first-party
+
+    tracker = _FakeRoute("https://tracker.com/t.js", resource_type="script")
+    await handler(tracker)
+    assert tracker.action == "abort"
+
+    first_party_js = _FakeRoute("https://example.com/app.js", resource_type="script")
+    await handler(first_party_js)
+    assert first_party_js.action == "continue"
+
+
+async def test_enable_images_for_solve_unroutes_and_reloads() -> None:
+    page = _FakePage()
+    await bs._enable_images_for_solve(page, "https://example.com", time.monotonic() + 5)
+    assert page.unrouted is True
+    assert page.reloaded is True
 
 
 # ── Launch-kwargs assembly (_build_launch_kwargs) ─────────────────────────────
@@ -432,8 +496,10 @@ def test_build_launch_kwargs_solve_knobs_flow_through() -> None:
     assert kwargs["headless"] == "virtual"
     assert kwargs["humanize"] is True
     assert kwargs["disable_coop"] is True
-    assert kwargs["block_images"] is True
     assert kwargs["window"] == (1280, 720)
+    # block_images is NOT a launch pref anymore — it's applied per-page in
+    # _install_route so it can be re-enabled at runtime for a manual solve.
+    assert "block_images" not in kwargs
 
 
 def test_force_x11_scrubs_wayland_so_browser_stays_off_desktop(
@@ -545,6 +611,47 @@ async def test_maybe_solve_turnstile_returns_false_when_no_budget() -> None:
     )
     assert cleared is False
     assert page.clicks == 0
+
+
+async def test_manual_solve_reenables_images_before_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With block_images on, a manual solve drops the image-block route and reloads
+    so the captcha's puzzle image can render, before holding for the human."""
+
+    class _Page:
+        def __init__(self) -> None:
+            self.unrouted = False
+            self.reloaded = False
+
+        async def content(self) -> str:
+            return _CF_CHALLENGE_HTML  # stays challenged
+
+        async def unroute(self, _pattern: str) -> None:
+            self.unrouted = True
+
+        async def reload(self, **_: Any) -> None:
+            self.reloaded = True
+
+    async def _no_notify(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(bs, "_notify_manual_solve", _no_notify)
+    page = _Page()
+    cleared = await bs._maybe_solve_turnstile(
+        page,
+        status=200,
+        html=_CF_CHALLENGE_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+        solve_turnstile=False,
+        manual_solve=True,
+        manual_solve_timeout=0.0,  # hold returns immediately (never clears)
+        block_images=True,
+    )
+    assert cleared is False  # never solved (no human)
+    assert page.unrouted is True
+    assert page.reloaded is True
 
 
 # ── fetch_page end-to-end with solving ────────────────────────────────────────

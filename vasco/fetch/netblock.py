@@ -37,14 +37,14 @@ def _bundled_default_path() -> Path:
     return Path(str(resources.files("vasco.fetch") / "data" / "netblock_default.txt"))
 
 
-def load_netblock(block_trackers: bool, paths: Sequence[str | Path]) -> frozenset[str]:
+def load_netblock(block_ads: bool, paths: Sequence[str | Path]) -> frozenset[str]:
     """Resolve the network blocklist from the browser config knobs.
 
-    `block_trackers` off → empty (interception disabled). Otherwise configured
+    `block_ads` off → empty (interception disabled). Otherwise configured
     `paths` (local or remote) win; with none set, the bundled default is used.
     May perform I/O (file reads, remote consolidation) — call off the event loop.
     """
-    if not block_trackers:
+    if not block_ads:
         return frozenset()
     sources: list[str | Path] = list(paths) if paths else [_bundled_default_path()]
     return load_blocklist(sources, consolidated_name=_NETBLOCK_CONSOLIDATED)
@@ -54,15 +54,15 @@ def get_netblock(cfg: Any | None = None) -> frozenset[str]:
     """Return the cached network blocklist, loading from `cfg.browser` on first call."""
     global _netblock
     if _netblock is None:
-        block_trackers = True
+        block_ads = True
         paths: tuple[str, ...] = ()
         if cfg is not None:
             try:
-                block_trackers = bool(cfg.browser.block_trackers)
+                block_ads = bool(cfg.browser.block_ads)
                 paths = tuple(cfg.browser.network_blocklist_paths)
             except Exception:
                 pass
-        _netblock = load_netblock(block_trackers, paths)
+        _netblock = load_netblock(block_ads, paths)
     return _netblock
 
 

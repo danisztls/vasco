@@ -34,8 +34,8 @@ class BrowserCfg:
     locale: str = "en-US"
     prewarm: bool = False
     user_data_dir: str = ""  # "" disables persistent profile
-    block_trackers: bool = True  # abort third-party tracker/ad requests in-browser
-    # Hostlists for tracker blocking (local files or remote URLs); empty uses
+    block_ads: bool = True  # abort third-party ad/tracker requests to cut page weight (faster renders)
+    # Hostlists for ad/tracker blocking (local files or remote URLs); empty uses
     # the bundled conservative default.
     network_blocklist_paths: tuple[str, ...] = ()
     # On a login wall, clear that domain's cookies and retry once (single-shot,

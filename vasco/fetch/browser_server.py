@@ -1151,7 +1151,7 @@ async def run_server(cfg: Any | None = None) -> None:
     kwargs, is_persistent = _build_launch_kwargs(cfg)
 
     # Resolve config once at startup.
-    block_trackers = True
+    block_ads = True
     network_blocklist_paths: tuple[str, ...] = ()
     solve_turnstile = False
     manual_solve = False
@@ -1162,7 +1162,7 @@ async def run_server(cfg: Any | None = None) -> None:
     vnc_size = (1280, 720)
     if cfg is not None:
         try:
-            block_trackers = bool(cfg.browser.block_trackers)
+            block_ads = bool(cfg.browser.block_ads)
             network_blocklist_paths = tuple(cfg.browser.network_blocklist_paths)
         except Exception:
             pass
@@ -1210,10 +1210,10 @@ async def run_server(cfg: Any | None = None) -> None:
         _force_x11_for_virtual_display()
 
     netblock = await asyncio.to_thread(
-        load_netblock, block_trackers, network_blocklist_paths
+        load_netblock, block_ads, network_blocklist_paths
     )
     if netblock:
-        log.info("tracker blocking enabled (%d domains)", len(netblock))
+        log.info("ad blocking enabled (%d domains)", len(netblock))
     if block_images:
         log.info("image blocking enabled (per-page; re-enabled during a manual solve)")
     if solve_turnstile:

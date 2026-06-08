@@ -21,8 +21,8 @@
 #   locale: en-US
 #   prewarm: false              # MCP-only: warm Camoufox at server startup
 #   user_data_dir: ""           # persistent profile dir; non-empty enables cookie persistence
-#   block_trackers: true        # abort third-party tracker/ad requests in-browser (default on)
-#   network_blocklist_paths:    # hostlists for tracker blocking; empty = bundled conservative default
+#   block_ads: true             # abort third-party ad/tracker requests to cut page weight → faster renders (default on)
+#   network_blocklist_paths:    # hostlists for ad/tracker blocking; empty = bundled conservative default
 #     - ~/.config/vasco/netblock.txt
 #     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt
 #   clear_cookies_on_wall: true # on a login wall (e.g. MercadoLivre account-verification), clear that

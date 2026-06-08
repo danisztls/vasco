@@ -8,10 +8,10 @@ from types import SimpleNamespace
 from vasco.fetch import netblock
 
 
-def _cfg(block_trackers: bool = True, paths: tuple[str, ...] = ()) -> SimpleNamespace:
+def _cfg(block_ads: bool = True, paths: tuple[str, ...] = ()) -> SimpleNamespace:
     return SimpleNamespace(
         browser=SimpleNamespace(
-            block_trackers=block_trackers,
+            block_ads=block_ads,
             network_blocklist_paths=tuple(paths),
         )
     )
@@ -72,7 +72,7 @@ class TestLoadNetblock:
 class TestGetNetblock:
     def test_resolution_branches(self, tmp_path: Path):
         netblock.reset()
-        assert netblock.get_netblock(_cfg(block_trackers=False)) == frozenset()
+        assert netblock.get_netblock(_cfg(block_ads=False)) == frozenset()
 
         netblock.reset()
         f = tmp_path / "net.txt"
@@ -87,7 +87,7 @@ class TestGetNetblock:
 
     def test_caches_first_result(self):
         netblock.reset()
-        first = netblock.get_netblock(_cfg(block_trackers=False))
+        first = netblock.get_netblock(_cfg(block_ads=False))
         # A later call with different cfg returns the cached value until reset().
         assert netblock.get_netblock(_cfg(paths=("ignored",))) is first
         netblock.reset()

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import mercadolivre as M
+from vasco.config import Config, MercadolivreCfg
 from vasco.errors import AdapterParseError
 
 FX = Path(__file__).parent / "fixtures" / "mercadolivre"
@@ -253,3 +254,168 @@ async def test_fetch_search_genuine_empty_warns_no_results() -> None:
     assert "failure" not in env
     assert env["quality"]["result_count"] == 0
     assert "no_results" in env["warnings"]
+
+
+# --- relevance: query recovery --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://lista.mercadolivre.com.br/notebook", "notebook"),
+        ("https://lista.mercadolivre.com.br/notebook-gamer", "notebook gamer"),
+        # ML appends filters after underscores — strip them to the bare keyword.
+        ("https://lista.mercadolivre.com.br/colchao-queen_Desde_49", "colchao queen"),
+        ("https://lista.mercadolivre.com.br/cafe%20expresso", "cafe expresso"),
+        # category/deal browse (www host) has no user query → not filtered
+        ("https://www.mercadolivre.com.br/c/celulares-e-telefones", None),
+        ("https://www.mercadolivre.com.br/ofertas", None),
+        # product page → no query
+        ("https://www.mercadolivre.com.br/notebook-asus/p/MLB43417665", None),
+        # ?q= fallback works on any host
+        ("https://www.mercadolivre.com.br/search?q=fone+bluetooth", "fone bluetooth"),
+        ("https://lista.mercadolivre.com.br/", None),
+    ],
+)
+def test_search_query(url: str, expected: str | None) -> None:
+    assert M._search_query(url) == expected
+
+
+# --- relevance: fold tokenizer --------------------------------------------
+
+
+def test_fold_accent_and_alnum() -> None:
+    # accent-folded, lowercased, alphanumeric tokens (units stay whole)
+    assert M._fold("Colchão Queen 16GB!") == ["colchao", "queen", "16gb"]
+    assert M._fold("") == []
+
+
+# --- relevance: filter/sort -----------------------------------------------
+
+
+def _p(title: str, brand: str | None = None) -> dict:
+    d: dict = {"title": title}
+    if brand is not None:
+        d["brand"] = brand
+    return d
+
+
+def test_apply_relevance_demotes_off_query_by_default() -> None:
+    prods = [
+        _p("Caderno de Lantejoulas A5"),  # off-query (paper notebook)
+        _p("Notebook Lenovo Ideapad"),  # coverage 1
+        _p("Notebook Dell Inspiron"),  # coverage 1 (native order tiebreak)
+    ]
+    ordered, off = M._apply_relevance(
+        prods, "notebook dell", drop=False, min_coverage=1
+    )
+    # nothing dropped; off-query sinks; "dell" lifts the Dell above the Lenovo
+    assert [p["title"] for p in ordered] == [
+        "Notebook Dell Inspiron",
+        "Notebook Lenovo Ideapad",
+        "Caderno de Lantejoulas A5",
+    ]
+    assert off == 1
+    assert [p["position"] for p in ordered] == [1, 2, 3]
+
+
+def test_apply_relevance_drops_when_requested() -> None:
+    prods = [_p("Caderno de Lantejoulas A5"), _p("Notebook Lenovo")]
+    ordered, off = M._apply_relevance(prods, "notebook", drop=True, min_coverage=1)
+    assert [p["title"] for p in ordered] == ["Notebook Lenovo"]
+    assert off == 1
+
+
+def test_apply_relevance_accent_fold_matches() -> None:
+    # ASCII slug query must match the accented title
+    prods = [_p("Mesa de Jantar"), _p("Colchão Queen Size")]
+    ordered, off = M._apply_relevance(prods, "colchao", drop=True, min_coverage=1)
+    assert [p["title"] for p in ordered] == ["Colchão Queen Size"]
+    assert off == 1
+
+
+def test_apply_relevance_brand_match_survives() -> None:
+    # query hits the brand field even when the title omits it
+    prods = [_p("iPhone 15", brand="Apple"), _p("Galaxy S24", brand="Samsung")]
+    ordered, off = M._apply_relevance(prods, "samsung", drop=True, min_coverage=1)
+    assert [p["title"] for p in ordered] == ["Galaxy S24"]
+    assert off == 1
+
+
+def test_apply_relevance_blank_query_is_noop() -> None:
+    prods = [_p("B"), _p("A")]
+    ordered, off = M._apply_relevance(prods, "   ", drop=True, min_coverage=1)
+    assert ordered == prods  # untouched
+    assert off == 0
+
+
+# --- relevance: end-to-end through fetch -----------------------------------
+
+
+def _search_html(*names_prices: tuple[str, str]) -> str:
+    graph = [
+        {
+            "@type": "Product",
+            "name": name,
+            "offers": {
+                "@type": "Offer",
+                "url": f"https://www.mercadolivre.com.br/MLB-{i}",
+                "price": price,
+                "priceCurrency": "BRL",
+            },
+        }
+        for i, (name, price) in enumerate(names_prices, 1)
+    ]
+    import json as _json
+
+    return (
+        '<html><body><script type="application/ld+json">'
+        + _json.dumps({"@graph": graph})
+        + "</script></body></html>"
+    )
+
+
+async def test_fetch_search_demotes_off_query_by_default() -> None:
+    # ad placement (caderno) listed first in ML's native order; notebook second
+    html = _search_html(("Caderno A5", "10"), ("Notebook Dell Inspiron", "3000"))
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=fake_fetch_html)
+
+    assert env["quality"]["result_count"] == 2  # nothing dropped
+    assert env["quality"]["demoted"] == 1
+    assert "filtered" not in env["quality"]
+    assert env["quality"]["products"][0]["title"] == "Notebook Dell Inspiron"
+
+
+async def test_fetch_search_drop_off_query_via_cfg() -> None:
+    html = _search_html(("Caderno A5", "10"), ("Notebook Dell Inspiron", "3000"))
+    cfg = Config(mercadolivre=MercadolivreCfg(drop_off_query=True))
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=fake_fetch_html, cfg=cfg)
+
+    assert env["quality"]["result_count"] == 1
+    assert env["quality"]["filtered"] == {"off_query": 1}
+    assert "demoted" not in env["quality"]
+    assert env["quality"]["products"][0]["title"] == "Notebook Dell Inspiron"
+
+
+async def test_fetch_search_relevance_filter_disabled() -> None:
+    html = _search_html(("Caderno A5", "10"), ("Notebook Dell", "3000"))
+    cfg = Config(mercadolivre=MercadolivreCfg(relevance_filter=False))
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=fake_fetch_html, cfg=cfg)
+
+    # untouched: native order preserved, no demote/filter reporting
+    assert env["quality"]["result_count"] == 2
+    assert env["quality"]["products"][0]["title"] == "Caderno A5"
+    assert "demoted" not in env["quality"]
+    assert "filtered" not in env["quality"]

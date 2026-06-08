@@ -10,7 +10,11 @@ scraping ``poly-card`` markup brittle):
 - **Search/listing pages** (``lista.mercadolivre.com.br/<q>``, ``/ofertas``,
   category pages) embed a ``<script type="application/ld+json">`` with an
   ``@graph`` of ``Product`` objects (name, image, brand, aggregateRating,
-  offers.price/priceCurrency/url).
+  offers.price/priceCurrency/url). On keyword searches (``lista.`` host) results
+  are then relevance-sorted against the query recovered from the URL so
+  MercadoLivre's premium-ad placement (off-keyword products injected into the
+  native order) sinks to the bottom; off-keyword items are demoted by default and
+  dropped only when ``mercadolivre.drop_off_query`` is set.
 - **Product/detail pages** (``.../p/MLB<id>``, ``produto.mercadolivre.com.br/
   MLB-<id>-...``) embed a single rich ``Product`` (offers with shippingDetails,
   itemCondition, aggregateRating, brand, sku, color, description). A few
@@ -42,9 +46,10 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
@@ -100,6 +105,34 @@ def _page_type(url: str) -> str:
     if re.search(r"/mlb-?\d+", path):
         return "product"
     return "search"
+
+
+def _search_query(url: str) -> str | None:
+    """Recover the keyword query from a MercadoLivre search URL.
+
+    Keyword searches live on the ``lista.`` subdomain, with the query in the first
+    path segment as a hyphen-joined slug followed by ML's filters after
+    underscores (``lista.mercadolivre.com.br/notebook-gamer_Desde_49`` → ``notebook
+    gamer``). Returns None for category/deal browse (served from ``www.`` with
+    category slugs that are *not* a user query) and any URL with no usable
+    keyword — those have nothing to match against and must not be filtered. Falls
+    back to the ``?q=`` / ``as_word`` query param on any host.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host.startswith("lista."):
+        segs = [s for s in (parts.path or "").split("/") if s]
+        if segs:
+            slug = segs[0].split("_", 1)[0]  # drop _Desde_/_NoIndex_/_PriceRange_
+            query = unquote(slug).replace("-", " ").replace("+", " ").strip()
+            if query:
+                return query
+    qs = parse_qs(parts.query)
+    for key in ("q", "as_word"):
+        vals = qs.get(key)
+        if vals and vals[0].strip():
+            return vals[0].strip()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +318,78 @@ def _parse_search(html: str) -> list[dict[str, Any]]:
         if parsed is not None:
             out.append(parsed)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Relevance filter (fight ML's premium-ad placement on keyword searches)
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _fold(text: str) -> list[str]:
+    """Accent-fold, lowercase, and split into alphanumeric tokens.
+
+    Accent folding is load-bearing for PT-BR: the ASCII URL slug ``colchao`` must
+    match the accented title ``Colchão``.
+    """
+    if not text:
+        return []
+    ascii_text = (
+        unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    )
+    return _TOKEN_RE.findall(ascii_text.lower())
+
+
+def _apply_relevance(
+    products: list[dict[str, Any]], query: str, *, drop: bool, min_coverage: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Relevance-sort search results, sinking off-keyword (ad-placement) items.
+
+    ``coverage`` — the count of distinct query tokens present in a product's
+    title+brand — is the primary, robust signal: product titles are short, so raw
+    BM25 alone is weak (and can go negative on a tiny corpus). BM25 only refines
+    ordering among matches, with MercadoLivre's native order as the stable
+    tiebreaker. Off-keyword items (coverage < ``min_coverage``) are sorted to the
+    bottom by default and **dropped** only when ``drop`` is set — strict dropping
+    also loses legitimate synonym matches (a MacBook/laptop on a "notebook"
+    search). Returns ``(ordered, off_query_count)``; a blank/untokenizable query
+    is a no-op.
+    """
+    query_tokens = list(dict.fromkeys(_fold(query)))  # distinct, order-preserving
+    if not query_tokens:
+        return products, 0
+
+    docs: list[list[str]] = []
+    coverages: list[int] = []
+    for p in products:
+        toks = _fold(p.get("title") or "")
+        brand = p.get("brand")
+        if isinstance(brand, str):
+            toks = toks + _fold(brand)
+        docs.append(toks)
+        present = set(toks)
+        coverages.append(sum(1 for q in query_tokens if q in present))
+
+    from ..extract import bm25_scores
+
+    scores = bm25_scores(docs, query_tokens)
+
+    order = sorted(
+        range(len(products)),
+        key=lambda i: (coverages[i], scores[i], -i),
+        reverse=True,
+    )
+    off_query = sum(1 for c in coverages if c < min_coverage)
+    ordered: list[dict[str, Any]] = []
+    for i in order:
+        if drop and coverages[i] < min_coverage:
+            continue
+        p = products[i]
+        p["position"] = len(ordered) + 1  # renumber to the new relevance rank
+        ordered.append(p)
+
+    return ordered, off_query
 
 
 # ---------------------------------------------------------------------------
@@ -613,9 +718,38 @@ async def fetch_mercadolivre(
 
     from .. import io as io_mod
 
-    # Anchor present but zero parsed products on a search page: a genuinely
-    # empty result set (the rot case raised above). Flag it for agents.
-    warnings = ["no_results"] if page_type == "search" and not products else []
+    # Relevance pass: MercadoLivre's premium-ad placement injects off-query
+    # products into keyword search results, in ML's native order. Relevance-sort
+    # so keyword matches rise and off-keyword items sink; drop them only when
+    # configured. Product/detail and category-browse pages have no user query and
+    # are left untouched.
+    filtered: dict[str, int] = {}
+    demoted = 0
+    if page_type == "search" and products:
+        ml_cfg = getattr(cfg, "mercadolivre", None)
+        if getattr(ml_cfg, "relevance_filter", True):
+            query = _search_query(url)
+            if query:
+                drop = bool(getattr(ml_cfg, "drop_off_query", False))
+                min_cov = max(
+                    1, int(getattr(ml_cfg, "min_query_token_coverage", 1) or 1)
+                )
+                products, off_query = _apply_relevance(
+                    products, query, drop=drop, min_coverage=min_cov
+                )
+                if off_query:
+                    if drop:
+                        filtered = {"off_query": off_query}
+                    else:
+                        demoted = off_query
+
+    # Distinguish a genuinely empty parse ("no_results", the rot case raised
+    # above) from a search where dropping removed every off-query item
+    # ("all_off_query"). Demoting never empties the list.
+    if page_type == "search" and not products:
+        warnings = ["all_off_query"] if filtered else ["no_results"]
+    else:
+        warnings = []
 
     currency = next(
         (p["currency"] for p in products if p.get("currency")),
@@ -646,6 +780,8 @@ async def fetch_mercadolivre(
                 "currency": currency,
                 "result_count": len(products),
                 "products": products,
+                **({"filtered": filtered} if filtered else {}),
+                **({"demoted": demoted} if demoted else {}),
             },
             "warnings": warnings,
         },

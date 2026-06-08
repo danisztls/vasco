@@ -127,6 +127,21 @@ class AliExpressCfg:
 
 
 @dataclass(frozen=True)
+class MercadolivreCfg:
+    """MercadoLivre adapter knobs. `relevance_filter` relevance-sorts search
+    results so keyword matches rise and off-keyword items (MercadoLivre's
+    premium-ad placement) sink. By default off-keyword results are *demoted*
+    (sorted to the bottom, not removed) — strict dropping also loses legitimate
+    synonym matches (a MacBook/laptop on a "notebook" search). Set
+    `drop_off_query` to hard-drop results below `min_query_token_coverage`
+    distinct matched query tokens (1 = drop only zero-keyword results)."""
+
+    relevance_filter: bool = True
+    drop_off_query: bool = False
+    min_query_token_coverage: int = 1
+
+
+@dataclass(frozen=True)
 class ShopifyCfg:
     """Generic Shopify adapter knobs. `domains` extends the built-in known set
     (any registered domain listed here is treated as a Shopify store);
@@ -167,6 +182,7 @@ class Config:
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
     aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
+    mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
@@ -184,6 +200,7 @@ _SECTIONS: dict[str, type] = {
     "answer": AnswerCfg,
     "shopping": ShoppingCfg,
     "aliexpress": AliExpressCfg,
+    "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
     "service": ServiceCfg,
 }

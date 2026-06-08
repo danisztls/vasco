@@ -85,6 +85,11 @@
 #   reviews_page_size: 6        # top reviews fetched per product page from feedback.aliexpress.com
 #                               # needs the browser tier with a warm/cleared persistent profile
 
+# mercadolivre:                  # MercadoLivre adapter (search + product)
+#   relevance_filter: true      # relevance-sort search results so ad-placement off-keyword items sink
+#   drop_off_query: false       # true = hard-drop off-keyword results (loses synonyms); false = demote only
+#   min_query_token_coverage: 1 # when dropping: min distinct query tokens a result must match (1 = zero-keyword)
+
 # shopify:                       # generic Shopify adapter (product/collection/search via platform JSON)
 #   domains: []                 # extra registered domains to always treat as Shopify (myshopify.com auto)
 #   autodetect: true            # probe unknown product/collection URLs; fall through to normal fetch on a miss

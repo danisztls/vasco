@@ -73,11 +73,6 @@ class CacheCfg:
 
 
 @dataclass(frozen=True)
-class TavilyCfg:
-    api_key: str = ""
-
-
-@dataclass(frozen=True)
 class LoggingCfg:
     enabled: bool = True
     path: str = ""  # empty → $XDG_DATA_HOME/vasco/logs
@@ -182,7 +177,6 @@ class Config:
     fetch: FetchCfg = field(default_factory=FetchCfg)
     browser: BrowserCfg = field(default_factory=BrowserCfg)
     cache: CacheCfg = field(default_factory=CacheCfg)
-    tavily: TavilyCfg = field(default_factory=TavilyCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
@@ -200,7 +194,6 @@ _SECTIONS: dict[str, type] = {
     "fetch": FetchCfg,
     "browser": BrowserCfg,
     "cache": CacheCfg,
-    "tavily": TavilyCfg,
     "logging": LoggingCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,

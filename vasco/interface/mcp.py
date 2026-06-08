@@ -90,8 +90,7 @@ server = FastMCP(
 @server.tool(
     description=(
         "Search the web. Returns a list of {title, url, snippet} objects. "
-        "Supports --site filter, time range (d|w|m|y), and pluggable backends "
-        "(ddg by default, tavily if TAVILY_API_KEY is configured)."
+        "Supports --site filter and time range (d|w|m|y)."
     ),
 )
 async def search(

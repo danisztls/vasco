@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from vasco import search
 from vasco.adapters.ddgs import DdgsBackend
 
 
@@ -43,3 +44,13 @@ def test_other_ddgs_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("ddgs.DDGS", _DDGS)
     with pytest.raises(DDGSException):
         list(DdgsBackend().search("anything"))
+
+
+def test_get_searcher_returns_ddgs_backend() -> None:
+    for name in ("ddg", "ddgs", "duckduckgo"):
+        assert isinstance(search.get_searcher(name), DdgsBackend)
+
+
+def test_get_searcher_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="unknown search backend"):
+        search.get_searcher("kagi")

@@ -4,7 +4,7 @@
 # CLI flags (where present) override env vars.
 
 # search:
-#   default_backend: ddg        # "ddg" | "tavily"
+#   default_backend: ddg        # "ddg" (DuckDuckGo metasearch)
 #   region: us-en
 #   max_results: 10
 
@@ -52,9 +52,6 @@
 
 # cache:
 #   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite
-
-# tavily:
-#   api_key: ""                 # or set TAVILY_API_KEY
 
 # logging:
 #   enabled: true

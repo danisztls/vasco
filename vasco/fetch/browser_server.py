@@ -1008,7 +1008,16 @@ class _BrowserSupervisor:
         return True
 
     async def _launch_locked(self) -> None:
+        from camoufox import DefaultAddons
         from camoufox.async_api import AsyncCamoufox
+
+        # Camoufox injects uBlock Origin as a default addon on *every* launch
+        # (camoufox.addons.DefaultAddons.UBO, re-added even if removed by hand).
+        # Exclude it so vasco's own third-party netblock (page.route) is the sole
+        # ad/tracker blocker — keeps the extension fingerprint off the stealth
+        # tier, per the "decided against the uBlock extension" invariant. Set once
+        # on the shared kwargs so the ephemeral-fallback launch inherits it too.
+        self._kwargs.setdefault("exclude_addons", [DefaultAddons.UBO])
 
         try:
             self._cm = AsyncCamoufox(**self._kwargs)

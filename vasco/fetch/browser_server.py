@@ -767,9 +767,17 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
         kwargs["humanize"] = True
     if disable_coop:
         kwargs["disable_coop"] = True
-    # NB: block_images is intentionally NOT a launch pref. It's applied per-page in
-    # `_install_route` so a manual captcha solve can re-enable images at runtime
-    # (an engine-level pref can't be undone mid-session). See `fetch_page`.
+    # Force engine-level image loading ON so the per-page `page.route` handler in
+    # `_install_route` stays the *sole* image gate (mirrors the
+    # exclude_addons=[UBO] decision). block_images is intentionally NOT a Camoufox
+    # launch pref — it's route-applied so a manual captcha solve can re-enable
+    # images mid-session (an engine pref can't be undone then). But Camoufox's own
+    # `block_images=True` writes `permissions.default.image=2` into the *persistent
+    # profile*, where it lingers as a relic and silently blocks every image (incl.
+    # captcha tiles) regardless of vasco's config. Re-asserting =1 each launch
+    # (Playwright applies firefox_user_prefs to persistent contexts too) immunizes
+    # the profile against that stale pref.
+    kwargs["firefox_user_prefs"] = {"permissions.default.image": 1}
     if len(window) == 2:
         kwargs["window"] = window
     is_persistent = bool(user_data_dir)

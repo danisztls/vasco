@@ -433,7 +433,11 @@ def _cfg(**browser: Any) -> SimpleNamespace:
 
 def test_build_launch_kwargs_default_omits_persistent_context() -> None:
     kwargs, is_persistent = bs._build_launch_kwargs(None)
-    assert kwargs == {"headless": True, "locale": ("en-US",)}
+    assert kwargs == {
+        "headless": True,
+        "locale": ("en-US",),
+        "firefox_user_prefs": {"permissions.default.image": 1},
+    }
     assert is_persistent is False
 
 
@@ -475,7 +479,11 @@ def test_build_launch_kwargs_omits_solve_kwargs_by_default() -> None:
     """A cfg with none of the new fields set must not add any solve kwargs —
     headless stays a bool, no humanize/disable_coop/window/block_images leak in."""
     kwargs, _ = bs._build_launch_kwargs(_cfg())
-    assert kwargs == {"headless": True, "locale": ("en-US",)}
+    assert kwargs == {
+        "headless": True,
+        "locale": ("en-US",),
+        "firefox_user_prefs": {"permissions.default.image": 1},
+    }
 
 
 def test_build_launch_kwargs_virtual_display_overrides_headless() -> None:

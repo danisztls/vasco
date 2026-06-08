@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -436,6 +437,7 @@ def test_build_launch_kwargs_default_omits_persistent_context() -> None:
     assert kwargs == {
         "headless": True,
         "locale": ("en-US",),
+        "os": bs._resolve_spoof_os(""),
         "firefox_user_prefs": {"permissions.default.image": 1},
     }
     assert is_persistent is False
@@ -482,6 +484,7 @@ def test_build_launch_kwargs_omits_solve_kwargs_by_default() -> None:
     assert kwargs == {
         "headless": True,
         "locale": ("en-US",),
+        "os": bs._resolve_spoof_os(""),
         "firefox_user_prefs": {"permissions.default.image": 1},
     }
 
@@ -489,6 +492,22 @@ def test_build_launch_kwargs_omits_solve_kwargs_by_default() -> None:
 def test_build_launch_kwargs_virtual_display_overrides_headless() -> None:
     kwargs, _ = bs._build_launch_kwargs(_cfg(virtual_display=True))
     assert kwargs["headless"] == "virtual"
+
+
+def test_resolve_spoof_os_matches_host_or_explicit_override() -> None:
+    expected_host = bs._HOST_OS_TO_CAMOUFOX.get(platform.system(), "linux")
+    # Empty / unset → match the host OS.
+    assert bs._resolve_spoof_os("") == expected_host
+    # An explicit, valid (case-insensitive) persona wins.
+    assert bs._resolve_spoof_os("windows") == "windows"
+    assert bs._resolve_spoof_os("MacOS") == "macos"
+    # A garbage value falls back to the host instead of crashing the launch.
+    assert bs._resolve_spoof_os("freebsd") == expected_host
+
+
+def test_build_launch_kwargs_spoof_os_override_flows_through() -> None:
+    kwargs, _ = bs._build_launch_kwargs(_cfg(spoof_os="windows"))
+    assert kwargs["os"] == "windows"
 
 
 def test_build_launch_kwargs_solve_knobs_flow_through() -> None:

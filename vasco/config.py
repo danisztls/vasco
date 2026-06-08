@@ -32,6 +32,10 @@ class FetchCfg:
 class BrowserCfg:
     headless: bool = True
     locale: str = "en-US"
+    # Camoufox OS persona for the fingerprint (windows/macos/linux). Empty = match
+    # the host OS, so the spoofed fonts/UA/platform line up with what's actually
+    # installed instead of claiming e.g. Windows on a Linux box (a coherence tell).
+    spoof_os: str = ""
     prewarm: bool = False
     user_data_dir: str = ""  # "" disables persistent profile
     block_ads: bool = True  # abort third-party ad/tracker requests to cut page weight (faster renders)

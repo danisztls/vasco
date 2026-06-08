@@ -19,6 +19,7 @@
 # browser:
 #   headless: true
 #   locale: en-US
+#   spoof_os: ""                # Camoufox OS persona (windows/macos/linux); empty = match the host OS
 #   prewarm: false              # MCP-only: warm Camoufox at server startup
 #   user_data_dir: ""           # persistent profile dir; non-empty enables cookie persistence
 #   block_ads: true             # abort third-party ad/tracker requests to cut page weight → faster renders (default on)

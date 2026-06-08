@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import struct
 import subprocess
@@ -718,6 +719,23 @@ async def _fetch_page(
     )
 
 
+# Camoufox accepts only these lowercase OS personas (camoufox.utils.check_valid_os).
+_VALID_CAMOUFOX_OS = frozenset({"windows", "macos", "linux"})
+_HOST_OS_TO_CAMOUFOX = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}
+
+
+def _resolve_spoof_os(spoof_os: str) -> str:
+    """Resolve the Camoufox OS persona: an explicit valid config value, else the
+    host OS. Matching the host keeps the spoofed fonts/UA/platform coherent with
+    what's actually installed (a Windows persona on a Linux box renders Linux fonts
+    for whitelisted Windows names — a fingerprint tell). Unknown hosts → linux,
+    the deployment default."""
+    val = (spoof_os or "").strip().lower()
+    if val in _VALID_CAMOUFOX_OS:
+        return val
+    return _HOST_OS_TO_CAMOUFOX.get(platform.system(), "linux")
+
+
 def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     """Resolve Camoufox launch kwargs and whether we run a persistent context."""
     headless: bool | str = True
@@ -728,6 +746,7 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     virtual_display = False
     humanize = False
     disable_coop = False
+    spoof_os = ""
     window: tuple[int, ...] = ()
     if cfg is not None:
         try:
@@ -741,6 +760,7 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
             virtual_display = bool(getattr(b, "virtual_display", False))
             humanize = bool(getattr(b, "humanize", False))
             disable_coop = bool(getattr(b, "disable_coop", False))
+            spoof_os = str(getattr(b, "spoof_os", "") or "")
             try:
                 window = tuple(int(x) for x in (getattr(b, "window", ()) or ()))[:2]
             except (TypeError, ValueError):
@@ -762,6 +782,9 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     kwargs: dict[str, Any] = {
         "headless": "virtual" if virtual_display else headless,
         "locale": (locale,),
+        # Match the host OS so the Camoufox fingerprint (fonts/UA/platform) is
+        # coherent with what's actually installed (see _resolve_spoof_os).
+        "os": _resolve_spoof_os(spoof_os),
     }
     if humanize:
         kwargs["humanize"] = True

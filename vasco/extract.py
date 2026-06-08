@@ -106,15 +106,24 @@ def _segment(markdown: str) -> list[tuple[str, int]]:
     return [(t, o) for t, o in passages if len(t) >= _MIN_PASSAGE_CHARS]
 
 
+def bm25_scores(corpus_tokens: list[list[str]], query_tokens: list[str]) -> list[float]:
+    """BM25 Okapi score for each tokenized doc against the tokenized query.
+
+    Returns a per-doc score list aligned to ``corpus_tokens`` (all-zeros when
+    there is nothing to rank). Shared with content adapters (e.g. MercadoLivre
+    relevance sorting) so the ``rank_bm25`` dependency lives in one place.
+    """
+    if not query_tokens or not any(corpus_tokens):
+        return [0.0] * len(corpus_tokens)
+    bm25 = BM25Okapi(corpus_tokens)
+    return [float(s) for s in bm25.get_scores(query_tokens)]
+
+
 def _rank_bm25(passages: list[str], query: str, *, top: int) -> list[tuple[int, float]]:
     corpus_tokens = [_tokenize(p) for p in passages]
-    query_tokens = _tokenize(query)
-    if not query_tokens or not any(corpus_tokens):
-        return []
-    bm25 = BM25Okapi(corpus_tokens)
-    scores = bm25.get_scores(query_tokens)
+    scores = bm25_scores(corpus_tokens, _tokenize(query))
     ranked = sorted(
-        ((i, float(scores[i])) for i in range(len(passages))),
+        ((i, scores[i]) for i in range(len(passages))),
         key=lambda x: x[1],
         reverse=True,
     )

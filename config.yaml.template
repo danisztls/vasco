@@ -25,6 +25,9 @@
 #   network_blocklist_paths:    # hostlists for tracker blocking; empty = bundled conservative default
 #     - ~/.config/vasco/netblock.txt
 #     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt
+#   clear_cookies_on_wall: true # on a login wall (e.g. MercadoLivre account-verification), clear that
+#                               #   domain's cookies + retry once (default on; only acts on a persistent
+#                               #   user_data_dir; domain-scoped so other sites' cookies are preserved)
 #   # --- Cloudflare Turnstile solving (opt-in; all off = today's behavior) ---
 #   solve_turnstile: false      # click the challenge checkbox + wait for clearance
 #   virtual_display: false      # launch a real (non-headless) Firefox in Xvfb; REQUIRES Xvfb

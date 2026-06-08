@@ -38,6 +38,10 @@ class BrowserCfg:
     # Hostlists for tracker blocking (local files or remote URLs); empty uses
     # the bundled conservative default.
     network_blocklist_paths: tuple[str, ...] = ()
+    # On a login wall, clear that domain's cookies and retry once (single-shot,
+    # cooldown-guarded). Only acts on a persistent profile; domain-scoped so other
+    # sites' clearances (e.g. AliExpress x5secdata) are preserved.
+    clear_cookies_on_wall: bool = True
     # --- Cloudflare Turnstile solving (opt-in; off preserves today's behavior) --
     # virtual_display needs Xvfb installed on the host; it launches a *real*
     # (non-headless) Firefox inside an in-memory X display so headless detection

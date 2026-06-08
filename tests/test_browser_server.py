@@ -719,6 +719,194 @@ async def test_fetch_page_skips_solve_when_disabled() -> None:
     assert "challenges.cloudflare.com" in html  # untouched challenge HTML
 
 
+# ── Login-wall cookie-clear recovery (_maybe_recover_login_wall) ───────────────
+
+# A thin ML account-verification interstitial (classifies LOGIN_REQUIRED) and the
+# real content the recovery should land on after a fresh anonymous session.
+_ML_WALL_HTML = (
+    "<html><body>"
+    '<a href="/gz/account-verification">x</a>'
+    "<h1>Olá! Para continuar, acesse sua conta</h1>"
+    "<button>Sou novo</button><button>Já tenho conta</button>"
+    "</body></html>"
+)
+_ML_REAL_HTML = (
+    "<html><body><article>" + ("produto real " * 200) + "</article></body></html>"
+)
+_ML_URL = "https://www.mercadolivre.com.br/notebook"
+
+
+@pytest.fixture(autouse=True)
+def _reset_cookie_clear_state() -> None:
+    # The per-domain cooldown is module state; clear it so each test starts fresh.
+    bs._last_cookie_clear.clear()
+
+
+class _WallContext:
+    """page.context stand-in that records clear_cookies(domain=...) calls."""
+
+    def __init__(self) -> None:
+        self.clear_calls: list[Any] = []
+
+    async def clear_cookies(self, *, domain: Any = None, **_: Any) -> None:
+        self.clear_calls.append(domain)
+
+
+class _WallPage:
+    """Serves the ML account wall; after cookies are cleared, `content()` returns
+    real content (when `recovers`) or stays walled (when not)."""
+
+    def __init__(self, *, recovers: bool = True) -> None:
+        self._recovers = recovers
+        self.context = _WallContext()
+        self.gotos = 0
+
+    async def goto(self, _url: str, **_: Any) -> _CFResponse:
+        self.gotos += 1
+        return _CFResponse(200)
+
+    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def content(self) -> str:
+        if self.context.clear_calls and self._recovers:
+            return _ML_REAL_HTML
+        return _ML_WALL_HTML
+
+
+async def test_recover_login_wall_clears_domain_cookies_and_recovers() -> None:
+    page = _WallPage(recovers=True)
+    recovered = await bs._maybe_recover_login_wall(
+        page,
+        _ML_URL,
+        status=200,
+        html=_ML_WALL_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert recovered is not None
+    new_html, new_status, _ = recovered
+    assert new_html == _ML_REAL_HTML and new_status == 200
+    # Cleared exactly once, scoped to the ML registered domain: the regex matches
+    # ML cookie-domain forms but NOT a sibling site (so AliExpress x5secdata is safe).
+    assert len(page.context.clear_calls) == 1
+    pat = page.context.clear_calls[0]
+    assert pat.search("www.mercadolivre.com.br") and pat.search(".mercadolivre.com.br")
+    assert not pat.search("aliexpress.com")
+
+
+async def test_recover_login_wall_noop_when_not_walled() -> None:
+    page = _WallPage()
+    recovered = await bs._maybe_recover_login_wall(
+        page,
+        _ML_URL,
+        status=200,
+        html=_ML_REAL_HTML,  # already real content
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert recovered is None
+    assert page.context.clear_calls == []  # never touched cookies
+
+
+async def test_recover_login_wall_single_shot_and_cooldown_guard() -> None:
+    """Loop guard: a *persistent* wall (clearing doesn't help) clears once per call
+    (single-shot, one retry) and is skipped on the next call within the cooldown —
+    so `wall → clear → wall` can never thrash."""
+    page = _WallPage(recovers=False)  # stays walled even after a clear
+    first = await bs._maybe_recover_login_wall(
+        page,
+        _ML_URL,
+        status=200,
+        html=_ML_WALL_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert first is None  # still walled → gives up
+    assert len(page.context.clear_calls) == 1  # single-shot: cleared exactly once
+    assert page.gotos == 1  # retried exactly once
+
+    second = await bs._maybe_recover_login_wall(
+        page,
+        _ML_URL,
+        status=200,
+        html=_ML_WALL_HTML,
+        headers={},
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert second is None
+    assert len(page.context.clear_calls) == 1  # cooldown: NOT cleared again
+    assert page.gotos == 1  # and not retried again
+
+
+class _MLWallFetchPage:
+    """fetch_page-surface page: walled until cookies clear, then real content."""
+
+    def __init__(self) -> None:
+        self.context = _WallContext()
+        self.closed = False
+        self.gotos = 0
+
+    async def route(self, _pattern: str, _handler: Any) -> None:  # pragma: no cover
+        return None
+
+    async def goto(self, _url: str, **_: Any) -> _CFResponse:
+        self.gotos += 1
+        return _CFResponse(200)
+
+    async def wait_for_load_state(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def content(self) -> str:
+        return _ML_REAL_HTML if self.context.clear_calls else _ML_WALL_HTML
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_fetch_page_recovers_login_wall_when_enabled() -> None:
+    page = _MLWallFetchPage()
+    html, status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        _ML_URL,
+        deadline_monotonic=time.monotonic() + 5,
+        is_persistent=True,
+        clear_cookies_on_wall=True,
+    )
+    assert "produto real" in html
+    assert status == 200
+    assert len(page.context.clear_calls) == 1
+
+
+async def test_fetch_page_skips_wall_recovery_when_disabled() -> None:
+    """Off at the fetch_page seam (the server passes the cfg value): the wall HTML
+    is returned untouched and no cookies are cleared."""
+    page = _MLWallFetchPage()
+    html, _status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        _ML_URL,
+        deadline_monotonic=time.monotonic() + 5,
+        is_persistent=True,
+        # clear_cookies_on_wall defaults False on the inner seam
+    )
+    assert "account-verification" in html
+    assert page.context.clear_calls == []
+
+
+async def test_fetch_page_skips_wall_recovery_when_not_persistent() -> None:
+    """Even enabled, recovery is a no-op on an ephemeral context (nothing to heal)."""
+    page = _MLWallFetchPage()
+    html, _status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        _ML_URL,
+        deadline_monotonic=time.monotonic() + 5,
+        is_persistent=False,
+        clear_cookies_on_wall=True,
+    )
+    assert "account-verification" in html
+    assert page.context.clear_calls == []
+
+
 # ── Manual (human-in-the-loop) solve: notify + budget-suspended hold ───────────
 
 

@@ -219,6 +219,19 @@ async def test_fetch_passes_through_escalation_failure() -> None:
     assert "browser" in env["failure"]["message"]
 
 
+async def test_fetch_surfaces_login_wall_cleanly() -> None:
+    """When the browser server's cookie-clear recovery can't clear ML's account
+    wall, the chain returns LOGIN_REQUIRED — the adapter must surface that reason
+    honestly (not the misleading PARSE_FAILED its JSON-LD parser would emit)."""
+
+    async def walled_fetch_html(_url: str):
+        return "", 403, {}, M.FailureReason.LOGIN_REQUIRED, "browser"
+
+    env = await M.fetch_mercadolivre(SEARCH_URL, fetch_html=walled_fetch_html)
+
+    assert env["failure"]["reason"] == M.FailureReason.LOGIN_REQUIRED.value
+
+
 async def test_fetch_search_rot_returns_parse_failed() -> None:
     """200 OK but no Product JSON-LD (ML's spine) → PARSE_FAILED, not empty."""
 

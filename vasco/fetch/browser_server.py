@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import struct
 import subprocess
 import time
@@ -199,6 +200,7 @@ async def _serve_fetch(
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
     block_images: bool = False,
+    clear_cookies_on_wall: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Fetch a page, relaunching the browser once if the driver connection drops.
 
@@ -225,6 +227,7 @@ async def _serve_fetch(
                     manual_solve=manual_solve,
                     manual_solve_timeout=manual_solve_timeout,
                     block_images=block_images,
+                    clear_cookies_on_wall=clear_cookies_on_wall,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -268,6 +271,7 @@ async def _handle_client(
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
     block_images: bool = False,
+    clear_cookies_on_wall: bool = False,
 ) -> None:
     try:
         while True:
@@ -293,6 +297,7 @@ async def _handle_client(
                     manual_solve=manual_solve,
                     manual_solve_timeout=manual_solve_timeout,
                     block_images=block_images,
+                    clear_cookies_on_wall=clear_cookies_on_wall,
                 )
                 await _write_msg(
                     writer, {"html": html, "status": status, "headers": headers}
@@ -489,6 +494,89 @@ async def _maybe_solve_turnstile(
         return False
 
 
+# --- Persistent-profile login-wall recovery -----------------------------------
+# A shared persistent profile can accumulate session state that flips a site into
+# a login/account wall (e.g. MercadoLivre's `/gz/account-verification`
+# interstitial). Clearing *that domain's* cookies resets it to a fresh anonymous
+# session, which usually clears the wall — and heals the profile for later fetches
+# too. Scoped to the page's registered domain so sibling sites' clearances (e.g.
+# AliExpress x5secdata) are preserved.
+_COOKIE_CLEAR_COOLDOWN = (
+    120.0  # s: don't re-clear a domain's cookies within this window
+)
+_last_cookie_clear: dict[str, float] = {}  # registered_domain -> monotonic ts
+
+
+async def _maybe_recover_login_wall(
+    page: Any,
+    url: str,
+    *,
+    status: int,
+    html: str,
+    headers: dict[str, str],
+    deadline_monotonic: float,
+) -> tuple[str, int, dict[str, str]] | None:
+    """If the current page is a login wall, clear this domain's cookies and
+    re-fetch the URL once.
+
+    Returns the recovered ``(html, status, headers)`` only when the retry no
+    longer classifies as ``LOGIN_REQUIRED``; otherwise ``None`` (the wall is left
+    in place, so the chain still reports LOGIN_REQUIRED). Never raises.
+
+    Two guards make a ``wall → clear → wall`` thrash impossible:
+      * **single-shot** — clears once and re-fetches once, no recursion/loop, so it
+        runs at most once per ``fetch_page``;
+      * a **per-domain cooldown** (``_COOKIE_CLEAR_COOLDOWN``) so a *persistent*
+        wall (one cookie-clearing can't fix — e.g. IP/fingerprint-gated) can't make
+        every later fetch re-clear; within the window the recovery is skipped.
+    """
+    if bot_detect.classify(status, html, headers) != FailureReason.LOGIN_REQUIRED:
+        return None
+    rd = registered_domain(url)
+    now = time.monotonic()
+    if now - _last_cookie_clear.get(rd, 0.0) < _COOKIE_CLEAR_COOLDOWN:
+        log.info("login-wall recovery skipped for %s: cookies cleared recently", rd)
+        return None  # cross-fetch loop guard — clearing didn't help last time
+    _last_cookie_clear[rd] = now
+    try:
+        # Domain-scoped: the regex matches `rd`, `www.rd`, and `.rd` cookie
+        # domains via search; never a context-wide wipe, so other sites keep theirs.
+        await page.context.clear_cookies(domain=re.compile(re.escape(rd)))
+    except Exception as exc:
+        log.info("login-wall cookie clear failed for %s: %s", rd, exc)
+        return None
+    log.warning("login wall on %s — cleared %s cookies, retrying once", url, rd)
+    if _remaining_ms(deadline_monotonic) <= 0:
+        return None
+    try:
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=_remaining_ms(deadline_monotonic),
+        )
+        settle_ms = min(
+            _remaining_ms(deadline_monotonic), int(_NETWORKIDLE_SETTLE_CAP * 1000)
+        )
+        if settle_ms > 0:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=settle_ms)
+            except Exception:
+                pass
+        new_html = await page.content()
+        new_status = int(response.status) if response is not None else status
+        new_headers = await _extract_headers(response)
+    except Exception as exc:
+        log.info("login-wall retry navigation failed for %s: %s", url, exc)
+        return None
+    if (
+        bot_detect.classify(new_status, new_html, new_headers)
+        == FailureReason.LOGIN_REQUIRED
+    ):
+        return None  # still walled — give up; chain surfaces LOGIN_REQUIRED
+    log.info("login wall cleared for %s", url)
+    return new_html, new_status, new_headers
+
+
 async def fetch_page(
     browser_or_context: Any,
     url: str,
@@ -501,6 +589,7 @@ async def fetch_page(
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
     block_images: bool = False,
+    clear_cookies_on_wall: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Open a page, navigate to `url`, and return (html, status, headers).
 
@@ -571,6 +660,20 @@ async def fetch_page(
             # hold, and a stale 403 would re-trip the chain's bot classifier.
             html = await page.content()
             status = 200
+        # A persistent profile can accumulate state that flips a site into a login
+        # wall; clear that domain's cookies and retry once (single-shot, cooldown-
+        # guarded). Only meaningful on the shared persistent context.
+        if clear_cookies_on_wall and is_persistent:
+            recovered = await _maybe_recover_login_wall(
+                page,
+                url,
+                status=status,
+                html=html,
+                headers=headers,
+                deadline_monotonic=deadline_monotonic,
+            )
+            if recovered is not None:
+                html, status, headers = recovered
         return html, status, headers
     finally:
         try:
@@ -596,6 +699,7 @@ async def _fetch_page(
     manual_solve: bool = False,
     manual_solve_timeout: float = 60.0,
     block_images: bool = False,
+    clear_cookies_on_wall: bool = False,
 ) -> tuple[str, int, dict[str, str]]:
     """Thin wrapper over `fetch_page`. Kept as a stable seam the request handler
     calls and the server tests monkeypatch."""
@@ -610,6 +714,7 @@ async def _fetch_page(
         manual_solve=manual_solve,
         manual_solve_timeout=manual_solve_timeout,
         block_images=block_images,
+        clear_cookies_on_wall=clear_cookies_on_wall,
     )
 
 
@@ -1035,6 +1140,7 @@ async def run_server(cfg: Any | None = None) -> None:
     manual_solve = False
     manual_solve_timeout = 60.0
     block_images = False
+    clear_cookies_on_wall = True  # only acts on a persistent profile + login wall
     vnc_display = ":99"
     vnc_size = (1280, 720)
     if cfg is not None:
@@ -1047,6 +1153,7 @@ async def run_server(cfg: Any | None = None) -> None:
         solve_turnstile = bool(getattr(b, "solve_turnstile", False))
         manual_solve = bool(getattr(b, "manual_solve", False))
         block_images = bool(getattr(b, "block_images", False))
+        clear_cookies_on_wall = bool(getattr(b, "clear_cookies_on_wall", True))
         try:
             manual_solve_timeout = float(getattr(b, "manual_solve_timeout", 60.0))
             _VNC_PORT = int(getattr(b, "vnc_port", 5900))
@@ -1094,6 +1201,8 @@ async def run_server(cfg: Any | None = None) -> None:
         log.info("image blocking enabled (per-page; re-enabled during a manual solve)")
     if solve_turnstile:
         log.info("cloudflare turnstile solving enabled")
+    if clear_cookies_on_wall and is_persistent:
+        log.info("login-wall cookie-clear recovery enabled")
 
     sock = _socket_path()
     sock.parent.mkdir(parents=True, exist_ok=True)
@@ -1115,6 +1224,7 @@ async def run_server(cfg: Any | None = None) -> None:
                 manual_solve,
                 manual_solve_timeout,
                 block_images,
+                clear_cookies_on_wall,
             ),
             path=str(sock),
         )

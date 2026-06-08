@@ -68,6 +68,20 @@ _LOGIN_MARKERS: tuple[str, ...] = (
     'action="/users/sign_in"',
 )
 
+# MercadoLivre serves a PT-BR "account-verification" interstitial as a 200 once
+# its risk engine flags the (persistent) session: a tiny modal — "Olá! Para
+# continuar, acesse sua conta" with "Sou novo"/"Já tenho conta" — hosted at
+# `/gz/account-verification?go=<original>`. Without these markers it slips through
+# as OK, and the ML adapter then misreports PARSE_FAILED ("site structure changed")
+# for what is really a cookie-gated login wall. Classifying it LOGIN_REQUIRED both
+# labels it honestly and lets the browser server's cookie-clear recovery fire.
+# Gated by the same thin-page guard as the captcha branch so a *real* ML page that
+# merely links to login in its nav is never caught (the interstitial is tiny).
+_ACCOUNT_WALL_MARKERS: tuple[str, ...] = (
+    "/gz/account-verification",
+    "para continuar, acesse sua conta",
+)
+
 _PAYWALL_MARKERS: tuple[str, ...] = (
     "subscribe to continue",
     "subscribe to read",
@@ -190,8 +204,11 @@ def classify(
         return FailureReason.NOT_FOUND
 
     if status in (401, 403):
-        # Login forms / "log in to continue" → LOGIN_REQUIRED.
-        if _has_any(body_lc, _LOGIN_MARKERS):
+        # Login forms / "log in to continue" → LOGIN_REQUIRED. Include ML's
+        # account-verification markers in case it ever serves the wall non-200.
+        if _has_any(body_lc, _LOGIN_MARKERS) or _has_any(
+            body_lc, _ACCOUNT_WALL_MARKERS
+        ):
             return FailureReason.LOGIN_REQUIRED
         # Cloudflare body signatures.
         if _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc:
@@ -235,6 +252,15 @@ def classify(
             and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS
         ):
             return FailureReason.BLOCKED_CAPTCHA
+
+        # MercadoLivre's account-verification interstitial (a thin 200 modal).
+        # Same thin-page guard as the captcha branch so a real content page that
+        # links to login isn't flagged. → LOGIN_REQUIRED (cookie-clear recovery).
+        if (
+            _has_any(body_lc, _ACCOUNT_WALL_MARKERS)
+            and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS
+        ):
+            return FailureReason.LOGIN_REQUIRED
 
         # Paywalls: hard if schema marker or near-empty body around paywall,
         # otherwise soft.

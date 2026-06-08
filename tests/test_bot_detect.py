@@ -118,6 +118,23 @@ def test_aliexpress_punish_at_403_is_blocked_captcha() -> None:
     assert classify(403, html, {}) == FailureReason.BLOCKED_CAPTCHA
 
 
+def test_mercadolivre_account_wall_at_200_is_login_required() -> None:
+    """MercadoLivre serves its `/gz/account-verification` interstitial as a 200
+    once it flags the session. It must classify as LOGIN_REQUIRED so the adapter
+    surfaces an honest reason (not the misleading PARSE_FAILED its JSON-LD parser
+    would emit) and the browser server's cookie-clear recovery can fire."""
+    html = _load("mercadolivre/account_verification.html")
+    assert classify(200, html, {}) == FailureReason.LOGIN_REQUIRED
+
+
+def test_mercadolivre_real_pages_are_not_account_wall() -> None:
+    """Marker-specificity guard: real ML search/product pages — thin on *visible*
+    text because the payload lives in JSON-LD scripts — must NOT be mistaken for
+    the account wall. They lack the interstitial's markers."""
+    for name in ("mercadolivre/search.html", "mercadolivre/product.html"):
+        assert classify(200, _load(name), {}) != FailureReason.LOGIN_REQUIRED
+
+
 # --- Bonus: sentinel statuses --------------------------------------------------
 
 

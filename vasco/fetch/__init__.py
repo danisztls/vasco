@@ -41,6 +41,7 @@ from vasco.adapters import (
     mercadolivre,
     olx,
     realestate,
+    shopee,
     shopify,
     wayback,
     wikimedia,
@@ -1367,6 +1368,33 @@ async def _fetch_one_body(
             normalized=normalized,
             raw=raw,
             service="aliexpress",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        return envelope, state["browser_started"], phases
+
+    # --- Shopee route (product pages via the Product JSON-LD spine) ----------
+    if shopee.is_shopee_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await shopee.fetch_shopee(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="shopee",
             use_cache=use_cache,
             cache=cache,
             cfg=cfg,

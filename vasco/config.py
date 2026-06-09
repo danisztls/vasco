@@ -157,6 +157,16 @@ class ShopifyCfg:
 
 
 @dataclass(frozen=True)
+class ShopeeCfg:
+    """Shopee adapter knobs. `currency`/`language` only label the envelope; the
+    parser reads the page's own schema.org Product JSON-LD. Scope is product
+    pages only (search/category pages carry no embeddable structured data)."""
+
+    currency: str = "BRL"
+    language: str = "pt-BR"
+
+
+@dataclass(frozen=True)
 class ServiceCfg:
     """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside;
     per-domain pacing (rate limit + concurrency cap) is a politeness/anti-bot
@@ -186,6 +196,7 @@ class Config:
     aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
     mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
+    shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
@@ -203,6 +214,7 @@ _SECTIONS: dict[str, type] = {
     "aliexpress": AliExpressCfg,
     "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
+    "shopee": ShopeeCfg,
     "service": ServiceCfg,
 }
 

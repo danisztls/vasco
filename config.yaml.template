@@ -96,6 +96,11 @@
 #   autodetect: true            # probe unknown product/collection URLs; fall through to normal fetch on a miss
 #   collection_limit: 250       # products.json page size cap (Shopify hard-caps at 250)
 
+# shopee:                        # Shopee BR adapter (product pages via the Product JSON-LD spine)
+#   currency: BRL               # label stamped on the envelope
+#   language: pt-BR             # label stamped on the envelope
+#                               # product pages only; search/category carry no embeddable structured data
+
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)
 #   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables

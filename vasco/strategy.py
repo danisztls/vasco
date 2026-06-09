@@ -44,6 +44,10 @@ SEED_STRATEGIES: dict[str, str] = {
     # global domain (pt./www./m.) and the BR country domain are seeded.
     "aliexpress.com": "browser",
     "aliexpress.com.br": "browser",
+    # Shopee serves a bot-challenge SPA shell on the http tier; the Product
+    # JSON-LD spine only lands once the browser tier renders the page. The
+    # bare-domain key prefix-matches every product route under shopee.com.br.
+    "shopee.com.br": "browser",
     # NOT seeded on purpose: sites the browser tier *also* fails on (by default).
     # Seeding only helps where the browser succeeds — spending the expensive tier
     # on a doomed fetch and skipping the cheap http fail-fast is a net loss. Leave

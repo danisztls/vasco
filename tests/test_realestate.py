@@ -78,6 +78,60 @@ def test_vivareal_detail_parses_product() -> None:
     assert ln["description"] and "dormit" in ln["description"]
 
 
+def _vivareal_itemlist_html(items: list[dict]) -> str:
+    """Minimal page with a vivareal-shaped ItemList JSON-LD block."""
+    import json
+
+    doc = {
+        "@type": "ItemList",
+        "itemListElement": [{"item": it} for it in items],
+    }
+    return f'<html><script type="application/ld+json">{json.dumps(doc)}</script></html>'
+
+
+def test_vivareal_condo_fee_from_additional_property() -> None:
+    # VivaReal moved the condo fee from `offers.propertyValue` (legacy) to a
+    # single `offers.additionalProperty`. Both forms, plus a fee-less house.
+    html = _vivareal_itemlist_html(
+        [
+            {
+                "@type": "Apartment",
+                "url": "https://www.vivareal.com.br/imovel/id-1/",
+                "name": "Apartamento em Centro, São Carlos",
+                "offers": {
+                    "price": 1667,
+                    "additionalProperty": {
+                        "@type": "PropertyValue",
+                        "name": "Condominium Fee",
+                        "value": 318,
+                    },
+                },
+            },
+            {
+                "@type": "Apartment",
+                "url": "https://www.vivareal.com.br/imovel/id-2/",
+                "name": "Apartamento em Centro, São Carlos",
+                "offers": {
+                    "price": 1200,
+                    "propertyValue": [
+                        {"name": "Condominium Fee", "value": 250},
+                    ],
+                },
+            },
+            {
+                "@type": "House",
+                "url": "https://www.vivareal.com.br/imovel/id-3/",
+                "name": "Casa em Vila Brasília, São Carlos",
+                "offers": {"price": 1500},
+            },
+        ]
+    )
+    new, legacy, house = R._vivareal_list(html)
+    assert new["price"] == 1667 and new["condo_fee"] == 318
+    assert legacy["price"] == 1200 and legacy["condo_fee"] == 250
+    assert house["price"] == 1500 and house["condo_fee"] is None
+
+
 def test_vivareal_list_raises_without_itemlist() -> None:
     # The detail fixture has a Product, not an ItemList — the list parser's
     # anchor is absent, which signals scraper-rot, not an empty result.

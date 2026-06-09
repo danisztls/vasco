@@ -210,11 +210,17 @@ def _jsonld_objects(html: str) -> list[dict]:
     return [o for o in out if isinstance(o, dict)]
 
 
-def _vivareal_condo_fee(pv: Any) -> int | None:
-    entries = pv if isinstance(pv, list) else [pv]
-    for e in entries:
-        if isinstance(e, dict) and e.get("name") == "Condominium Fee":
-            return _as_int(e.get("value"))
+def _vivareal_condo_fee(*sources: Any) -> int | None:
+    """Condo fee from a vivareal ``offers`` block.
+
+    Newer pages carry it in ``offers.additionalProperty`` (a single
+    ``PropertyValue``); older ones used ``offers.propertyValue`` (a dict or
+    list of them). Scan each source in order and return the first match.
+    """
+    for src in sources:
+        for e in src if isinstance(src, list) else [src]:
+            if isinstance(e, dict) and e.get("name") == "Condominium Fee":
+                return _as_int(e.get("value"))
     return None
 
 
@@ -239,7 +245,9 @@ def _vivareal_item(item: dict) -> dict | None:
         title=name or None,
         type=_VIVAREAL_TYPE_MAP.get(item.get("@type", ""), "Imóvel"),
         price=_as_int(offers.get("price")),
-        condo_fee=_vivareal_condo_fee(offers.get("propertyValue")),
+        condo_fee=_vivareal_condo_fee(
+            offers.get("additionalProperty"), offers.get("propertyValue")
+        ),
         area=_as_int((item.get("floorSize") or {}).get("value")),
         bedrooms=_as_int(item.get("numberOfBedrooms")),
         bathrooms=_as_int(item.get("numberOfBathroomsTotal")),

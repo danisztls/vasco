@@ -217,6 +217,49 @@ from vasco.cache import normalize_url, registered_domain
         ),
         # Full-segment match only — don't mangle "amphibian".
         ("https://example.com/amphibian/x", "https://example.com/amphibian/x"),
+        # Redirect unwrapping: known wrappers yield the real destination, which
+        # then flows through the rest of normalization (host, params, tracking).
+        (
+            "https://l.facebook.com/l.php?u=https%3A%2F%2Frealsite.com%2Fart&h=AT1",
+            "https://realsite.com/art",
+        ),
+        (
+            "https://www.google.com/url?q=https%3A%2F%2Fexample.org%2Fpage&sa=D&usg=x",
+            "https://example.org/page",
+        ),
+        (
+            "https://www.google.com/url?url=https%3A%2F%2Fexample.org&rct=j",
+            "https://example.org",
+        ),
+        (
+            "https://out.reddit.com/t3_abc?url=https%3A%2F%2Fexample.org%2Fx&token=y",
+            "https://example.org/x",
+        ),
+        (
+            "https://www.youtube.com/redirect?q=https%3A%2F%2Fexample.org",
+            "https://example.org",
+        ),
+        # Unwrap then strip tracking from the inner URL in one pass.
+        (
+            "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.org%2Fp%3Futm_source%3Dfb%26id%3D9",
+            "https://example.org/p?id=9",
+        ),
+        # A wrapped YouTube link unwraps AND canonicalizes to the bare watch URL.
+        (
+            "https://www.google.com/url?q=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        # NEGATIVE: a normal page carrying a ?url= param on a non-redirector
+        # host is never unwrapped (value kept verbatim, only param-sorted).
+        (
+            "https://example.com/view?url=https%3A%2F%2Fother.com",
+            "https://example.com/view?url=https%3A%2F%2Fother.com",
+        ),
+        # NEGATIVE: a relative target isn't a real redirect — leave the wrapper.
+        (
+            "https://www.google.com/url?q=%2Flocal%2Fpath&sa=D",
+            "https://www.google.com/url?q=%2Flocal%2Fpath&sa=D",
+        ),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:

@@ -223,6 +223,81 @@ def _canonicalize_wikimedia(raw: str) -> str:
     )
 
 
+# Redirect / link-unwrapping rules. Many platforms route outbound links through
+# a tracking redirector that carries the true destination in a query param
+# (Facebook l.php?u=, Google /url?q=, out.reddit.com?url=, …). Fetching the
+# wrapper yields an interstitial and caches under a useless key, so we extract
+# the inner URL up front. Each rule is (host_regex, required_path_prefix,
+# param_candidates); the first candidate present whose decoded value is an
+# absolute http(s) URL wins. Matching is host-scoped (and path-scoped where the
+# host is also a normal site, e.g. google.com/url vs google.com/search), so a
+# regular page carrying a ``?url=`` param is never unwrapped.
+_REDIRECT_RULES: tuple[tuple[re.Pattern[str], str | None, tuple[str, ...]], ...] = (
+    (
+        re.compile(r"^(?:l|lm|m)\.(?:facebook|messenger|instagram)\.com$"),
+        "/l.php",
+        ("u",),
+    ),
+    (re.compile(r"^(?:www\.)?google\.[a-z.]+$"), "/url", ("q", "url")),
+    (re.compile(r"^(?:www\.)?youtube\.com$"), "/redirect", ("q", "url")),
+    (re.compile(r"^out\.reddit\.com$"), None, ("url",)),
+    (re.compile(r"^steamcommunity\.com$"), "/linkfilter/", ("url",)),
+    (re.compile(r"^away\.vk\.com$"), "/away.php", ("to",)),
+    (re.compile(r"^t\.umblr\.com$"), "/redirect", ("z",)),
+    (re.compile(r"^(?:www\.)?linkedin\.com$"), "/redir/redirect", ("url",)),
+    (re.compile(r"^disq\.us$"), "/url", ("url",)),
+)
+_MAX_UNWRAP_DEPTH = 3
+
+
+def _query_param(query: str, name: str) -> str | None:
+    """First ``name=`` value from a raw query string, percent-decoded.
+
+    Uses ``unquote`` (not ``unquote_plus``) to mirror JS ``decodeURIComponent``
+    — a literal ``+`` in the target stays a ``+`` rather than becoming a space.
+    """
+    for tok in query.split("&"):
+        k, eq, v = tok.partition("=")
+        if eq and k == name:
+            return unquote(v)
+    return None
+
+
+def _redirect_target(raw: str) -> str | None:
+    """The wrapped destination of a single redirector URL, or None."""
+    parts = urlsplit(raw)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return None
+    path = parts.path or ""
+    for host_re, path_prefix, params in _REDIRECT_RULES:
+        if not host_re.match(host):
+            continue
+        if path_prefix is not None and not path.startswith(path_prefix):
+            continue
+        for name in params:
+            target = _query_param(parts.query, name)
+            if target and target.startswith(("http://", "https://")):
+                return target
+        # Known redirector but no usable target — don't try other rules.
+        return None
+    return None
+
+
+def _unwrap_redirect(raw: str) -> str:
+    """Unwrap nested redirect wrappers to the real destination (bounded depth)."""
+    seen: set[str] = set()
+    for _ in range(_MAX_UNWRAP_DEPTH):
+        if raw in seen:
+            break
+        seen.add(raw)
+        target = _redirect_target(raw)
+        if target is None:
+            break
+        raw = target
+    return raw
+
+
 def normalize_url(url: str) -> str:
     """Normalize a URL.
 
@@ -240,6 +315,8 @@ def normalize_url(url: str) -> str:
       - Leave percent-encoded characters alone
       - Collapse YouTube variants (``youtu.be``, ``m./music./www.youtube.com``,
         local TLDs like ``youtube.com.br``) to bare ``youtube.com``
+      - Unwrap known redirect wrappers (Facebook ``l.php``, Google ``/url``,
+        ``out.reddit.com``, …) to the real destination — see _REDIRECT_RULES
     """
     if not url:
         return url
@@ -247,6 +324,7 @@ def normalize_url(url: str) -> str:
     if "://" not in raw:
         raw = "http://" + raw
 
+    raw = _unwrap_redirect(raw)
     raw = _canonicalize_youtube_host(raw)
     raw = _canonicalize_wikimedia(raw)
     parts = urlsplit(raw)

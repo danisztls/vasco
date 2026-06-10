@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from vasco.cache import normalize_url, registered_domain
+from vasco.urls import normalize_url, registered_domain
 
 
 @pytest.mark.parametrize(

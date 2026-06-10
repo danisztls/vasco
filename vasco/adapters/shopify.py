@@ -46,7 +46,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .. import cache as cache_mod
+from .. import urls as urls_mod
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
 from . import _common
@@ -239,7 +239,7 @@ def is_shopify_url(url: str, cfg: Any | None = None, cache: Any | None = None) -
         return False
     if _is_myshopify(url):
         return True
-    dom = cache_mod.registered_domain(url)
+    dom = urls_mod.registered_domain(url)
     if dom in _static_known(cfg):
         return True
     return _probe_state(dom, cache) is True
@@ -272,7 +272,7 @@ def is_shopify_candidate(
         getattr(getattr(cfg, "adapters", None), "shopify", None), "autodetect", True
     ):
         return False
-    dom = cache_mod.registered_domain(url)
+    dom = urls_mod.registered_domain(url)
     if dom in _static_known(cfg):  # already certain → not a *candidate*
         return False
     return _probe_state(dom, cache) is None
@@ -365,7 +365,7 @@ def _options_detail(options: Any) -> list[dict[str, Any]]:
 def _clean_url(raw: Any, origin: str) -> str | None:
     """Absolutize a product url path and drop Shopify attribution params.
 
-    Stripping happens here (adapter-local), never in ``cache.normalize_url`` —
+    Stripping happens here (adapter-local), never in ``urls.normalize_url`` —
     keeping the cache key untouched avoids invalidating every cached entry.
     """
     if not isinstance(raw, str) or not raw.strip():
@@ -599,7 +599,7 @@ def _parse_listing(
 async def _currency(url: str, fetch: HtmlFetcher | None) -> str | None:
     """Shopify omits currency from the product endpoints; ``/cart.js`` carries it.
     Best-effort and memoized per registered domain — ``None`` on any failure."""
-    dom = cache_mod.registered_domain(url)
+    dom = urls_mod.registered_domain(url)
     if dom in _currency_memo:
         return _currency_memo[dom]
     result: str | None = None
@@ -698,7 +698,7 @@ async def fetch_shopify(
             url, FailureReason.PARSE_FAILED, "shopify: unrecognized URL shape"
         )
     page_type, endpoint, kind = claim
-    dom = cache_mod.registered_domain(url)
+    dom = urls_mod.registered_domain(url)
 
     if fetch_html is None:
         if probe:

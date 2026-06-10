@@ -5,7 +5,7 @@ This is the single place known per-route tier knowledge lives. Content adapters
 their own fetch code — they route through the shared `http → browser → mobile →
 wayback` chain and rely on the seeds here to pick the right *starting* tier.
 
-`SEED_STRATEGIES` maps a route key (a `cache.route_key` value, or a path-prefix
+`SEED_STRATEGIES` maps a route key (a `urls.route_key` value, or a path-prefix
 of one) to the tier the auto-mode chain should start at. These are **seeds, not
 overrides**: a seed only applies when no learned strategy row exists yet
 (`cache.get_strategy` returns None). Once the chain records an outcome the

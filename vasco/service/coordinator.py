@@ -39,7 +39,7 @@ import asyncio
 import logging
 from typing import Any
 
-from vasco import cache as _cache_mod
+from vasco import urls as _urls
 from vasco.fetch import fetch_one as _fetch_one
 
 log = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ class Coordinator:
         # Key on everything that changes the result, so e.g. a refresh request
         # never joins a non-refresh one and gets stale data.
         key = (
-            _cache_mod.normalize_url(url),
+            _urls.normalize_url(url),
             mode,
             bool(raw),
             bool(refresh),
@@ -181,7 +181,7 @@ class Coordinator:
         if not pace:
             return await self._fetch(url, **kw)
 
-        domain = _cache_mod.registered_domain(url)
+        domain = _urls.registered_domain(url)
         # The concurrency slot is held for the whole fetch (caps simultaneous
         # connections to one origin); the min-interval spaces the *starts* within
         # it. Both gate here, before `_fetch_one` arms its own deadline, so a
@@ -216,6 +216,6 @@ class Coordinator:
         if not use_cache or refresh:
             return False
         try:
-            return self._cache.get(_cache_mod.normalize_url(url)) is not None
+            return self._cache.get(_urls.normalize_url(url)) is not None
         except Exception:
             return False

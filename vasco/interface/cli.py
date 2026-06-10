@@ -582,9 +582,9 @@ def map_(
 @app.command()
 def normalize(url: Annotated[str, typer.Argument(help="URL to canonicalize.")]) -> None:
     """Print the canonical form used as the cache key."""
-    from vasco import cache as _cache
+    from vasco import urls
 
-    print(_cache.normalize_url(url))
+    print(urls.normalize_url(url))
 
 
 # ---------------------------------------------------------------------------

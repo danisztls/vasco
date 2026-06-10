@@ -23,7 +23,7 @@ import time
 from typing import Any
 
 from .. import envelope
-from ..cache import YT_VIDEO_ID_RE
+from ..urls import YT_VIDEO_ID_RE
 from ..errors import FailureReason
 from . import _common
 

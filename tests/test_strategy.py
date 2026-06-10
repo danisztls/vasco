@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vasco.cache import route_key
+from vasco.urls import route_key
 from vasco.strategy import SEED_STRATEGIES, seed_strategy
 
 

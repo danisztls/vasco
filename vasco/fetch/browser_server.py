@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..cache import registered_domain
+from ..urls import registered_domain
 from ..errors import FailureReason
 from . import bot_detect
 from .netblock import load_netblock, should_block

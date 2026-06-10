@@ -23,7 +23,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from ..cache import registered_domain
+from ..urls import registered_domain
 from ..quality.blocklist import is_blocked, load_blocklist
 
 # Separate consolidation file from the quality list's "blocklist.txt".

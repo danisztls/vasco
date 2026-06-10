@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .. import envelope
-from ..cache import WIKIMEDIA_PROJECTS
+from ..urls import WIKIMEDIA_PROJECTS
 from ..errors import FailureReason
 from . import _common
 

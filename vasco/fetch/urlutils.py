@@ -143,18 +143,18 @@ def _normalize_url(url: str, cache: Any | None) -> str | None:
         except Exception:
             return None
     try:
-        from . import cache as cache_mod
+        from vasco import urls
 
-        return cache_mod.normalize_url(url)
+        return urls.normalize_url(url)
     except Exception:
         return url if isinstance(url, str) and "://" in url else None
 
 
 def _registered_domain(url: str) -> str:
     try:
-        from vasco import cache as cache_mod
+        from vasco import urls
 
-        return cache_mod.registered_domain(url)
+        return urls.registered_domain(url)
     except Exception:
         from urllib.parse import urlparse
 
@@ -167,12 +167,12 @@ def _registered_domain(url: str) -> str:
 def _route_key(url: str) -> str:
     """Per-route strategy key (registered domain + first path segment).
 
-    Falls back to the bare registered domain if `cache.route_key` is
+    Falls back to the bare registered domain if `urls.route_key` is
     unavailable for any reason.
     """
     try:
-        from vasco import cache as cache_mod
+        from vasco import urls
 
-        return cache_mod.route_key(url)
+        return urls.route_key(url)
     except Exception:
         return _registered_domain(url)

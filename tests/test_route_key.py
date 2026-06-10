@@ -1,4 +1,4 @@
-"""Table-driven tests for `cache.route_key` — the per-route strategy key.
+"""Table-driven tests for `urls.route_key` — the per-route strategy key.
 
 These cases ARE the spec: list vs detail must differ; cities and listing-ids
 must collapse; homepages degrade to the bare domain.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from vasco.cache import route_key
+from vasco.urls import route_key
 
 
 @pytest.mark.parametrize(

@@ -590,9 +590,9 @@ async def _browser_only_fetch(
 def _labels(cfg: Any | None) -> tuple[str, str, str, int]:
     """(currency, language, country, reviews_page_size) from cfg, with defaults."""
     ae = getattr(getattr(cfg, "adapters", None), "aliexpress", None)
-    currency = getattr(ae, "currency", None) or "BRL"
-    language = getattr(ae, "language", None) or "pt_BR"
-    country = getattr(ae, "country", None) or "BR"
+    currency = getattr(ae, "currency", None) or "USD"
+    language = getattr(ae, "language", None) or "en_US"
+    country = getattr(ae, "country", None) or "US"
     page_size = getattr(ae, "reviews_page_size", None) or _REVIEWS_CAP
     return currency, language, country, int(page_size)
 

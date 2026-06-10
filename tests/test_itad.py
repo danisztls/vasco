@@ -70,8 +70,8 @@ def test_country_follows_steam(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         I._country(Config(adapters=AdaptersCfg(steam=SteamCfg(country="de")))) == "DE"
     )
-    assert I._country(Config()) == "BR"  # default
-    assert I._country(None) == "BR"
+    assert I._country(Config()) == "US"  # default
+    assert I._country(None) == "US"
 
 
 # --- pure parsers -----------------------------------------------------------
@@ -141,7 +141,7 @@ def test_steam_price_history_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
         return "GID-123", "hades"
 
     async def _store_low(client, gid, key, country):
-        assert gid == "GID-123" and country == "BR"
+        assert gid == "GID-123" and country == "US"
         return I._low_from_payload(_LOW_PAYLOAD)
 
     async def _history(client, gid, key, country, limit):

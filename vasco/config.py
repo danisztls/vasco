@@ -118,12 +118,13 @@ class ShoppingCfg:
 class AliExpressCfg:
     """AliExpress adapter knobs. `currency`/`language`/`country` label the envelope
     and drive the reviews endpoint locale (note: `language` is the AliExpress
-    pt_BR-style code with an underscore). `reviews_page_size` caps how many top
-    reviews a product page fetches from feedback.aliexpress.com."""
+    en_US-style code with an underscore). `reviews_page_size` caps how many top
+    reviews a product page fetches from feedback.aliexpress.com. AliExpress is a
+    global marketplace, so the defaults are US/English."""
 
-    currency: str = "BRL"
-    language: str = "pt_BR"
-    country: str = "BR"
+    currency: str = "USD"
+    language: str = "en_US"
+    country: str = "US"
     reviews_page_size: int = 6
 
 
@@ -168,13 +169,14 @@ class ShopeeCfg:
 class SteamCfg:
     """Steam store adapter knobs. `country`/`language` are Steam's storefront
     region selectors (`cc`/`l`): they set the price currency and the locale of
-    descriptions/genres returned by the JSON APIs. Defaults target Brazil.
-    `itad_api_key` (or `VASCO_ITAD_API_KEY`) is the **only** switch for
-    IsThereAnyDeal historical-price enrichment on app pages — set it to enable,
-    leave empty to disable (the currency follows `country`)."""
+    descriptions/genres returned by the JSON APIs. Steam is a global storefront,
+    so the defaults are US/English. `itad_api_key` (or `VASCO_ITAD_API_KEY`) is
+    the **only** switch for IsThereAnyDeal historical-price enrichment on app
+    pages — set it to enable, leave empty to disable (the currency follows
+    `country`)."""
 
-    country: str = "BR"
-    language: str = "portuguese"
+    country: str = "US"
+    language: str = "english"
     itad_api_key: str = ""
 
 

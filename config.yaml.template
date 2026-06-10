@@ -69,9 +69,9 @@
 #     currency: BRL            # label stamped on the envelope
 #     language: pt-BR          # label stamped on the envelope
 #   aliexpress:
-#     currency: BRL            # label stamped on the envelope
-#     language: pt_BR          # AliExpress locale code (underscore); drives the reviews endpoint
-#     country: BR              # reviews endpoint country
+#     currency: USD            # label stamped on the envelope
+#     language: en_US          # AliExpress locale code (underscore); drives the reviews endpoint
+#     country: US              # reviews endpoint country
 #     reviews_page_size: 6     # top reviews fetched per product page
 #   mercadolivre:
 #     relevance_filter: true   # relevance-sort search results so ad-placement off-keyword items sink
@@ -85,8 +85,8 @@
 #     currency: BRL            # label stamped on the envelope
 #     language: pt-BR          # label stamped on the envelope
 #   steam:                      # Steam store (app pages + search via store JSON APIs)
-#     country: BR              # Steam storefront cc — sets the price currency (BR -> BRL)
-#     language: portuguese     # Steam storefront l — locale of descriptions/genres
+#     country: US              # Steam storefront cc — sets the price currency (US -> USD)
+#     language: english        # Steam storefront l — locale of descriptions/genres
 #     itad_api_key: ""         # IsThereAnyDeal key (or VASCO_ITAD_API_KEY); "" = off. Currency follows `country`
 #   youtube:
 #     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...

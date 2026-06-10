@@ -60,12 +60,12 @@ def resolve_api_key(cfg: Any | None) -> str:
 
 def _country(cfg: Any | None) -> str:
     """ITAD ``country`` (uppercased ISO alpha-2) — always the Steam region
-    (``adapters.steam.country``, default ``BR``), so the historical low's currency
+    (``adapters.steam.country``, default ``US``), so the historical low's currency
     matches the displayed store price. Not a separate knob: a mismatched currency
     in one envelope has no sane use."""
     steam = getattr(getattr(cfg, "adapters", None), "steam", None)
-    c = (getattr(steam, "country", "BR") or "BR").strip()
-    return (c or "BR").upper()
+    c = (getattr(steam, "country", "US") or "US").strip()
+    return (c or "US").upper()
 
 
 # ---------------------------------------------------------------------------

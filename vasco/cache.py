@@ -9,8 +9,49 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
-_TRACKING_PREFIXES = ("utm_",)
-_TRACKING_EXACT = {"fbclid", "gclid", "mc_eid"}
+# Curated denylist of query params that are never content-bearing, so dropping
+# them folds the same page's tracked variants onto one cache row. Conservative
+# by design: ambiguous params that are sometimes load-bearing (`ref`, `source`,
+# `si`, `id`, `page`, `sort`, `aff_*`) are intentionally kept — over-stripping
+# would silently collapse distinct pages and serve wrong cached content.
+_TRACKING_PREFIXES = ("utm_", "mtm_")  # utm_*: GA/most; mtm_*: Matomo
+_TRACKING_EXACT = {
+    # Mailchimp / generic campaign + ad-click IDs
+    "fbclid",
+    "gclid",
+    "gclsrc",
+    "dclid",
+    "gbraid",
+    "wbraid",
+    "gad_source",
+    "msclkid",
+    "yclid",
+    # Social share IDs
+    "igshid",
+    "igsh",
+    "ttclid",
+    "twclid",
+    "mibextid",
+    # Email / CRM
+    "mc_eid",
+    "mc_cid",
+    "mc_tc",
+    "mkt_tok",  # Marketo
+    "_hsenc",  # HubSpot
+    "_hsmi",
+    "__hssc",
+    "__hstc",
+    "__hsfp",
+    "hsCtaTracking",
+    # Analytics linkers / listing-click IDs
+    "_ga",  # Google Analytics cross-domain linker
+    "_gl",
+    "_openstat",  # Yandex / openstat
+    "srsltid",  # Google Merchant listing-click ID (lands on shopping click-throughs)
+    # Alibaba / AliExpress (query-only tracking; adapters key off the URL path)
+    "spm",
+    "scm",
+}
 
 # AMP query params stripped to fold AMP variants into the canonical row.
 # `?amp=1` is the vivareal / generic-CMS form; `?output=amp` is Twitter/X
@@ -191,7 +232,9 @@ def normalize_url(url: str) -> str:
       - Drop default ports (80/http, 443/https)
       - Drop trailing slash from non-root paths
       - Sort query params alphabetically (preserving order of repeated keys)
-      - Drop tracking params: utm_*, fbclid, gclid, mc_eid
+      - Drop a curated denylist of tracking params (utm_*/mtm_* prefixes plus
+        ad-click, social-share, email, and Alibaba spm/scm IDs — see
+        _TRACKING_EXACT/_TRACKING_PREFIXES)
       - Drop AMP markers: ``?amp=`` (any AMP-ish value) and ``?output=amp``;
         strip ``/amp/`` segments and ``/amp`` suffix from the path
       - Leave percent-encoded characters alone

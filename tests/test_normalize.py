@@ -32,6 +32,34 @@ from vasco.cache import normalize_url, registered_domain
         ("https://example.com/foo?key=", "https://example.com/foo?key="),
         ("https://example.com/foo?key", "https://example.com/foo?key"),
         ("https://example.com/foo?mc_eid=abc&a=1", "https://example.com/foo?a=1"),
+        # Broadened tracking denylist: ad-click, social-share, and Alibaba IDs
+        # are dropped like the original utm_/fbclid set.
+        ("https://example.com/x?gclsrc=aw", "https://example.com/x"),
+        ("https://example.com/x?igshid=abc", "https://example.com/x"),
+        ("https://example.com/p?spm=a2g0o.detail", "https://example.com/p"),
+        # ClearURLs-derived globally-safe params: email/CRM tokens, GA linkers,
+        # and Google Merchant's listing-click id all strip.
+        ("https://example.com/x?srsltid=AbC123", "https://example.com/x"),
+        ("https://example.com/x?mkt_tok=eyJ0", "https://example.com/x"),
+        ("https://example.com/x?__hstc=1.2.3&__hssc=4", "https://example.com/x"),
+        ("https://example.com/x?_ga=GA1.2&_gl=1xyz&a=1", "https://example.com/x?a=1"),
+        # mtm_* (Matomo) prefix strips like utm_*.
+        (
+            "https://example.com/foo?mtm_campaign=x&mtm_source=y&a=1",
+            "https://example.com/foo?a=1",
+        ),
+        # Mixed: tracking junk drops, the real content param survives.
+        ("https://example.com/p?spm=abc&id=42", "https://example.com/p?id=42"),
+        # Ambiguous params are KEPT — sometimes load-bearing, so over-stripping
+        # would silently collapse distinct pages. These rows lock that in.
+        (
+            "https://example.com/x?ref=homepage&source=nav",
+            "https://example.com/x?ref=homepage&source=nav",
+        ),
+        (
+            "https://example.com/x?page=2&sort=price",
+            "https://example.com/x?page=2&sort=price",
+        ),
         (
             "https://example.com/foo?b=2&a=1&c=3",
             "https://example.com/foo?a=1&b=2&c=3",

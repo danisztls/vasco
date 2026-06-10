@@ -101,6 +101,10 @@
 #   language: pt-BR             # label stamped on the envelope
 #                               # product pages only; search/category carry no embeddable structured data
 
+# steam:                         # Steam store adapter (app pages + search via store JSON APIs)
+#   country: BR                 # Steam storefront `cc` — sets the price currency (e.g. BR → BRL)
+#   language: portuguese        # Steam storefront `l` — locale of descriptions/genres
+
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)
 #   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables

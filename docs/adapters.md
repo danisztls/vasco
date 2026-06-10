@@ -32,6 +32,15 @@ AliExpress (`aliexpress.com` global + `pt.`/`www.`/`m.` subdomains, and `aliexpr
 
 Shopee BR marketplace (`shopee.com.br`; other-country Shopee out of scope). **Product pages only** — `is_shopee_url` matches just the canonical `…-i.<shopId>.<itemId>` tail, so search/category/home URLs fall through to a normal fetch (Shopee's search results load via an anti-bot-signed internal API — `/api/v4/search/search_items` returns `error 90309999` even from a logged-in browser — and the category SPA embeds no listing JSON, so there's nothing structured to parse). HTML via the shared escalation chain (injected `fetch_html`); bot-challenged on the http tier so `shopee.com.br` is seeded to the browser tier in `vasco/strategy.py`. **schema.org `Product` JSON-LD is the spine** (embedded server-side for SEO, survives Shopee's CSS rotation): name, productID, image, brand, description, `offers` (price — **en-format dot-decimal, not BR comma** — priceCurrency, itemCondition, availability, nested `seller` Organization with the shop's aggregateRating) + a product-level aggregateRating; `ratingValue`/`ratingCount` come as **strings**. `shopId`/`itemId` are lifted from the URL tail; the category path is recovered from the page's `BreadcrumbList`. One product per page in `quality.products` (`page_type="product"`, `currency`, `result_count`); own envelope shape (`mode_used="shopee"`, `content_type="application/x-shopee"`).
 
+## `vasco/adapters/steam.py`
+
+Steam store (`store.steampowered.com`; other Steam hosts — `steamcommunity.com`, `steamdb.info` — are out of scope and fall through). Unlike the marketplace adapters it doesn't scrape page HTML: it fetches Steam's **public JSON APIs directly** through the injected `fetch_html` (like Shopify), so it serves on the plain http tier — **no strategy seed, no probe** (fixed domain, no bot challenge on the data path). Two page types: **app** (`/app/<id>`) and **search** (`/search/?term=`); bundle/sub/dlc/community URLs aren't claimed (`_claim` → `None`). Region (`cc`/`l`) comes from `SteamCfg` (`country`/`language`, default BR/portuguese), setting the price currency + description locale.
+
+- **App** (`/app/<id>`): the storefront `appdetails` API (`/api/appdetails?appids=<id>`) is the **spine/anchor** — price (integer cents → float), genres, metacritic, release date, platforms, developers/publishers, dlc count, recommendations. Enriched **best-effort** (concurrent `asyncio.gather`, failures swallowed) by the public `appreviews` summary (`review_score_desc`, `total_reviews`/positive/negative) and the live `GetNumberOfCurrentPlayers` count (`api.steampowered.com`, on by API design, no key). Only `appdetails` can fail the fetch.
+- **Search** (`/search/?term=`): the `storesearch` API (`/api/storesearch/?term=`) → a list of app cards (title, app_id, price, metascore→`metacritic`, platforms, image).
+
+Rot contract: broken/non-JSON `appdetails` or a search response with **no `items` array** → `AdapterParseError` → `PARSE_FAILED`; an `appdetails` node with `success: false` (delisted/nonexistent appid — valid shape, no store page) → **`NOT_FOUND`** (not rot); a search with an empty `items` array → `success` + `["no_results"]`. One product per app page in `quality.products` (`page_type` app/search, `currency`, `result_count`, `app_id`/`query`); own envelope shape (`mode_used="steam"`, `content_type="application/x-steam"`).
+
 ## Verification recipes
 
 ```bash
@@ -79,4 +88,11 @@ uv run vasco fetch "https://shopee.com.br/<slug>-i.<shopId>.<itemId>" \
   | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,condition,brand,rating,review_count,seller,category,shop_id,item_id})'
 # Shopee BR adapter: Product JSON-LD spine (price is dot-decimal; rating/count are strings). Product pages
 # only — search/category URLs fall through to a normal fetch. Bot-challenged → browser tier (seeded).
+
+uv run vasco fetch "https://store.steampowered.com/app/1145360/Hades/" \
+  | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,metacritic,review_score_desc,total_reviews,player_count,genres})'
+uv run vasco fetch "https://store.steampowered.com/search/?term=hades" \
+  | jq '.mode_used, .quality.result_count, (.quality.products[0] | {title,app_id,price,metacritic})'
+# Steam adapter: fetches Steam's public JSON APIs directly (appdetails spine + best-effort appreviews +
+# live player count; storesearch for search). No seed/probe — JSON serves on http. Invalid appid → NOT_FOUND.
 ```

@@ -43,6 +43,7 @@ from vasco.adapters import (
     realestate,
     shopee,
     shopify,
+    steam,
     wayback,
     wikimedia,
     youtube,
@@ -1409,6 +1410,33 @@ async def _fetch_one_body(
             normalized=normalized,
             raw=raw,
             service="shopee",
+            use_cache=use_cache,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        return envelope, state["browser_started"], phases
+
+    # --- Steam route (app + search via store JSON APIs) ---------------------
+    if steam.is_steam_url(url):
+        fetch_html, state = _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+        envelope = await steam.fetch_steam(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        envelope = _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service="steam",
             use_cache=use_cache,
             cache=cache,
             cfg=cfg,

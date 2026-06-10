@@ -167,6 +167,16 @@ class ShopeeCfg:
 
 
 @dataclass(frozen=True)
+class SteamCfg:
+    """Steam store adapter knobs. `country`/`language` are Steam's storefront
+    region selectors (`cc`/`l`): they set the price currency and the locale of
+    descriptions/genres returned by the JSON APIs. Defaults target Brazil."""
+
+    country: str = "BR"
+    language: str = "portuguese"
+
+
+@dataclass(frozen=True)
 class ServiceCfg:
     """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside;
     per-domain pacing (rate limit + concurrency cap) is a politeness/anti-bot
@@ -197,6 +207,7 @@ class Config:
     mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
+    steam: SteamCfg = field(default_factory=SteamCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
@@ -215,6 +226,7 @@ _SECTIONS: dict[str, type] = {
     "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
     "shopee": ShopeeCfg,
+    "steam": SteamCfg,
     "service": ServiceCfg,
 }
 

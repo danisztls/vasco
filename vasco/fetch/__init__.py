@@ -258,8 +258,12 @@ async def _fetch_one_body(
 ) -> tuple[dict[str, Any], bool, _Phases | None]:
     """Full single-fetch state machine. Returns (envelope, browser_started, phases).
 
-    `phases` is None on short-circuit paths (invalid URL, cache hit, YouTube)
-    where the phase breakdown doesn't apply — only `duration_ms` is stamped.
+    Pipeline: invalid URL → cache hit → adapter dispatch (youtube/wikimedia
+    shortcuts, the content-adapter registry, the shopify probe) → binary
+    document shortcut (pdf/pandoc) → HTML auto-mode escalation.
+
+    `phases` is None on short-circuit paths (invalid URL, cache hit) where the
+    phase breakdown doesn't apply — only `duration_ms` is stamped.
     """
     normalized = _normalize_url(url, cache)
     if not normalized:
@@ -281,7 +285,6 @@ async def _fetch_one_body(
             None,
         )
 
-    # --- Cache hit -----------------------------------------------------------
     if use_cache and not refresh and cache is not None:
         try:
             hit = cache.get(normalized)
@@ -293,112 +296,25 @@ async def _fetch_one_body(
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
     phases = _Phases()
 
-    # --- YouTube shortcut ---------------------------------------------------
-    # YouTube transcripts have their own envelope shape (mode_used="youtube",
-    # content_type="text/youtube"); skip HTTP/browser tier entirely.
-    if youtube.is_youtube_url(url):
-        envelope = await youtube.fetch_youtube(url, deadline=deadline, cfg=cfg)
-        envelope = _finalize_adapter_envelope(
-            envelope,
-            url=url,
-            normalized=normalized,
-            raw=raw,
-            service="youtube",
-            use_cache=use_cache,
-            cache=cache,
-            cfg=cfg,
-            phases=phases,
-        )
-        return envelope, False, phases
+    def store(envelope: dict[str, Any]) -> dict[str, Any]:
+        if use_cache and cache is not None:
+            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
+        return envelope
 
-    # --- Wikimedia shortcut (Enterprise only; no creds → normal HTTP) ------
-    if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
-        envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
-        envelope = _finalize_adapter_envelope(
-            envelope,
-            url=url,
-            normalized=normalized,
-            raw=raw,
-            service="wikimedia",
-            use_cache=use_cache,
-            cache=cache,
-            cfg=cfg,
-            phases=phases,
-        )
-        return envelope, False, phases
-
-    # --- Content adapters (HTML via the shared escalation chain) ------------
-    # Each parses provider HTML/JSON into its own envelope shape but shares the
-    # tier chain + per-route strategy via the injected `fetch_html`.
-    for route in _adapter_routes():
-        if route.matches(url):
-            fetch_html, state = _make_adapter_fetcher(
-                url,
-                normalized,
-                mode=mode,
-                deadline_monotonic=deadline_monotonic,
-                cache=cache,
-                cfg=cfg,
-                phases=phases,
-            )
-            envelope = await route.fetch(
-                url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
-            )
-            envelope = _finalize_adapter_envelope(
-                envelope,
-                url=url,
-                normalized=normalized,
-                raw=raw,
-                service=route.service,
-                use_cache=use_cache,
-                cache=cache,
-                cfg=cfg,
-                phases=phases,
-            )
-            return envelope, state["browser_started"], phases
-
-    # --- Shopify route (product/collection/search via platform JSON endpoints) -
-    # Known domains dispatch directly; unknown product/collection URLs are probed
-    # and fall through to a normal fetch on a miss (NotShopify), so a non-Shopify
-    # lookalike is never turned into a failure.
-    shopify_probe_browser = False
-    is_known_shopify = shopify.is_shopify_url(url, cfg, cache)
-    if is_known_shopify or shopify.is_shopify_candidate(url, cfg, cache):
-        fetch_html, state = _make_adapter_fetcher(
-            url,
-            normalized,
-            mode=mode,
-            deadline_monotonic=deadline_monotonic,
-            cache=cache,
-            cfg=cfg,
-            phases=phases,
-        )
-        try:
-            envelope = await shopify.fetch_shopify(
-                url,
-                deadline=deadline,
-                cfg=cfg,
-                fetch_html=fetch_html,
-                cache=cache,
-                probe=not is_known_shopify,
-            )
-        except shopify.NotShopify:
-            # Probe miss → fall through to the normal fetch path below; carry the
-            # probe's browser usage forward so the pool is still closed.
-            shopify_probe_browser = state["browser_started"]
-        else:
-            envelope = _finalize_adapter_envelope(
-                envelope,
-                url=url,
-                normalized=normalized,
-                raw=raw,
-                service="shopify",
-                use_cache=use_cache,
-                cache=cache,
-                cfg=cfg,
-                phases=phases,
-            )
-            return envelope, state["browser_started"], phases
+    adapter_envelope, probe_browser = await _dispatch_adapters(
+        url,
+        normalized,
+        mode=mode,
+        deadline=deadline,
+        deadline_monotonic=deadline_monotonic,
+        use_cache=use_cache,
+        raw=raw,
+        cache=cache,
+        cfg=cfg,
+        phases=phases,
+    )
+    if adapter_envelope is not None:
+        return adapter_envelope, probe_browser, phases
 
     base = _base_envelope(
         url_requested=url,
@@ -409,38 +325,182 @@ async def _fetch_one_body(
         content_type="text/html",
     )
 
-    # --- PDF shortcut --------------------------------------------------------
-    if _is_pdf(url, None):
-        base["mode_used"] = "pdf"
-        envelope = await _fetch_pdf(
-            url,
-            base=base,
-            deadline_monotonic=deadline_monotonic,
+    document = await _try_document(
+        url,
+        None,
+        base=base,
+        deadline_monotonic=deadline_monotonic,
+        cfg=cfg,
+        phases=phases,
+        store=store,
+    )
+    if document is not None:
+        return document, False, phases
+
+    envelope, browser_started = await _fetch_html_envelope(
+        url,
+        base=base,
+        mode=mode,
+        deadline_monotonic=deadline_monotonic,
+        raw=raw,
+        cache=cache,
+        cfg=cfg,
+        phases=phases,
+        store=store,
+        browser_started=probe_browser,
+    )
+    return envelope, browser_started, phases
+
+
+async def _dispatch_adapters(
+    url: str,
+    normalized: str,
+    *,
+    mode: str,
+    deadline: float,
+    deadline_monotonic: float,
+    use_cache: bool,
+    raw: bool,
+    cache: Any | None,
+    cfg: Any | None,
+    phases: _Phases,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Route the URL to a content adapter, if one claims it.
+
+    Returns ``(envelope, browser_started)``; ``(None, started)`` means no
+    adapter claimed the URL and the normal fetch path should run (a Shopify
+    probe miss still reports its browser usage so the pool gets closed).
+    """
+
+    def finalize(envelope: dict[str, Any], service: str) -> dict[str, Any]:
+        return _finalize_adapter_envelope(
+            envelope,
+            url=url,
+            normalized=normalized,
+            raw=raw,
+            service=service,
+            use_cache=use_cache,
+            cache=cache,
             cfg=cfg,
             phases=phases,
         )
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        return envelope, False, phases
 
-    # --- Pandoc document shortcut -------------------------------------------
-    pandoc_fmt = _pandoc_format(url, None)
+    def make_fetcher() -> tuple[Any, dict[str, bool]]:
+        return _make_adapter_fetcher(
+            url,
+            normalized,
+            mode=mode,
+            deadline_monotonic=deadline_monotonic,
+            cache=cache,
+            cfg=cfg,
+            phases=phases,
+        )
+
+    # Self-fetching shortcuts: own envelope shape, no HTTP/browser tier at all.
+    # (Wikimedia is Enterprise-API only; without creds it's a normal HTTP page.)
+    if youtube.is_youtube_url(url):
+        envelope = await youtube.fetch_youtube(url, deadline=deadline, cfg=cfg)
+        return finalize(envelope, "youtube"), False
+    if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
+        envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
+        return finalize(envelope, "wikimedia"), False
+
+    # Content adapters: each parses provider HTML/JSON into its own envelope
+    # shape but shares the tier chain + per-route strategy via the injected
+    # `fetch_html`.
+    for route in _adapter_routes():
+        if route.matches(url):
+            fetch_html, state = make_fetcher()
+            envelope = await route.fetch(
+                url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+            )
+            return finalize(envelope, route.service), state["browser_started"]
+
+    # Shopify (product/collection/search via platform JSON endpoints): known
+    # domains dispatch directly; unknown product/collection URLs are probed and
+    # fall through to a normal fetch on a miss (NotShopify), so a non-Shopify
+    # lookalike is never turned into a failure.
+    is_known_shopify = shopify.is_shopify_url(url, cfg, cache)
+    if is_known_shopify or shopify.is_shopify_candidate(url, cfg, cache):
+        fetch_html, state = make_fetcher()
+        try:
+            envelope = await shopify.fetch_shopify(
+                url,
+                deadline=deadline,
+                cfg=cfg,
+                fetch_html=fetch_html,
+                cache=cache,
+                probe=not is_known_shopify,
+            )
+        except shopify.NotShopify:
+            return None, state["browser_started"]
+        return finalize(envelope, "shopify"), state["browser_started"]
+
+    return None, False
+
+
+async def _try_document(
+    target: str,
+    headers: dict[str, str] | None,
+    *,
+    base: dict[str, Any],
+    deadline_monotonic: float,
+    cfg: Any | None,
+    phases: _Phases,
+    store: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Fetch `target` as a binary document (PDF / pandoc format) if it is one.
+
+    Used twice: on the raw URL before the HTML chain runs, and on `url_final` +
+    response headers afterwards (a server may serve a document behind a
+    redirect). Returns the stored envelope, or None when `target` is not a
+    recognized document.
+    """
+    if _is_pdf(target, headers):
+        base["mode_used"] = "pdf"
+        return store(
+            await _fetch_pdf(
+                target,
+                base=base,
+                deadline_monotonic=deadline_monotonic,
+                cfg=cfg,
+                phases=phases,
+            )
+        )
+    pandoc_fmt = _pandoc_format(target, headers)
     if pandoc_fmt is not None:
         base["mode_used"] = "pandoc"
-        envelope = await _fetch_pandoc_doc(
-            url,
-            fmt=pandoc_fmt,
-            base=base,
-            deadline_monotonic=deadline_monotonic,
-            cfg=cfg,
-            phases=phases,
+        return store(
+            await _fetch_pandoc_doc(
+                target,
+                fmt=pandoc_fmt,
+                base=base,
+                deadline_monotonic=deadline_monotonic,
+                cfg=cfg,
+                phases=phases,
+            )
         )
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        return envelope, False, phases
+    return None
 
-    # --- HTML auto-mode escalation ------------------------------------------
-    browser_started = shopify_probe_browser
+
+async def _fetch_html_envelope(
+    url: str,
+    *,
+    base: dict[str, Any],
+    mode: str,
+    deadline_monotonic: float,
+    raw: bool,
+    cache: Any | None,
+    cfg: Any | None,
+    phases: _Phases,
+    store: Callable[[dict[str, Any]], dict[str, Any]],
+    browser_started: bool,
+) -> tuple[dict[str, Any], bool]:
+    """Run the HTML auto-mode escalation chain and assemble the envelope.
+
+    Returns ``(envelope, browser_started)``. Never raises — the safety net
+    turns an unhandled error into a SERVER_ERROR failure envelope.
+    """
     try:
         outcome = await _do_fetch_html(
             url,
@@ -453,53 +513,34 @@ async def _fetch_one_body(
             raw=raw,
         )
         html = outcome.html
-        status = outcome.status
         headers = outcome.headers
-        reason = outcome.reason
         mode_used = outcome.mode_used
         browser_started = outcome.browser_started
 
-        base["http_status"] = int(status or 0)
+        base["http_status"] = int(outcome.status or 0)
         base["mode_used"] = mode_used
         base["content_type"] = _content_type(headers, "text/html")
         url_final = headers.get("_url_final") if isinstance(headers, dict) else None
         base["url_final"] = url_final or url
 
-        # If the server actually served a PDF behind a redirect, switch.
-        if _is_pdf(base["url_final"], headers):
-            base["mode_used"] = "pdf"
-            envelope = await _fetch_pdf(
-                base["url_final"],
-                base=base,
-                deadline_monotonic=deadline_monotonic,
-                cfg=cfg,
-                phases=phases,
-            )
-            if use_cache and cache is not None:
-                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-            return envelope, browser_started, phases
+        # The server may have served a binary document behind a redirect.
+        document = await _try_document(
+            base["url_final"],
+            headers,
+            base=base,
+            deadline_monotonic=deadline_monotonic,
+            cfg=cfg,
+            phases=phases,
+            store=store,
+        )
+        if document is not None:
+            return document, browser_started
 
-        # Same for pandoc-supported document formats behind a redirect.
-        pandoc_fmt = _pandoc_format(base["url_final"], headers)
-        if pandoc_fmt is not None:
-            base["mode_used"] = "pandoc"
-            envelope = await _fetch_pandoc_doc(
-                base["url_final"],
-                fmt=pandoc_fmt,
-                base=base,
-                deadline_monotonic=deadline_monotonic,
-                cfg=cfg,
-                phases=phases,
-            )
-            if use_cache and cache is not None:
-                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-            return envelope, browser_started, phases
-
-        if reason != FailureReason.OK:
+        if outcome.reason != FailureReason.OK:
             envelope = _failure_envelope(
                 base=base,
-                reason=reason,
-                message=f"{reason} after {mode_used} tier",
+                reason=outcome.reason,
+                message=f"{outcome.reason} after {mode_used} tier",
                 retry_after=_parse_retry_after(headers),
                 partial_html=html if raw else None,
             )
@@ -514,11 +555,8 @@ async def _fetch_one_body(
                 except Exception:
                     pass
                 phases.parse_ms += _ms_since(t_parse)
-            if use_cache and cache is not None:
-                _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-            return envelope, browser_started, phases
+            return store(envelope), browser_started
 
-        # Success path.
         if raw:
             envelope = _success_envelope(
                 base=base,
@@ -538,53 +576,10 @@ async def _fetch_one_body(
                 token_count_estimate=io_mod.estimate_tokens(html or ""),
             )
         else:
-            # Reuse the http-tier conversion when the chain already did it (the
-            # word_count escalation needs it, so a kept http result rides back on
-            # the outcome) — otherwise convert the winning tier's html once here.
-            if outcome.meta is not None:
-                markdown, meta = outcome.markdown or "", outcome.meta
-            else:
-                markdown, meta = _convert_html(html, base["url_final"], phases)
-            # No extractable text after the auto chain exhausted its content
-            # tiers: an unrendered shell the browser tier couldn't fill either.
-            # Surface a clean fetch-level failure (PARSE_FAILED-style, produced
-            # post-conversion) instead of caching an empty "success".
-            if meta.get("word_count", 0) == 0:
-                envelope = _failure_envelope(
-                    base=base,
-                    reason=FailureReason.EMPTY_BODY,
-                    message=(
-                        f"200 OK from {mode_used} tier but no readable text was "
-                        "extracted — likely a JavaScript-only page the browser "
-                        "tier could not render (or the browser server was down)."
-                    ),
-                )
-                if use_cache and cache is not None:
-                    _cache_put(
-                        cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg)
-                    )
-                return envelope, browser_started, phases
-            quality_cfg = cfg.quality if cfg is not None else QualityCfg()
-            if quality_cfg is not None:
-                quality_scores = quality_mod.score(
-                    markdown,
-                    url=base["url_final"],
-                    cfg=quality_cfg,
-                    existing_quality=meta.get("quality", {}),
-                    metadata=meta,
-                    raw_html=html,
-                )
-                meta["quality"].update(quality_scores)
-            envelope = _success_envelope(
-                base=base,
-                markdown=markdown,
-                metadata=meta,
-                token_count_estimate=io_mod.estimate_tokens(markdown),
+            envelope = _converted_success(
+                outcome, html, base=base, cfg=cfg, phases=phases
             )
-
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        return envelope, browser_started, phases
+        return store(envelope), browser_started
     except Exception as exc:
         # Last-resort safety net: never raise out of fetch.
         envelope = _failure_envelope(
@@ -592,9 +587,58 @@ async def _fetch_one_body(
             reason=FailureReason.SERVER_ERROR,
             message=f"unhandled fetch error: {type(exc).__name__}: {exc}",
         )
-        if use_cache and cache is not None:
-            _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
-        return envelope, browser_started, phases
+        return store(envelope), browser_started
+
+
+def _converted_success(
+    outcome: Any,
+    html: str,
+    *,
+    base: dict[str, Any],
+    cfg: Any | None,
+    phases: _Phases,
+) -> dict[str, Any]:
+    """Markdown-converted success envelope (or the EMPTY_BODY failure).
+
+    Reuses the http-tier conversion when the chain already did it (the
+    word_count escalation needs it, so a kept http result rides back on the
+    outcome) — otherwise converts the winning tier's html once here.
+    """
+    if outcome.meta is not None:
+        markdown, meta = outcome.markdown or "", outcome.meta
+    else:
+        markdown, meta = _convert_html(html, base["url_final"], phases)
+    # No extractable text after the auto chain exhausted its content tiers: an
+    # unrendered shell the browser tier couldn't fill either. Surface a clean
+    # fetch-level failure (PARSE_FAILED-style, produced post-conversion)
+    # instead of caching an empty "success".
+    if meta.get("word_count", 0) == 0:
+        return _failure_envelope(
+            base=base,
+            reason=FailureReason.EMPTY_BODY,
+            message=(
+                f"200 OK from {base['mode_used']} tier but no readable text was "
+                "extracted — likely a JavaScript-only page the browser "
+                "tier could not render (or the browser server was down)."
+            ),
+        )
+    quality_cfg = cfg.quality if cfg is not None else QualityCfg()
+    if quality_cfg is not None:
+        quality_scores = quality_mod.score(
+            markdown,
+            url=base["url_final"],
+            cfg=quality_cfg,
+            existing_quality=meta.get("quality", {}),
+            metadata=meta,
+            raw_html=html,
+        )
+        meta["quality"].update(quality_scores)
+    return _success_envelope(
+        base=base,
+        markdown=markdown,
+        metadata=meta,
+        token_count_estimate=io_mod.estimate_tokens(markdown),
+    )
 
 
 # ---------------------------------------------------------------------------

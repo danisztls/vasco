@@ -43,6 +43,16 @@ from vasco.cache import normalize_url, registered_domain
         ("https://example.com/x?mkt_tok=eyJ0", "https://example.com/x"),
         ("https://example.com/x?__hstc=1.2.3&__hssc=4", "https://example.com/x"),
         ("https://example.com/x?_ga=GA1.2&_gl=1xyz&a=1", "https://example.com/x?a=1"),
+        # Single-purpose referral/campaign/impression tags strip too.
+        (
+            "https://example.com/x?itm_source=newsletter&a=1",
+            "https://example.com/x?a=1",
+        ),
+        (
+            "https://example.com/x?fb_ref=share&__twitter_impression=true",
+            "https://example.com/x",
+        ),
+        ("https://example.com/x?vero_id=abc&vero_conv=def", "https://example.com/x"),
         # mtm_* (Matomo) prefix strips like utm_*.
         (
             "https://example.com/foo?mtm_campaign=x&mtm_source=y&a=1",

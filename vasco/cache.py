@@ -48,6 +48,15 @@ _TRACKING_EXACT = {
     "_gl",
     "_openstat",  # Yandex / openstat
     "srsltid",  # Google Merchant listing-click ID (lands on shopping click-throughs)
+    # Single-purpose referral / campaign / impression tags
+    "fb_source",  # Facebook referral
+    "fb_ref",
+    "itm_campaign",  # internal traffic monitoring (utm's site-internal cousin)
+    "itm_medium",
+    "itm_source",
+    "vero_id",  # Vero email
+    "vero_conv",
+    "__twitter_impression",
     # Alibaba / AliExpress (query-only tracking; adapters key off the URL path)
     "spm",
     "scm",

@@ -636,7 +636,8 @@ async def _browser_fetch_html(
 
 # An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
 # The main flow passes one backed by the shared escalation chain
-# (http → browser → mobile → wayback); see fetch._make_adapter_fetcher.
+# (http → browser → mobile; adapters skip the wayback tail); see
+# fetch._make_adapter_fetcher.
 HtmlFetcher = Callable[
     [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
 ]
@@ -663,9 +664,10 @@ async def fetch_mercadolivre(
     """Fetch a MercadoLivre search/product page and return a structured envelope.
 
     HTML is obtained via ``fetch_html`` — the main flow injects the shared
-    ``http → browser → mobile → wayback`` escalation chain (MercadoLivre is seeded
-    to the browser tier in ``vasco/strategy.py``). Without an injected fetcher it
-    falls back to a browser-only fetch.
+    ``http → browser → mobile`` escalation chain — no wayback tail, since an
+    archived product page would be stale (MercadoLivre is seeded to the browser
+    tier in ``vasco/strategy.py``). Without an injected fetcher it falls back to
+    a browser-only fetch.
     """
     page_type = _page_type(url)
 

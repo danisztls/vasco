@@ -30,9 +30,10 @@ match tiers feed the dispatcher:
 
 Unlike the marketplace adapters (which parse JSON embedded in HTML), this one
 fetches the JSON endpoints *directly* through the injected ``fetch_html`` (which
-accepts any target URL and shares the http→browser→wayback escalation chain), so
-a bot-protected Shopify store still escalates naturally. Never raises — returns a
-failure envelope (or, in probe mode, ``NotShopify``).
+accepts any target URL and shares the http→browser escalation chain, minus the
+wayback tail since adapters need live data), so a bot-protected Shopify store
+still escalates naturally. Never raises — returns a failure envelope (or, in
+probe mode, ``NotShopify``).
 """
 
 from __future__ import annotations

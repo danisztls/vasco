@@ -848,3 +848,99 @@ def test_recovery_skipped_when_budget_too_tight(
     assert "failure" in env
     assert env["mode_used"] == "browser"
     assert wb_calls == []  # wayback skipped due to budget
+
+
+# -----------------------------------------------------------------------------
+# Content adapters opt out of the wayback recovery tail (allow_snapshot=False):
+# they parse live structured data, so an archived snapshot is stale and breaks
+# their anchor — a blocked adapter fetch must surface the honest block instead.
+# -----------------------------------------------------------------------------
+
+
+def test_do_fetch_html_skips_wayback_when_snapshot_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """allow_snapshot=False: a fully-blocked auto chain never consults wayback
+    and returns the honest browser block instead of an archived snapshot."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    snapshot = (
+        "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
+    )
+    wb_calls = _patch_wayback_snapshot(monkeypatch, snapshot)
+
+    outcome = run(
+        fetch_mod._do_fetch_html(
+            "https://hard.example.com/x",
+            base={},
+            mode="auto",
+            deadline_monotonic=time.monotonic() + 30.0,
+            cache=cache,
+            cfg=None,
+            phases=fetch_mod._Phases(),
+            raw=True,
+            allow_snapshot=False,
+        )
+    )
+    assert wb_calls == []
+    assert outcome.reason == FailureReason.BLOCKED_CLOUDFLARE
+    assert outcome.mode_used == "browser"
+
+
+def test_do_fetch_html_consults_wayback_when_snapshot_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Companion: with allow_snapshot=True (the default for normal fetches) the
+    same fully-blocked chain *does* reach the wayback tier — proving the flag is
+    the only thing that suppresses it."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    wb_calls = _patch_wayback_snapshot(monkeypatch, None)
+
+    run(
+        fetch_mod._do_fetch_html(
+            "https://hard.example.com/x",
+            base={},
+            mode="auto",
+            deadline_monotonic=time.monotonic() + 30.0,
+            cache=cache,
+            cfg=None,
+            phases=fetch_mod._Phases(),
+            raw=True,
+            allow_snapshot=True,
+        )
+    )
+    assert wb_calls == ["https://hard.example.com/x"]
+
+
+def test_make_adapter_fetcher_disables_wayback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production adapter wiring (`_make_adapter_fetcher`) injects a
+    `fetch_html` that runs with allow_snapshot=False, so a blocked adapter fetch
+    surfaces the block reason and never falls back to an archived snapshot."""
+    cache = FakeCache()
+    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    snapshot = (
+        "https://web.archive.org/web/20240501123045if_/https://shop.example.com/p"
+    )
+    wb_calls = _patch_wayback_snapshot(monkeypatch, snapshot)
+
+    fetch_html, state = fetch_mod._make_adapter_fetcher(
+        "https://shop.example.com/p",
+        "https://shop.example.com/p",
+        mode="auto",
+        deadline_monotonic=time.monotonic() + 30.0,
+        cache=cache,
+        cfg=None,
+        phases=fetch_mod._Phases(),
+    )
+    _html, _status, _headers, reason, _mode_used = run(
+        fetch_html("https://shop.example.com/p")
+    )
+    assert wb_calls == []
+    assert reason == FailureReason.BLOCKED_CLOUDFLARE
+    assert state["browser_started"] is True

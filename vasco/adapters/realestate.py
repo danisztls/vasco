@@ -416,7 +416,7 @@ async def _browser_fetch_html(
 
 # An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
 # The main fetch flow passes one backed by the shared escalation chain
-# (http → browser → mobile → wayback); see fetch._do_fetch.
+# (http → browser → mobile; adapters skip the wayback tail); see fetch._do_fetch.
 HtmlFetcher = Callable[
     [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
 ]
@@ -447,10 +447,10 @@ async def fetch_realestate(
     """Fetch a real-estate list/detail page and return a structured envelope.
 
     HTML is obtained via ``fetch_html`` — the main flow injects the shared
-    ``http → browser → mobile → wayback`` escalation so server-rendered portals
-    resolve at the cheap http tier and never depend on
-    the browser. Without an injected fetcher it falls back to a browser-only
-    fetch.
+    ``http → browser → mobile`` escalation (no wayback tail — an archived listing
+    would be stale) so server-rendered portals resolve
+    at the cheap http tier and never depend on the browser. Without an injected
+    fetcher it falls back to a browser-only fetch.
     """
     info = _provider_for(url)
     if info is None:  # pragma: no cover - routing guards this

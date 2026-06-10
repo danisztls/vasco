@@ -533,7 +533,8 @@ async def _browser_fetch_html(
 
 # An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
 # The main flow passes one backed by the shared escalation chain
-# (http → browser → mobile → wayback); see fetch._make_adapter_fetcher.
+# (http → browser → mobile; adapters skip the wayback tail); see
+# fetch._make_adapter_fetcher.
 HtmlFetcher = Callable[
     [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
 ]
@@ -560,9 +561,9 @@ async def fetch_olx(
     """Fetch an OLX list/detail page and return a structured envelope.
 
     HTML is obtained via ``fetch_html`` — the main flow injects the shared
-    ``http → browser → mobile → wayback`` escalation chain (OLX resolves at the
-    cheap http tier). Without an injected fetcher it falls back to a browser-only
-    fetch.
+    ``http → browser → mobile`` escalation chain — no wayback tail, since OLX
+    resolves at the cheap http tier and an archived listing would be stale.
+    Without an injected fetcher it falls back to a browser-only fetch.
     """
     vertical = _vertical(url)
     if vertical is None:  # pragma: no cover - routing guards this

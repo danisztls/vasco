@@ -615,6 +615,7 @@ async def _do_fetch_html(
     cfg: Any | None,
     phases: _Phases,
     raw: bool = False,
+    allow_snapshot: bool = True,
 ) -> _HtmlOutcome:
     """Execute the fetch state machine; returns the terminal result.
 
@@ -625,6 +626,13 @@ async def _do_fetch_html(
       (mobile, wayback) always run after a browser failure with a recoverable
       reason, gated by remaining budget. The domain strategy is an
       optimization on where to start; it does not shorten the recovery tail.
+
+    `allow_snapshot` gates *only* the automatic Wayback recovery tier (the last
+    auto-mode tier). Content adapters set it False because they parse live
+    structured data (prices, stock, listings) — an archived snapshot is stale and
+    its rewritten HTML breaks the adapter's anchor, so an honest `BLOCKED_*`
+    failure beats a plausible-but-wrong one. It does NOT affect the explicit
+    `mode="wayback"` terminal (deliberate user intent always honored).
 
     Updates `phases` in place: bumps `attempts` for each network call,
     accumulates `network_ms`, and records `escalated_from` if the http tier
@@ -855,7 +863,9 @@ async def _do_fetch_html(
         # actually blocked from.
 
     # --- Recovery tier 2: Wayback Machine -----------------------------------
-    if (deadline_monotonic - time.monotonic()) >= WAYBACK_MIN_BUDGET:
+    # Skipped when `allow_snapshot` is off (content adapters): an archived
+    # snapshot of a live commerce/listing page is stale and breaks their anchor.
+    if allow_snapshot and (deadline_monotonic - time.monotonic()) >= WAYBACK_MIN_BUDGET:
         wb = await _try_wayback_recovery(
             url,
             deadline_monotonic=_tier_deadline(deadline_monotonic, WAYBACK_MAX_BUDGET),
@@ -908,6 +918,9 @@ def _make_adapter_fetcher(
         # escalation must not apply (a valid listing page can have little prose
         # but rich JSON). They run their own fetch/parse and share only the tier
         # chain, so they want the html verbatim with no trafilatura conversion.
+        # allow_snapshot=False: adapters parse live structured data, so an
+        # archived Wayback snapshot is stale and its rewritten HTML breaks the
+        # anchor — fail honestly with the block reason instead of recovering.
         outcome = await _do_fetch_html(
             target,
             base=base,
@@ -917,6 +930,7 @@ def _make_adapter_fetcher(
             cfg=cfg,
             phases=phases,
             raw=True,
+            allow_snapshot=False,
         )
         state["browser_started"] = state["browser_started"] or outcome.browser_started
         return (

@@ -2,7 +2,7 @@
 
 Per-adapter detail for Vasco's content/marketplace adapters. The module map in [`CLAUDE.md`](../CLAUDE.md) points here; the scraper-rot **contract** (anchor-absent → `PARSE_FAILED`, anchor-present-but-empty → `success` + `no_results`) lives in CLAUDE.md's Invariants. The small core adapters that are part of the search/fetch/answer flows — `ddgs`, `wayback`, `youtube`, `wikimedia`, `deepseek` — stay in the CLAUDE.md module map.
 
-Every adapter here fetches HTML via the shared escalation chain (an injected `fetch_html`, so it shares the strategy/seed/tier-learning system) and builds its **own envelope shape** through `vasco/envelope.py`.
+Every adapter here fetches HTML via the shared escalation chain (an injected `fetch_html`, so it shares the strategy/seed/tier-learning system) and builds its **own envelope shape** through `vasco/envelope.py`. The chain is `http → browser → browser+mobile` **minus the wayback tail** (`allow_snapshot=False` in `fetch._make_adapter_fetcher`): adapters parse live structured data (prices, stock, listings), so an archived snapshot would be stale and its rewritten HTML breaks the structural anchor — a blocked adapter fetch returns the honest `BLOCKED_*` failure rather than a plausible-but-stale snapshot.
 
 ## `vasco/adapters/realestate.py`
 

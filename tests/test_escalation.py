@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from vasco import fetch as fetch_mod
+from vasco.fetch import core as core_mod
 from vasco.errors import FailureReason
 
 
@@ -138,9 +139,9 @@ def run(coro: Any) -> Any:
 def test_unknown_domain_http_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     """Case 1: Unknown domain, http returns OK → mode_used=http, bump http/True."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
     monkeypatch.setattr(
-        fetch_mod, "_browser_fetch", _make_browser("should not be called", 0)
+        core_mod, "_browser_fetch", _make_browser("should not be called", 0)
     )
     _disable_browser_close(monkeypatch)
 
@@ -164,8 +165,8 @@ def test_http_cloudflare_escalates_to_browser_ok(
 ) -> None:
     """Case 2: http → CF block → browser succeeds. mode_used=browser, bump browser/True."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -196,8 +197,8 @@ def test_preferred_browser_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
         http_calls.append(url)
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -231,8 +232,8 @@ def test_routes_under_one_domain_have_independent_strategies(
         http_calls.append(url)
         return CLEAN_HTML, 200, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _http)
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _http)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     detail = run(
@@ -274,8 +275,8 @@ def test_seed_strategy_sets_starting_tier(monkeypatch: pytest.MonkeyPatch) -> No
         http_calls.append(url)
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -316,8 +317,8 @@ def test_deadline_exceeded_before_escalation(
         browser_called.append(url)
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _slow_http)
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _browser_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_http_fetch", _slow_http)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _browser_should_not_be_called)
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -435,7 +436,7 @@ def test_browser_unknown_exception_propagates_to_server_error(
 def test_http_not_found_does_not_escalate(monkeypatch: pytest.MonkeyPatch) -> None:
     """410/404 from http tier → NOT_FOUND, no browser call, no domain bump."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http("", 410))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http("", 410))
 
     browser_called: list[str] = []
 
@@ -445,7 +446,7 @@ def test_http_not_found_does_not_escalate(monkeypatch: pytest.MonkeyPatch) -> No
         browser_called.append(url)
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _browser_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _browser_should_not_be_called)
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -476,8 +477,8 @@ def test_both_tiers_fail_returns_browser_reason(
     """
     cache = FakeCache()
     # http returns CF challenge, browser (incl. mobile retry) also returns CF.
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
     _disable_browser_close(monkeypatch)
     _disable_wayback(monkeypatch)
 
@@ -509,7 +510,7 @@ def test_phase_timings_stamped_on_plain_http_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -536,8 +537,8 @@ def test_phase_timings_stamped_on_plain_http_success(
 
 def test_phase_timings_record_escalation(monkeypatch: pytest.MonkeyPatch) -> None:
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -557,7 +558,7 @@ def test_phase_timings_record_escalation(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_cache_hit_envelope_omits_phase_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
     _disable_browser_close(monkeypatch)
 
     # First call: live fetch, populates cache.store.
@@ -643,9 +644,9 @@ def test_mobile_recovers_after_browser_blocked(
 ) -> None:
     """Auto chain: http CF block → browser CF block → mobile recovers."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
     monkeypatch.setattr(
-        fetch_mod, "_browser_fetch", _make_browser_then_clean(CF_HTML, CLEAN_HTML)
+        core_mod, "_browser_fetch", _make_browser_then_clean(CF_HTML, CLEAN_HTML)
     )
     wb_calls = _patch_wayback_snapshot(monkeypatch, None)
     _disable_browser_close(monkeypatch)
@@ -671,8 +672,8 @@ def test_wayback_recovers_after_mobile_blocked(
 ) -> None:
     """Auto chain: every tier blocked except wayback, which returns clean HTML."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
 
     snapshot_url = (
         "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
@@ -693,7 +694,7 @@ def test_wayback_recovers_after_mobile_blocked(
             )
         return await real_http_stub(url, deadline_monotonic=deadline_monotonic, cfg=cfg)
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _dispatching_http)
+    monkeypatch.setattr(core_mod, "_http_fetch", _dispatching_http)
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -726,7 +727,7 @@ def test_explicit_wayback_mode_skips_other_tiers(
             return CLEAN_HTML, 200, {"_url_final": url}
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_http_fetch", _http_should_not_be_called)
     snapshot = "https://web.archive.org/web/20240501123045if_/https://wb.example.com/x"
     _patch_wayback_snapshot(monkeypatch, snapshot)
     _disable_browser_close(monkeypatch)
@@ -793,8 +794,8 @@ def test_explicit_mobile_mode_calls_browser_with_mobile_flag(
         http_calls.append(url)
         return "", 0, {}
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _http_should_not_be_called)
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _fake_browser)
+    monkeypatch.setattr(core_mod, "_http_fetch", _http_should_not_be_called)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _fake_browser)
     _disable_browser_close(monkeypatch)
 
     env = run(
@@ -819,7 +820,7 @@ def test_recovery_skipped_when_budget_too_tight(
 ) -> None:
     """If only ~1s remains after browser fails, neither mobile nor wayback should run."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
 
     async def _slow_browser(
         url: str,
@@ -833,7 +834,7 @@ def test_recovery_skipped_when_budget_too_tight(
         await asyncio.sleep(max(0.0, remaining - 1.0))
         return CF_HTML, 200, {}
 
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _slow_browser)
+    monkeypatch.setattr(core_mod, "_browser_fetch", _slow_browser)
     wb_calls = _patch_wayback_snapshot(monkeypatch, None)
     _disable_browser_close(monkeypatch)
 
@@ -863,8 +864,8 @@ def test_do_fetch_html_skips_wayback_when_snapshot_disabled(
     """allow_snapshot=False: a fully-blocked auto chain never consults wayback
     and returns the honest browser block instead of an archived snapshot."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
     snapshot = (
         "https://web.archive.org/web/20240501123045if_/https://hard.example.com/x"
     )
@@ -895,8 +896,8 @@ def test_do_fetch_html_consults_wayback_when_snapshot_enabled(
     same fully-blocked chain *does* reach the wayback tier — proving the flag is
     the only thing that suppresses it."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
     wb_calls = _patch_wayback_snapshot(monkeypatch, None)
 
     run(
@@ -922,8 +923,8 @@ def test_make_adapter_fetcher_disables_wayback(
     `fetch_html` that runs with allow_snapshot=False, so a blocked adapter fetch
     surfaces the block reason and never falls back to an archived snapshot."""
     cache = FakeCache()
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _make_http(CF_HTML, 200))
-    monkeypatch.setattr(fetch_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CF_HTML, 200))
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CF_HTML, 200))
     snapshot = (
         "https://web.archive.org/web/20240501123045if_/https://shop.example.com/p"
     )

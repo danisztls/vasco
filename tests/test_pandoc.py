@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from vasco.fetch import browser as browser_mod
+from vasco.fetch import core as core_mod
 from vasco import fetch as fetch_mod
 from vasco.cache import Cache
 from vasco.converters import pandoc
@@ -234,7 +235,7 @@ def test_pandoc_redirect_detection(
 
     redirect_url = "https://example.com/downloads/book.epub"
     monkeypatch.setattr(
-        fetch_mod,
+        core_mod,
         "_http_fetch",
         _stub_http("", 200, {"_url_final": redirect_url}),
     )

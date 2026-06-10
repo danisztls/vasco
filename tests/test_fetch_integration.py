@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from vasco.fetch import browser as browser_mod
+from vasco.fetch import core as core_mod
 from vasco import fetch as fetch_mod
 from vasco.adapters import youtube as youtube_mod
 from vasco.cache import Cache
@@ -54,7 +55,7 @@ def test_fetch_one_round_trips_through_real_cache(
 ) -> None:
     """Two fetches of the same URL: first miss, second hit, with markdown preserved."""
     html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
     _disable_browser(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -94,7 +95,7 @@ def test_cache_hit_preserves_caller_url_casing(
     not the normalized cache key.
     """
     html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
     _disable_browser(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -126,7 +127,7 @@ def test_no_cache_flag_bypasses_reads_and_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
     _disable_browser(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -183,7 +184,7 @@ def test_youtube_url_routes_to_youtube_fetcher(
         raise AssertionError("HTTP tier should not run for YouTube URLs")
 
     monkeypatch.setattr(youtube_mod, "fetch_youtube", fake_fetch_youtube)
-    monkeypatch.setattr(fetch_mod, "_http_fetch", explode)
+    monkeypatch.setattr(core_mod, "_http_fetch", explode)
     _disable_browser(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -266,7 +267,7 @@ def test_refresh_flag_writes_but_ignores_read(
     html_first = "<html><body>" + "first " * 200 + "</body></html>"
     html_second = "<html><body>" + "second " * 200 + "</body></html>"
 
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html_first, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html_first, 200))
     _disable_browser(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -277,7 +278,7 @@ def test_refresh_flag_writes_but_ignores_read(
         assert first["from_cache"] is False
 
         # Swap the upstream response and refetch with --refresh.
-        monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html_second, 200))
+        monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html_second, 200))
         second = asyncio.run(
             fetch_mod.fetch_one(
                 "https://example.com/y",
@@ -369,7 +370,7 @@ def test_empty_http_shell_escalates_to_browser(
     """An http 200 that converts to zero words is escalated to the browser tier,
     which renders real content — the Facebook case."""
     content = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
     _stub_browser(monkeypatch, content, 200)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -391,7 +392,7 @@ def test_empty_everywhere_yields_empty_body_failure(
 ) -> None:
     """http shell escalates, but the browser also renders no text → a clean
     fetch-level EMPTY_BODY failure, not a cached 0-word success."""
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(_EMPTY_SHELL, 200))
     _stub_browser(monkeypatch, "", 200)  # browser 200 but no readable text
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -411,7 +412,7 @@ def test_contentful_http_page_is_not_escalated(
     """A real server-rendered page (word_count > 0) stays at the http tier and
     never touches the browser — the WMF VitePress regression guard."""
     content = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(content, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(content, 200))
     _stub_browser_must_not_run(monkeypatch)
 
     cache = Cache(str(tmp_path / "cache.db"))
@@ -469,7 +470,7 @@ def test_shopify_collection_end_to_end(
     shopify_mod._reset_for_tests()
     body = (_SHOPIFY_FX / "collection_products.json").read_text(encoding="utf-8")
     monkeypatch.setattr(
-        fetch_mod,
+        core_mod,
         "_http_fetch",
         _stub_http_dispatch(
             {"products.json": (body, 200), "cart.js": ('{"currency":"USD"}', 200)},
@@ -506,7 +507,7 @@ def test_shopify_rot_returns_parse_failed_short_ttl(
 
     shopify_mod._reset_for_tests()
     monkeypatch.setattr(
-        fetch_mod,
+        core_mod,
         "_http_fetch",
         _stub_http_dispatch({}, default=("<html>not shopify</html>", 200)),
     )
@@ -535,7 +536,7 @@ def test_shopify_probe_miss_falls_through_to_normal_fetch(
     shopify_mod._reset_for_tests()
     article = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
     # Every URL (the .js probe and the page itself) returns the same HTML article.
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(article, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(article, 200))
     _disable_browser(monkeypatch)
 
     url = "https://not-a-shop.example/products/widget"

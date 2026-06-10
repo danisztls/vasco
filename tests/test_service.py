@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from vasco import fetch as fetch_mod
 from vasco.config import CacheCfg, Config, ServiceCfg
 from vasco.fetch import browser as browser_mod
+from vasco.fetch import core as core_mod
 from vasco.service import client as client_mod
 from vasco.service import coordinator as coordinator_mod
 from vasco.service import daemon as daemon_mod
@@ -92,7 +92,7 @@ async def test_fetch_success_roundtrips_full_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
-    monkeypatch.setattr(fetch_mod, "_http_fetch", _stub_http(html, 200))
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
     _disable_browser(monkeypatch)
 
     sock = tmp_path / "vascod.sock"

@@ -4,7 +4,7 @@ import pathlib
 
 import pytest
 
-from vasco.adapters import google_shopping
+from vasco.adapters import _common, google_shopping
 from vasco.errors import FailureReason
 
 
@@ -359,7 +359,7 @@ async def test_fetch_google_shopping_happy_path(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         return html_src, 200, {}
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle+paperwhite",
@@ -407,7 +407,7 @@ async def test_fetch_google_shopping_rewrites_shopping_search(
         fetched.append(url)
         return html_src, 200, {}
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/shopping?q=fone+bluetooth",
@@ -432,7 +432,7 @@ async def test_fetch_google_shopping_rewrite_survives_timeout(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         raise asyncio.TimeoutError("simulated")
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/shopping?q=fone",
@@ -455,7 +455,7 @@ async def test_fetch_google_shopping_no_rewrite_warning_for_search(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         return html_src, 200, {}
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle",
@@ -475,7 +475,7 @@ async def test_fetch_google_shopping_currency_from_cfg(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         return html_src, 200, {}
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     cfg = Config(
         adapters=AdaptersCfg(shopping=ShoppingCfg(currency="USD", language="en-US"))
@@ -498,7 +498,7 @@ async def test_fetch_google_shopping_browser_timeout(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         raise asyncio.TimeoutError("simulated")
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle",
@@ -516,7 +516,7 @@ async def test_fetch_google_shopping_browser_error_classified(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         raise RuntimeError("Target page, context or browser has been closed")
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle",
@@ -535,7 +535,7 @@ async def test_fetch_google_shopping_empty_body(
     async def fake_browser(url, *, deadline_monotonic, cfg):
         return "", 200, {}
 
-    monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
+    monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle",

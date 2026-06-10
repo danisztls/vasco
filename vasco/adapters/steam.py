@@ -34,13 +34,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from . import itad
+from . import _common, itad
+from ._common import HtmlFetcher, compact as _compact
 
 log = logging.getLogger(__name__)
 
@@ -48,14 +48,6 @@ log = logging.getLogger(__name__)
 _STORE = "https://store.steampowered.com"
 _API = "https://api.steampowered.com"
 _HOST = "store.steampowered.com"
-
-
-# An injected HTML fetcher: returns (body, status, headers, reason, mode_used).
-# The main flow passes one backed by the shared escalation chain; see
-# fetch._make_adapter_fetcher.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +161,6 @@ def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [v for v in value if isinstance(v, str) and v.strip()]
-
-
-def _compact(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
 
 
 # ---------------------------------------------------------------------------
@@ -453,25 +441,9 @@ def _render_search(products: list[dict[str, Any]], term: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="steam",
-        content_type="application/x-steam",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "steam", "application/x-steam"
+)
 
 
 def _success_envelope(

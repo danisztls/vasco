@@ -43,13 +43,14 @@ import html as html_mod
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from .. import cache as cache_mod
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
+from . import _common
+from ._common import HtmlFetcher, compact as _compact, host as _host
 
 log = logging.getLogger(__name__)
 
@@ -129,21 +130,9 @@ class NotShopify(Exception):
     """
 
 
-# An injected HTML fetcher: returns (body, status, headers, reason, mode_used).
-# The main flow passes one backed by the shared escalation chain; see
-# fetch._make_adapter_fetcher.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
 # ---------------------------------------------------------------------------
 # URL detection / endpoint mapping
 # ---------------------------------------------------------------------------
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
 
 
 def _origin(url: str) -> str:
@@ -389,10 +378,6 @@ def _clean_url(raw: Any, origin: str) -> str | None:
         if k not in _ATTRIBUTION_PARAMS
     ]
     return urlunsplit(parts._replace(query=urlencode(kept), fragment=""))
-
-
-def _compact(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
 
 
 def _pid(value: Any) -> str | None:
@@ -682,25 +667,9 @@ def _render_markdown(
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="shopify",
-        content_type="application/x-shopify",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "shopify", "application/x-shopify"
+)
 
 
 async def fetch_shopify(

@@ -37,31 +37,27 @@ learning can still flip it.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import Any
 from urllib.parse import urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from ..fetch import browser
-
-if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
-    from bs4 import BeautifulSoup
+from . import _common
+from ._common import (
+    HtmlFetcher,
+    brand_name as _brand_name,
+    compact as _compact,
+    condition as _condition,
+    fmt_price_brl as _fmt_price,
+    host as _host,
+    jsonld_objects as _jsonld_objects,
+    rating as _rating,
+)
 
 log = logging.getLogger(__name__)
-
-
-def _soup(html: str) -> BeautifulSoup:
-    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
-    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
-    from bs4 import BeautifulSoup
-
-    return BeautifulSoup(html, "html.parser")
 
 
 # Canonical Shopee product URL tail: ``...-i.<shopId>.<itemId>`` (both are long
@@ -73,10 +69,6 @@ _ITEM_RE = re.compile(r"-i\.(\d+)\.(\d+)")
 # ---------------------------------------------------------------------------
 # URL detection / routing
 # ---------------------------------------------------------------------------
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
 
 
 def _is_br_host(url: str) -> bool:
@@ -127,92 +119,13 @@ def _price(value: Any) -> int | float | None:
     return int(f) if f.is_integer() else f
 
 
-def _as_float(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_int(value: Any) -> int | None:
-    f = _as_float(value)
-    return int(f) if f is not None else None
-
-
-def _rating(item: dict[str, Any]) -> tuple[float | None, int | None]:
-    """``(ratingValue, ratingCount)`` from an aggregateRating block.
-
-    Shopee renders both as strings ("4.99" / "103"), so parse defensively rather
-    than the ``isinstance(..., (int, float))`` guard the numeric-JSON adapters use.
-    """
-    agg = item.get("aggregateRating")
-    if not isinstance(agg, dict):
-        return None, None
-    return _as_float(agg.get("ratingValue")), _as_int(agg.get("ratingCount"))
-
-
-def _condition(value: Any) -> str | None:
-    """Map a schema.org ``itemCondition`` ("NewCondition" or a full URL) to
-    new/used/refurbished."""
-    if not isinstance(value, str):
-        return None
-    low = value.lower()
-    if "new" in low:
-        return "new"
-    if "refurb" in low:
-        return "refurbished"
-    if "used" in low or "damaged" in low:
-        return "used"
-    return None
-
-
 def _in_stock(value: Any) -> bool | None:
     return ("instock" in value.lower()) if isinstance(value, str) else None
-
-
-def _brand_name(value: Any) -> str | None:
-    """Brand is a plain string on Shopee's JSON-LD, but tolerate the
-    ``{"name": ...}`` object form schema.org also allows."""
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, dict):
-        name = value.get("name")
-        return name.strip() if isinstance(name, str) and name.strip() else None
-    return None
-
-
-def _compact(d: dict[str, Any]) -> dict[str, Any]:
-    """Drop null / empty values so each record carries only what's known."""
-    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
 
 
 # ---------------------------------------------------------------------------
 # JSON-LD extraction (Product spine + BreadcrumbList)
 # ---------------------------------------------------------------------------
-
-
-def _jsonld_objects(html: str) -> list[dict[str, Any]]:
-    """All schema.org objects in the page, flattening top-level lists and
-    ``@graph`` wrappers. Order is preserved."""
-    soup = _soup(html)
-    out: list[dict[str, Any]] = []
-    for tag in soup.find_all("script", type="application/ld+json"):
-        if not tag.string:
-            continue
-        try:
-            data = json.loads(tag.string)
-        except json.JSONDecodeError:
-            continue
-        for obj in data if isinstance(data, list) else [data]:
-            if not isinstance(obj, dict):
-                continue
-            if isinstance(obj.get("@graph"), list):
-                out.extend(o for o in obj["@graph"] if isinstance(o, dict))
-            else:
-                out.append(obj)
-    return out
 
 
 def _find(objects: list[dict[str, Any]], typ: str) -> dict[str, Any] | None:
@@ -307,17 +220,6 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _fmt_price(price: Any, currency: str) -> str:
-    if price is None:
-        return "Sob consulta"
-    if isinstance(price, float) and not price.is_integer():
-        body = f"{price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    else:
-        body = f"{int(price):,}".replace(",", ".")
-    symbol = "R$" if currency in (None, "", "BRL") else currency
-    return f"{symbol} {body}"
-
-
 def _render_markdown(products: list[dict[str, Any]], *, currency: str) -> str:
     if not products:
         return "# Shopee\n\nNenhum produto encontrado."
@@ -352,64 +254,9 @@ def _render_markdown(products: list[dict[str, Any]], *, currency: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="shopee",
-        content_type="application/x-shopee",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
-
-
-def _classify_browser_error(exc: BaseException) -> FailureReason:
-    msg = str(exc).lower()
-    if "timeout" in type(exc).__name__.lower() or "timeout" in msg:
-        return FailureReason.TIMEOUT
-    if any(
-        m in msg for m in ("connection closed", "target closed", "net::err_aborted")
-    ):
-        return FailureReason.BLOCKED_BOT
-    return FailureReason.SERVER_ERROR
-
-
-async def _browser_fetch_html(
-    url: str, *, deadline_monotonic: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str]]:
-    """Browser fetch helper, isolated so tests can monkeypatch it."""
-    pool = browser.get_browser(cfg)
-    return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
-
-
-# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
-# The main flow passes one backed by the shared escalation chain
-# (http → browser → mobile; adapters skip the wayback tail); see
-# fetch._make_adapter_fetcher.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
-async def _browser_only_fetch(
-    url: str, *, deadline: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str], FailureReason, str]:
-    """Standalone fallback when no escalating fetcher is injected (direct use)."""
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    html, status, headers = await _browser_fetch_html(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    return html, status, headers, FailureReason.OK, "browser"
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "shopee", "application/x-shopee"
+)
 
 
 async def fetch_shopee(
@@ -428,33 +275,16 @@ async def fetch_shopee(
     browser-only fetch.
     """
 
-    async def _fetch(target: str):
-        if fetch_html is not None:
-            return await fetch_html(target)
-        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
-
-    try:
-        html_src, status, _headers, reason, mode_used = await _fetch(url)
-    except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
-    except Exception as exc:
-        return _failure_envelope(
-            url,
-            _classify_browser_error(exc),
-            f"fetch failed: {type(exc).__name__}: {exc}",
-        )
-
-    if reason != FailureReason.OK:
-        return _failure_envelope(
-            url, reason, f"fetch failed via {mode_used} tier", http_status=status
-        )
-    if not html_src:
-        return _failure_envelope(
-            url,
-            FailureReason.SERVER_ERROR,
-            f"empty body from {mode_used} tier",
-            http_status=status,
-        )
+    got = await _common.acquire_html(
+        url,
+        fetch_html=fetch_html,
+        deadline=deadline,
+        cfg=cfg,
+        fail=partial(_failure_envelope, url),
+    )
+    if isinstance(got, dict):
+        return got
+    html_src, status, _mode_used = got
 
     try:
         products = _parse_product(html_src, url)

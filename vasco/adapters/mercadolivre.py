@@ -41,33 +41,36 @@ domains fall through to the normal fetch path.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
 import unicodedata
-from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from ..fetch import browser
+from . import _common
+from ._common import (
+    HtmlFetcher,
+    brand_name as _brand_name,
+    brl_to_num as _brl_to_num,
+    compact as _compact,
+    condition as _condition,
+    dedup as _dedup,
+    fmt_price_brl as _fmt_price,
+    host as _host,
+    num as _num,
+    rating as _rating,
+    soup as _soup,
+    text as _text,
+)
 
-if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
+if TYPE_CHECKING:
     from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
-
-
-def _soup(html: str) -> BeautifulSoup:
-    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
-    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
-    from bs4 import BeautifulSoup
-
-    return BeautifulSoup(html, "html.parser")
-
 
 _GALLERY_CAP: int = 6
 _MLB_RE = re.compile(r"MLB-?(\d+)", re.IGNORECASE)
@@ -76,10 +79,6 @@ _MLB_RE = re.compile(r"MLB-?(\d+)", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 # URL detection / routing
 # ---------------------------------------------------------------------------
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
 
 
 def is_mercadolivre_url(url: str) -> bool:
@@ -140,33 +139,6 @@ def _search_query(url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _num(value: Any) -> int | float | None:
-    """Normalize a numeric price. JSON-LD gives a number (int or float); strings
-    are parsed as Brazilian-format money. Whole floats collapse to int."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        f = float(value)
-        return int(f) if f.is_integer() else f
-    if isinstance(value, str):
-        return _brl_to_num(value)
-    return None
-
-
-def _brl_to_num(text: Any) -> int | float | None:
-    """Parse a Brazilian money string ("R$ 3.899" → 3899, "357,90" → 357.9,
-    "3.185,31" → 3185.31) to a number. Returns None for non-prices."""
-    s = re.sub(r"[^\d.,]", "", str(text))
-    if not s:
-        return None
-    s = s.replace(".", "").replace(",", ".")
-    try:
-        f = float(s)
-    except ValueError:
-        return None
-    return int(f) if f.is_integer() else f
-
-
 def _product_id(*candidates: Any) -> str | None:
     """First ``MLB<id>`` found across the candidate strings (url, sku, …)."""
     for c in candidates:
@@ -176,70 +148,6 @@ def _product_id(*candidates: Any) -> str | None:
         if m:
             return f"MLB{m.group(1)}"
     return None
-
-
-def _brand_name(value: Any) -> str | None:
-    """Brand is a plain string on PDP JSON-LD but a ``{"name": …}`` object on
-    search JSON-LD."""
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, dict):
-        name = value.get("name")
-        return name.strip() if isinstance(name, str) and name.strip() else None
-    return None
-
-
-def _condition(value: Any) -> str | None:
-    """Map a schema.org ``itemCondition`` URL to new/used/refurbished."""
-    if not isinstance(value, str):
-        return None
-    low = value.lower()
-    if "new" in low:
-        return "new"
-    if "refurb" in low:
-        return "refurbished"
-    if "used" in low or "damaged" in low:
-        return "used"
-    return None
-
-
-def _rating(item: dict[str, Any]) -> tuple[float | None, int | None]:
-    """(ratingValue, ratingCount) from an aggregateRating block."""
-    agg = item.get("aggregateRating")
-    if not isinstance(agg, dict):
-        return None, None
-    try:
-        value = (
-            float(agg["ratingValue"]) if agg.get("ratingValue") is not None else None
-        )
-    except (TypeError, ValueError):
-        value = None
-    count = agg.get("ratingCount")
-    count = int(count) if isinstance(count, (int, float)) else None
-    return value, count
-
-
-def _dedup(urls: Any, limit: int = _GALLERY_CAP) -> list[str]:
-    if isinstance(urls, str):
-        urls = [urls]
-    seen: set[str] = set()
-    out: list[str] = []
-    for u in urls or []:
-        if not isinstance(u, str):
-            continue
-        s = u.strip()
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _compact(d: dict[str, Any]) -> dict[str, Any]:
-    """Drop null / empty values so each product carries only what's known."""
-    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
 
 
 def _jsonld_products(html: str) -> list[dict[str, Any]]:
@@ -397,14 +305,6 @@ def _apply_relevance(
 # ---------------------------------------------------------------------------
 
 
-def _text(soup: BeautifulSoup, selector: str) -> str | None:
-    el = soup.select_one(selector)
-    if not el:
-        return None
-    txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()
-    return txt or None
-
-
 def _sold_quantity(subtitle: str | None) -> int | None:
     """Parse ML's "+5 mil vendidos" / "+100 vendidos" → 5000 / 100."""
     if not subtitle:
@@ -519,7 +419,7 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
         if isinstance(availability, str)
         else None,
         "description": (item.get("description") or "").strip() or None,
-        "images": _dedup(item.get("image")),
+        "images": _dedup(item.get("image"), _GALLERY_CAP),
     }
 
     # Best-effort HTML extras (seller, sold count, installments, original price,
@@ -541,17 +441,6 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
-
-
-def _fmt_price(price: Any, currency: str) -> str:
-    if price is None:
-        return "Sob consulta"
-    if isinstance(price, float) and not price.is_integer():
-        body = f"{price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    else:
-        body = f"{int(price):,}".replace(",", ".")
-    symbol = "R$" if currency in (None, "", "BRL") else currency
-    return f"{symbol} {body}"
 
 
 def _render_markdown(
@@ -593,65 +482,9 @@ def _render_markdown(
 # Fetch + envelope
 # ---------------------------------------------------------------------------
 
-
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="mercadolivre",
-        content_type="application/x-mercadolivre",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
-
-
-def _classify_browser_error(exc: BaseException) -> FailureReason:
-    msg = str(exc).lower()
-    if "timeout" in type(exc).__name__.lower() or "timeout" in msg:
-        return FailureReason.TIMEOUT
-    if any(
-        m in msg for m in ("connection closed", "target closed", "net::err_aborted")
-    ):
-        return FailureReason.BLOCKED_BOT
-    return FailureReason.SERVER_ERROR
-
-
-async def _browser_fetch_html(
-    url: str, *, deadline_monotonic: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str]]:
-    """Browser fetch helper, isolated so tests can monkeypatch it."""
-    pool = browser.get_browser(cfg)
-    return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
-
-
-# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
-# The main flow passes one backed by the shared escalation chain
-# (http → browser → mobile; adapters skip the wayback tail); see
-# fetch._make_adapter_fetcher.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
-async def _browser_only_fetch(
-    url: str, *, deadline: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str], FailureReason, str]:
-    """Standalone fallback when no escalating fetcher is injected (direct use)."""
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    html, status, headers = await _browser_fetch_html(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    return html, status, headers, FailureReason.OK, "browser"
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "mercadolivre", "application/x-mercadolivre"
+)
 
 
 async def fetch_mercadolivre(
@@ -671,33 +504,16 @@ async def fetch_mercadolivre(
     """
     page_type = _page_type(url)
 
-    async def _fetch(target: str):
-        if fetch_html is not None:
-            return await fetch_html(target)
-        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
-
-    try:
-        html_src, status, _headers, reason, mode_used = await _fetch(url)
-    except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
-    except Exception as exc:
-        return _failure_envelope(
-            url,
-            _classify_browser_error(exc),
-            f"fetch failed: {type(exc).__name__}: {exc}",
-        )
-
-    if reason != FailureReason.OK:
-        return _failure_envelope(
-            url, reason, f"fetch failed via {mode_used} tier", http_status=status
-        )
-    if not html_src:
-        return _failure_envelope(
-            url,
-            FailureReason.SERVER_ERROR,
-            f"empty body from {mode_used} tier",
-            http_status=status,
-        )
+    got = await _common.acquire_html(
+        url,
+        fetch_html=fetch_html,
+        deadline=deadline,
+        cfg=cfg,
+        fail=partial(_failure_envelope, url),
+    )
+    if isinstance(got, dict):
+        return got
+    html_src, status, _mode_used = got
 
     try:
         if page_type == "product":

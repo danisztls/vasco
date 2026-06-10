@@ -38,32 +38,28 @@ fetch, since the hub is a stable property of the URL shape (``_is_category_hub``
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from functools import partial
+from typing import Any
 from urllib.parse import urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from ..fetch import browser
-
-if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
-    from bs4 import BeautifulSoup
+from . import _common
+from ._common import (
+    HtmlFetcher,
+    as_int as _as_int,
+    brl_int as _brl_int,
+    dedup as _dedup,
+    host as _host,
+    jsonld_objects as _jsonld_objects,
+    soup as _soup,
+)
 
 log = logging.getLogger(__name__)
-
-
-def _soup(html: str) -> BeautifulSoup:
-    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
-    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
-    from bs4 import BeautifulSoup
-
-    return BeautifulSoup(html, "html.parser")
-
 
 _GALLERY_CAP: int = 6
 
@@ -77,10 +73,6 @@ _VERTICAL_SEGMENTS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # URL detection / routing
 # ---------------------------------------------------------------------------
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
 
 
 def _vertical(url: str) -> str | None:
@@ -164,50 +156,6 @@ def _listing(**kw: Any) -> dict[str, Any]:
     out.update({k: v for k, v in kw.items() if k in _LISTING_FIELDS})
     if out.get("images") and not out.get("image"):
         out["image"] = out["images"][0]
-    return out
-
-
-def _as_int(value: Any) -> int | None:
-    """First integer in `value` ("32m²" → 32, "22948" → 22948, "4 portas" → 4).
-
-    Note: strips a thousands ``.`` so "1.200" → 1200; do NOT use for decimal
-    fields like motorpower ("1.3") — keep those as strings.
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    m = re.search(r"\d[\d.]*", str(value).replace(".", ""))
-    return int(m.group()) if m else None
-
-
-def _brl_int(value: Any) -> int | None:
-    """Parse a BRL price ("R$ 2.200" / "R$ 99.890,00" / 2200) to int reais.
-
-    Returns None for non-prices like "Sob consulta"."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return int(value)
-    s = re.sub(r"[^\d,]", "", str(value)).split(",")[0]  # drop currency, cents
-    return int(s) if s.isdigit() else None
-
-
-def _dedup(urls: Any, limit: int) -> list[str]:
-    if isinstance(urls, str):
-        urls = [urls]
-    seen: set[str] = set()
-    out: list[str] = []
-    for u in urls or []:
-        if not isinstance(u, str):
-            continue
-        s = u.strip()
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-        if len(out) >= limit:
-            break
     return out
 
 
@@ -323,20 +271,6 @@ def _extract_detail_ad(html: str) -> dict[str, Any] | None:
         return None
     ad = data.get("ad") if isinstance(data, dict) else None
     return ad if isinstance(ad, dict) else None
-
-
-def _jsonld_objects(html: str) -> list[dict]:
-    soup = _soup(html)
-    out: list[dict] = []
-    for tag in soup.find_all("script", type="application/ld+json"):
-        if not tag.string:
-            continue
-        try:
-            d = json.loads(tag.string)
-        except json.JSONDecodeError:
-            continue
-        out.extend(d if isinstance(d, list) else [d])
-    return [o for o in out if isinstance(o, dict)]
 
 
 def _jsonld_detail(html: str, url: str, vertical: str) -> dict[str, Any] | None:
@@ -490,65 +424,9 @@ def _render_markdown(listings: list[dict], vertical: str) -> str:
 # Fetch + envelope
 # ---------------------------------------------------------------------------
 
-
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="olx",
-        content_type="application/x-olx",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
-
-
-def _classify_browser_error(exc: BaseException) -> FailureReason:
-    msg = str(exc).lower()
-    if "timeout" in type(exc).__name__.lower() or "timeout" in msg:
-        return FailureReason.TIMEOUT
-    if any(
-        m in msg for m in ("connection closed", "target closed", "net::err_aborted")
-    ):
-        return FailureReason.BLOCKED_BOT
-    return FailureReason.SERVER_ERROR
-
-
-async def _browser_fetch_html(
-    url: str, *, deadline_monotonic: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str]]:
-    """Browser fetch helper, isolated so tests can monkeypatch it."""
-    pool = browser.get_browser(cfg)
-    return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
-
-
-# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
-# The main flow passes one backed by the shared escalation chain
-# (http → browser → mobile; adapters skip the wayback tail); see
-# fetch._make_adapter_fetcher.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
-async def _browser_only_fetch(
-    url: str, *, deadline: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str], FailureReason, str]:
-    """Standalone fallback when no escalating fetcher is injected (direct use)."""
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    html, status, headers = await _browser_fetch_html(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    return html, status, headers, FailureReason.OK, "browser"
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "olx", "application/x-olx"
+)
 
 
 async def fetch_olx(
@@ -584,33 +462,16 @@ async def fetch_olx(
         )
     page_type = _page_type(url)
 
-    async def _fetch(target: str):
-        if fetch_html is not None:
-            return await fetch_html(target)
-        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
-
-    try:
-        html_src, status, _headers, reason, mode_used = await _fetch(url)
-    except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
-    except Exception as exc:
-        return _failure_envelope(
-            url,
-            _classify_browser_error(exc),
-            f"fetch failed: {type(exc).__name__}: {exc}",
-        )
-
-    if reason != FailureReason.OK:
-        return _failure_envelope(
-            url, reason, f"fetch failed via {mode_used} tier", http_status=status
-        )
-    if not html_src:
-        return _failure_envelope(
-            url,
-            FailureReason.SERVER_ERROR,
-            f"empty body from {mode_used} tier",
-            http_status=status,
-        )
+    got = await _common.acquire_html(
+        url,
+        fetch_html=fetch_html,
+        deadline=deadline,
+        cfg=cfg,
+        fail=partial(_failure_envelope, url),
+    )
+    if isinstance(got, dict):
+        return got
+    html_src, status, _mode_used = got
 
     try:
         if page_type == "list":

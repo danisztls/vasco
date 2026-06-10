@@ -27,18 +27,16 @@ Implementation notes:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import statistics
-import time
-from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from ..fetch import browser
+from . import _common
+from ._common import HtmlFetcher
 
 log = logging.getLogger(__name__)
 
@@ -464,79 +462,12 @@ def _render_markdown(products: list[dict[str, Any]], *, query: str | None) -> st
 
 
 # ---------------------------------------------------------------------------
-# Envelope helpers
-# ---------------------------------------------------------------------------
-
-
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="google_shopping",
-        content_type="application/x-google-shopping",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
-
-
-def _classify_browser_error(exc: BaseException) -> FailureReason:
-    msg = str(exc).lower()
-    name = type(exc).__name__.lower()
-    if "timeout" in name or "timeout" in msg:
-        return FailureReason.TIMEOUT
-    if any(
-        m in msg
-        for m in (
-            "connection closed",
-            "target closed",
-            "net::err_aborted",
-        )
-    ):
-        return FailureReason.BLOCKED_BOT
-    return FailureReason.SERVER_ERROR
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-
-async def _browser_fetch_html(
-    url: str, *, deadline_monotonic: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str]]:
-    """Browser fetch helper, isolated so tests can monkeypatch it."""
-    pool = browser.get_browser(cfg)
-    return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
-
-
-# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
-# The main fetch flow passes one backed by the shared escalation chain; Google
-# Shopping's routes are seeded to the browser tier in vasco/strategy.py so the
-# chain starts there (the http tier only ever returns an empty JS shell).
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
-async def _browser_only_fetch(
-    url: str, *, deadline: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str], FailureReason, str]:
-    """Standalone fallback when no escalating fetcher is injected (direct use)."""
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    html, status, headers = await _browser_fetch_html(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    return html, status, headers, FailureReason.OK, "browser"
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "google_shopping", "application/x-google-shopping"
+)
 
 
 async def fetch_google_shopping(
@@ -566,28 +497,12 @@ async def fetch_google_shopping(
             env["warnings"] = ["rewrote_shopping_search_to_udm28"]
         return env
 
-    async def _fetch(target: str):
-        if fetch_html is not None:
-            return await fetch_html(target)
-        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
-
-    try:
-        html_src, status, _headers, reason, mode_used = await _fetch(fetch_url)
-    except asyncio.TimeoutError:
-        return _fail(FailureReason.TIMEOUT, "fetch deadline elapsed")
-    except Exception as exc:
-        reason = _classify_browser_error(exc)
-        return _fail(reason, f"fetch failed: {type(exc).__name__}: {exc}")
-
-    if reason != FailureReason.OK:
-        return _fail(reason, f"fetch failed via {mode_used} tier", http_status=status)
-
-    if not html_src:
-        return _fail(
-            FailureReason.SERVER_ERROR,
-            f"empty body from {mode_used} tier",
-            http_status=status,
-        )
+    got = await _common.acquire_html(
+        fetch_url, fetch_html=fetch_html, deadline=deadline, cfg=cfg, fail=_fail
+    )
+    if isinstance(got, dict):
+        return got
+    html_src, status, _mode_used = got
 
     try:
         offers, filter_counts = _extract_offers(html_src)

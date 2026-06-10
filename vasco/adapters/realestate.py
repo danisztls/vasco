@@ -25,34 +25,32 @@ Supported providers (domain → key):
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
-from ..fetch import browser
-
-if TYPE_CHECKING:  # bs4 imported lazily in _soup() to keep module import cheap
-    from bs4 import BeautifulSoup
+from . import _common
+from ._common import (
+    HtmlFetcher,
+    as_int as _as_int,
+    brl_int as _brl_int,
+    host as _host,
+    jsonld_objects as _jsonld_objects,
+    soup as _soup,
+)
 
 log = logging.getLogger(__name__)
 
-
-def _soup(html: str) -> BeautifulSoup:
-    """Parse HTML; bs4 is imported lazily so importing this adapter (and the
-    whole fetch stack) doesn't pull bs4 until a page is actually parsed."""
-    from bs4 import BeautifulSoup
-
-    return BeautifulSoup(html, "html.parser")
-
-
 _GALLERY_CAP: int = 4
+
+
+def _dedup(urls: Any, limit: int = _GALLERY_CAP) -> list[str]:
+    return _common.dedup(urls, limit)
+
 
 # host suffix → (provider key, display name)
 _PROVIDERS: dict[str, tuple[str, str]] = {
@@ -88,10 +86,6 @@ _VIVAREAL_AMENITIES = {
 # ---------------------------------------------------------------------------
 # URL detection / routing
 # ---------------------------------------------------------------------------
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
 
 
 def _provider_for(url: str) -> tuple[str, str] | None:
@@ -150,64 +144,9 @@ def _listing(**kw: Any) -> dict[str, Any]:
     return out
 
 
-def _as_int(value: Any) -> int | None:
-    """First integer found in `value` (handles "2 quartos", "R$ 1.278", 90.0)."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    m = re.search(r"\d[\d.]*", str(value).replace(".", ""))
-    return int(m.group()) if m else None
-
-
-def _brl_int(value: Any) -> int | None:
-    """Parse a BRL price ("R$ 1.278,00" / 1278 / "1.278") to int reais."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    s = str(value)
-    s = re.sub(r"[^\d,]", "", s).split(",")[0]  # drop currency, cents
-    return int(s) if s.isdigit() else None
-
-
-def _dedup(urls: Any, limit: int = _GALLERY_CAP) -> list[str]:
-    if isinstance(urls, str):
-        urls = [urls]
-    seen: set[str] = set()
-    out: list[str] = []
-    for u in urls or []:
-        if not isinstance(u, str):
-            continue
-        s = u.strip()
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-        if len(out) >= limit:
-            break
-    return out
-
-
 # ---------------------------------------------------------------------------
 # VivaReal (JSON-LD)
 # ---------------------------------------------------------------------------
-
-
-def _jsonld_objects(html: str) -> list[dict]:
-    soup = _soup(html)
-    out: list[dict] = []
-    for tag in soup.find_all("script", type="application/ld+json"):
-        if not tag.string:
-            continue
-        try:
-            d = json.loads(tag.string)
-        except json.JSONDecodeError:
-            continue
-        out.extend(d if isinstance(d, list) else [d])
-    return [o for o in out if isinstance(o, dict)]
 
 
 def _vivareal_condo_fee(*sources: Any) -> int | None:
@@ -374,67 +313,9 @@ def _render_markdown(listings: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="realestate",
-        content_type="application/x-realestate",
-    )
-
-
-def _failure_envelope(
-    url: str, reason: FailureReason, message: str, *, http_status: int = 0
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
-
-
-def _classify_browser_error(exc: BaseException) -> FailureReason:
-    msg = str(exc).lower()
-    if "timeout" in type(exc).__name__.lower() or "timeout" in msg:
-        return FailureReason.TIMEOUT
-    if any(
-        m in msg for m in ("connection closed", "target closed", "net::err_aborted")
-    ):
-        return FailureReason.BLOCKED_BOT
-    return FailureReason.SERVER_ERROR
-
-
-async def _browser_fetch_html(
-    url: str, *, deadline_monotonic: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str]]:
-    """Browser fetch helper, isolated so tests can monkeypatch it."""
-    pool = browser.get_browser(cfg)
-    return await pool.fetch(url, deadline_monotonic=deadline_monotonic)
-
-
-# An injected HTML fetcher: returns (html, status, headers, reason, mode_used).
-# The main fetch flow passes one backed by the shared escalation chain
-# (http → browser → mobile; adapters skip the wayback tail); see fetch._do_fetch.
-HtmlFetcher = Callable[
-    [str], Awaitable[tuple[str, int, dict[str, str], FailureReason, str]]
-]
-
-
-async def _browser_only_fetch(
-    url: str, *, deadline: float, cfg: Any | None
-) -> tuple[str, int, dict[str, str], FailureReason, str]:
-    """Standalone fallback when no escalating fetcher is injected.
-
-    Used when the adapter is called directly (e.g. in tests); the production
-    path injects the shared escalation chain instead.
-    """
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
-    html, status, headers = await _browser_fetch_html(
-        url, deadline_monotonic=deadline_monotonic, cfg=cfg
-    )
-    return html, status, headers, FailureReason.OK, "browser"
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "realestate", "application/x-realestate"
+)
 
 
 async def fetch_realestate(
@@ -460,34 +341,16 @@ async def fetch_realestate(
     provider, display = info
     page_type = _page_type(url, provider)
 
-    async def _fetch(target: str):
-        if fetch_html is not None:
-            return await fetch_html(target)
-        return await _browser_only_fetch(target, deadline=deadline, cfg=cfg)
-
-    try:
-        html_src, status, _headers, reason, mode_used = await _fetch(url)
-    except asyncio.TimeoutError:
-        return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
-    except Exception as exc:
-        return _failure_envelope(
-            url,
-            _classify_browser_error(exc),
-            f"fetch failed: {type(exc).__name__}: {exc}",
-        )
-
-    if reason != FailureReason.OK:
-        return _failure_envelope(
-            url, reason, f"fetch failed via {mode_used} tier", http_status=status
-        )
-
-    if not html_src:
-        return _failure_envelope(
-            url,
-            FailureReason.SERVER_ERROR,
-            f"empty body from {mode_used} tier",
-            http_status=status,
-        )
+    got = await _common.acquire_html(
+        url,
+        fetch_html=fetch_html,
+        deadline=deadline,
+        cfg=cfg,
+        fail=partial(_failure_envelope, url),
+    )
+    if isinstance(got, dict):
+        return got
+    html_src, status, _mode_used = got
 
     try:
         listings = _PARSERS[(provider, page_type)](html_src, url, url)

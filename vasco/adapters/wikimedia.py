@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from .. import envelope
 from ..cache import WIKIMEDIA_PROJECTS
 from ..errors import FailureReason
+from . import _common
 
 log = logging.getLogger(__name__)
 
@@ -440,29 +441,9 @@ def _word_count(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _base_envelope(url: str, *, http_status: int = 0) -> dict[str, Any]:
-    return envelope.base_envelope(
-        url_requested=url,
-        url_normalized=url,
-        url_final=url,
-        http_status=http_status,
-        mode_used="wikimedia",
-        content_type="text/wikimedia",
-    )
-
-
-def _failure_envelope(
-    url: str,
-    reason: FailureReason,
-    message: str,
-    *,
-    http_status: int = 0,
-) -> dict[str, Any]:
-    return envelope.failure_envelope(
-        base=_base_envelope(url, http_status=http_status),
-        reason=reason,
-        message=message,
-    )
+_base_envelope, _failure_envelope = _common.envelope_builders(
+    "wikimedia", "text/wikimedia"
+)
 
 
 def _success_envelope(

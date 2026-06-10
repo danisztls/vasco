@@ -3,9 +3,16 @@ exist. The template is hand-maintained (CLAUDE.md asks contributors to keep it
 in sync with the *Cfg dataclasses); this fails CI if a section or field is
 renamed/removed in code but left dangling in the template.
 
-The template is fully commented out, so we parse it ourselves: section headers
-are `# name:` (one space after the hash), fields are `#   name: ...` (the YAML
-2-space indent). Prose header lines start with a capital letter and are ignored.
+The template is fully commented out, so we parse it ourselves by indent level:
+top-level sections are `# name:` (one space after the hash), their fields are
+`#   name: ...` (the YAML 2-space indent). Adapter sections nest one level
+deeper under `# adapters:` — `#   <adapter>:` then `#     <field>: ...`. Prose
+header/comment lines don't match the lowercase `key:` shape and are ignored.
+
+(`tests/test_config.py::test_template_shows_real_defaults` is the complementary
+guard: it de-comments the template and round-trips it to ``Config()``, proving
+the shown *values* are the real defaults. Unknown keys are ignored by
+``load_config``, so that test can't catch a dangling key — this one does.)
 """
 
 from __future__ import annotations
@@ -25,8 +32,13 @@ def test_template_keys_are_real_config_fields() -> None:
         name: {f.name for f in fields(cls)}
         for name, cls in config_mod._SECTIONS.items()
     }
+    adapter_fields = {
+        name: {f.name for f in fields(cls)}
+        for name, cls in config_mod._ADAPTER_SECTIONS.items()
+    }
 
     current_section: str | None = None
+    current_adapter: str | None = None
     seen_a_field = False
     for raw in _TEMPLATE.read_text().splitlines():
         if not raw.lstrip().startswith("#"):
@@ -38,9 +50,26 @@ def test_template_keys_are_real_config_fields() -> None:
             continue
         key = match.group(1)
         if indent <= 1:  # '# section:'
-            assert key in section_fields, f"template references unknown section '{key}'"
+            assert key in section_fields or key == "adapters", (
+                f"template references unknown section '{key}'"
+            )
             current_section = key
-        else:  # '#   field:'
+            current_adapter = None
+        elif current_section == "adapters" and indent <= 3:  # '#   <adapter>:'
+            assert key in adapter_fields, (
+                f"template references unknown adapter 'adapters.{key}'"
+            )
+            current_adapter = key
+        elif current_section == "adapters":  # '#     <field>:' under an adapter
+            assert current_adapter is not None, (
+                f"adapter field '{key}' before any adapter"
+            )
+            assert key in adapter_fields[current_adapter], (
+                f"template field 'adapters.{current_adapter}.{key}' is not a field of "
+                f"the {current_adapter} config dataclass"
+            )
+            seen_a_field = True
+        else:  # '#   field:' of a normal section
             assert current_section is not None, f"field '{key}' before any section"
             assert key in section_fields[current_section], (
                 f"template field '{current_section}.{key}' is not a field of the "

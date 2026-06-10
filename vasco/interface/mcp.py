@@ -103,7 +103,7 @@ async def search(
 ) -> list[dict[str, str]]:
     assert _cfg is not None  # populated by lifespan before tools run
     started = _monotonic()
-    eff_backend = backend or _cfg.search.default_backend
+    eff_backend = backend or "ddg"
 
     async def _local() -> list[dict[str, str]]:
         searcher = _search.get_searcher(eff_backend, cfg=_cfg)
@@ -139,7 +139,7 @@ async def search(
                 "tool": "search",
                 "outcome": "empty",
                 "query": query,
-                "backend": backend or _cfg.search.default_backend,
+                "backend": eff_backend,
                 "site": site,
                 "duration_ms": duration_ms,
             },
@@ -148,7 +148,7 @@ async def search(
         _record_success(
             "search",
             query=query,
-            backend=backend or _cfg.search.default_backend,
+            backend=eff_backend,
             site=site,
             result_count=len(rows),
             duration_ms=duration_ms,

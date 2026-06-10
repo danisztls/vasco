@@ -612,8 +612,9 @@ async def fetch_google_shopping(
 
     from .. import io as io_mod
 
-    currency = getattr(getattr(cfg, "shopping", None), "currency", None) or "BRL"
-    language = getattr(getattr(cfg, "shopping", None), "language", None) or "pt-BR"
+    shopping = getattr(getattr(cfg, "adapters", None), "shopping", None)
+    currency = getattr(shopping, "currency", None) or "BRL"
+    language = getattr(shopping, "language", None) or "pt-BR"
 
     quality: dict[str, Any] = {
         "products": products,

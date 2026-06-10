@@ -468,7 +468,7 @@ async def test_fetch_google_shopping_no_rewrite_warning_for_search(
 async def test_fetch_google_shopping_currency_from_cfg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from vasco.config import Config, ShoppingCfg
+    from vasco.config import AdaptersCfg, Config, ShoppingCfg
 
     html_src = FIXTURE_PATH.read_text()
 
@@ -477,7 +477,9 @@ async def test_fetch_google_shopping_currency_from_cfg(
 
     monkeypatch.setattr(google_shopping, "_browser_fetch_html", fake_browser)
 
-    cfg = Config(shopping=ShoppingCfg(currency="USD", language="en-US"))
+    cfg = Config(
+        adapters=AdaptersCfg(shopping=ShoppingCfg(currency="USD", language="en-US"))
+    )
     env = await google_shopping.fetch_google_shopping(
         "https://www.google.com/search?udm=28&q=kindle",
         deadline=10.0,

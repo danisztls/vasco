@@ -126,7 +126,7 @@ def search(
     from vasco import telemetry as _telemetry
 
     cfg = _config.load_config()
-    effective_backend = backend or cfg.search.default_backend
+    effective_backend = backend or "ddg"
     started = _monotonic()
     try:
         searcher = _search.get_searcher(effective_backend, cfg=cfg)

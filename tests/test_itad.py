@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from vasco.adapters import itad as I
-from vasco.config import Config, SteamCfg
+from vasco.config import AdaptersCfg, Config, SteamCfg
 
 # Schema-shaped ITAD payloads (from the official OpenAPI spec v2).
 _LOW_PAYLOAD = [
@@ -56,7 +56,7 @@ _HISTORY_PAYLOAD = [
 def test_resolve_api_key_env_then_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VASCO_ITAD_API_KEY", raising=False)
     monkeypatch.delenv("ITAD_API_KEY", raising=False)
-    cfg = Config(steam=SteamCfg(itad_api_key="from-cfg"))
+    cfg = Config(adapters=AdaptersCfg(steam=SteamCfg(itad_api_key="from-cfg")))
     assert I.resolve_api_key(cfg) == "from-cfg"
     monkeypatch.setenv("VASCO_ITAD_API_KEY", "from-env")
     assert I.resolve_api_key(cfg) == "from-env"
@@ -67,7 +67,9 @@ def test_resolve_api_key_env_then_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_country_follows_steam(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VASCO_ITAD_API_KEY", raising=False)
     # currency region always follows steam.country (no separate itad knob)
-    assert I._country(Config(steam=SteamCfg(country="de"))) == "DE"
+    assert (
+        I._country(Config(adapters=AdaptersCfg(steam=SteamCfg(country="de")))) == "DE"
+    )
     assert I._country(Config()) == "BR"  # default
     assert I._country(None) == "BR"
 
@@ -150,7 +152,10 @@ def test_steam_price_history_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(I, "_history", _history)
 
     out = asyncio.run(
-        I.steam_price_history("1145360", cfg=Config(steam=SteamCfg(itad_api_key="k")))
+        I.steam_price_history(
+            "1145360",
+            cfg=Config(adapters=AdaptersCfg(steam=SteamCfg(itad_api_key="k"))),
+        )
     )
     assert out is not None
     assert out["itad_id"] == "GID-123"
@@ -166,7 +171,9 @@ def test_steam_price_history_game_not_on_itad(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(I, "_lookup", _lookup)
     out = asyncio.run(
-        I.steam_price_history("999", cfg=Config(steam=SteamCfg(itad_api_key="k")))
+        I.steam_price_history(
+            "999", cfg=Config(adapters=AdaptersCfg(steam=SteamCfg(itad_api_key="k")))
+        )
     )
     assert out is None
 
@@ -177,6 +184,9 @@ def test_steam_price_history_swallows_errors(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(I, "_lookup", _lookup)
     out = asyncio.run(
-        I.steam_price_history("1145360", cfg=Config(steam=SteamCfg(itad_api_key="k")))
+        I.steam_price_history(
+            "1145360",
+            cfg=Config(adapters=AdaptersCfg(steam=SteamCfg(itad_api_key="k"))),
+        )
     )
     assert out is None

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import shopify as S
-from vasco.config import Config, ShopifyCfg
+from vasco.config import AdaptersCfg, Config, ShopifyCfg
 from vasco.errors import AdapterParseError, FailureReason
 
 FX = Path(__file__).parent / "fixtures" / "shopify"
@@ -55,7 +55,7 @@ def test_is_shopify_url(url: str, expected: bool) -> None:
 
 
 def test_is_shopify_url_honors_cfg_domains() -> None:
-    cfg = Config(shopify=ShopifyCfg(domains=("mystore.com",)))
+    cfg = Config(adapters=AdaptersCfg(shopify=ShopifyCfg(domains=("mystore.com",))))
     assert S.is_shopify_url("https://mystore.com/products/x", cfg) is True
     assert S.is_shopify_url("https://www.mystore.com/collections/all", cfg) is True
     assert S.is_shopify_url("https://other.com/products/x", cfg) is False
@@ -81,7 +81,7 @@ def test_is_shopify_candidate(url: str, expected: bool) -> None:
 
 
 def test_candidate_disabled_when_autodetect_off() -> None:
-    cfg = Config(shopify=ShopifyCfg(autodetect=False))
+    cfg = Config(adapters=AdaptersCfg(shopify=ShopifyCfg(autodetect=False)))
     assert S.is_shopify_candidate("https://example.com/products/foo", cfg) is False
 
 
@@ -113,7 +113,7 @@ def test_claim_product_passthrough() -> None:
 
 
 def test_claim_collection_with_page_and_limit() -> None:
-    cfg = Config(shopify=ShopifyCfg(collection_limit=100))
+    cfg = Config(adapters=AdaptersCfg(shopify=ShopifyCfg(collection_limit=100)))
     pt, ep, kind = S._claim("https://shop.com/collections/jeans?page=3", cfg)
     assert pt == "collection" and kind == S._COLLECTION
     assert "/collections/jeans/products.json" in ep

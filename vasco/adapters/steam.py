@@ -97,8 +97,8 @@ def is_steam_url(url: str) -> bool:
 
 
 def _region(cfg: Any | None) -> tuple[str, str]:
-    """``(cc, language)`` from ``cfg.steam`` — Steam's storefront region knobs."""
-    steam = getattr(cfg, "steam", None)
+    """``(cc, language)`` from ``cfg.adapters.steam`` — Steam's storefront region knobs."""
+    steam = getattr(getattr(cfg, "adapters", None), "steam", None)
     cc = str(getattr(steam, "country", "BR") or "BR").lower()
     lang = str(getattr(steam, "language", "portuguese") or "portuguese").lower()
     return cc, lang

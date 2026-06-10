@@ -129,8 +129,9 @@ def _get_credentials(cfg: Any | None) -> tuple[str, str]:
     username = ""
     password = ""
     if cfg is not None:
-        username = getattr(getattr(cfg, "wikimedia", None), "username", "") or ""
-        password = getattr(getattr(cfg, "wikimedia", None), "password", "") or ""
+        wiki = getattr(getattr(cfg, "adapters", None), "wikimedia", None)
+        username = getattr(wiki, "username", "") or ""
+        password = getattr(wiki, "password", "") or ""
     return username.strip(), password.strip()
 
 

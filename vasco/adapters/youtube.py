@@ -194,11 +194,8 @@ def _ytdlp_base_opts(cfg: Any | None) -> dict[str, Any]:
     }
     browser = ""
     if cfg is not None:
-        browser = (
-            (getattr(getattr(cfg, "youtube", None), "cookies_from_browser", "") or "")
-            .strip()
-            .lower()
-        )
+        yt = getattr(getattr(cfg, "adapters", None), "youtube", None)
+        browser = (getattr(yt, "cookies_from_browser", "") or "").strip().lower()
     if browser:
         opts["cookiesfrombrowser"] = (browser,)
     return opts

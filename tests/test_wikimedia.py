@@ -126,9 +126,11 @@ def test_has_credentials_false_without_config() -> None:
 
 
 def test_has_credentials_true() -> None:
-    from vasco.config import Config, WikimediaCfg
+    from vasco.config import AdaptersCfg, Config, WikimediaCfg
 
-    cfg = Config(wikimedia=WikimediaCfg(username="user", password="pass"))
+    cfg = Config(
+        adapters=AdaptersCfg(wikimedia=WikimediaCfg(username="user", password="pass"))
+    )
     assert wikimedia.has_credentials(cfg) is True
 
 

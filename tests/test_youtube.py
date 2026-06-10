@@ -339,9 +339,11 @@ def test_ytdlp_base_opts_disables_extractor_retries() -> None:
 
 
 def test_ytdlp_base_opts_passes_cookies_from_browser() -> None:
-    from vasco.config import Config, YouTubeCfg
+    from vasco.config import AdaptersCfg, Config, YouTubeCfg
 
-    cfg = Config(youtube=YouTubeCfg(cookies_from_browser="Firefox"))
+    cfg = Config(
+        adapters=AdaptersCfg(youtube=YouTubeCfg(cookies_from_browser="Firefox"))
+    )
     opts = youtube._ytdlp_base_opts(cfg)
     # yt-dlp wants a tuple, lowercased
     assert opts["cookiesfrombrowser"] == ("firefox",)

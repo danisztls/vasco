@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import steam as S
-from vasco.config import Config, SteamCfg
+from vasco.config import AdaptersCfg, Config, SteamCfg
 from vasco.errors import AdapterParseError, FailureReason
 
 FX = Path(__file__).parent / "fixtures" / "steam"
@@ -336,7 +336,7 @@ def test_fetch_search_empty_is_no_results() -> None:
 
 
 def test_region_honors_cfg() -> None:
-    cfg = Config(steam=SteamCfg(country="US", language="english"))
+    cfg = Config(adapters=AdaptersCfg(steam=SteamCfg(country="US", language="english")))
     captured: list[str] = []
 
     async def _fetch(target: str):

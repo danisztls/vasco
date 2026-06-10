@@ -474,11 +474,12 @@ async def fetch_shopee(
 
     from .. import io as io_mod
 
+    shopee = getattr(getattr(cfg, "adapters", None), "shopee", None)
     currency = next(
         (p["currency"] for p in products if p.get("currency")),
-        getattr(getattr(cfg, "shopee", None), "currency", None) or "BRL",
+        getattr(shopee, "currency", None) or "BRL",
     )
-    language = getattr(getattr(cfg, "shopee", None), "language", None) or "pt-BR"
+    language = getattr(shopee, "language", None) or "pt-BR"
     markdown = _render_markdown(products, currency=currency)
     title = products[0].get("title") if products else "Shopee"
     return envelope.success_envelope(

@@ -20,7 +20,7 @@ Because the endpoints are identical on every Shopify store, this adapter is
 match tiers feed the dispatcher:
 
 - ``is_shopify_url(url, cfg)`` — *certain*: a ``*.myshopify.com`` host, or a
-  registered domain in the known set (built-in seeds ∪ ``cfg.shopify.domains`` ∪
+  registered domain in the known set (built-in seeds ∪ ``cfg.adapters.shopify.domains`` ∪
   domains confirmed by a prior probe), on a claimable path.
 - ``is_shopify_candidate(url, cfg)`` — *probe-worthy*: an unknown domain on a
   product/collection page shape. The dispatcher runs ``fetch_shopify(probe=True)``;
@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 
 
 # Domains known to be Shopify out of the box (no config required). Extended at
-# runtime by cfg.shopify.domains and by positive probe results.
+# runtime by cfg.adapters.shopify.domains and by positive probe results.
 _SEED_DOMAINS: frozenset[str] = frozenset({"simwooddenim.com"})
 
 # Shopify attribution params appended to product URLs by the predictive-search /
@@ -86,7 +86,8 @@ def _reset_for_tests() -> None:
 
 def _static_known(cfg: Any | None) -> frozenset[str]:
     """Domains known to be Shopify *without* a probe: built-in seeds + config."""
-    extra = getattr(getattr(cfg, "shopify", None), "domains", ()) or ()
+    shopify = getattr(getattr(cfg, "adapters", None), "shopify", None)
+    extra = getattr(shopify, "domains", ()) or ()
     return _SEED_DOMAINS | {str(d).lower() for d in extra}
 
 
@@ -167,7 +168,8 @@ _SUGGEST = "suggest"  # {"resources": {"results": {"products": [...]}}}
 
 
 def _collection_limit(cfg: Any | None) -> int:
-    n = getattr(getattr(cfg, "shopify", None), "collection_limit", 250)
+    shopify = getattr(getattr(cfg, "adapters", None), "shopify", None)
+    n = getattr(shopify, "collection_limit", 250)
     try:
         return max(1, min(250, int(n)))
     except (TypeError, ValueError):
@@ -277,7 +279,9 @@ def is_shopify_candidate(
     plain fetch. So a domain is probed at most once across all processes."""
     if not url or not _candidate_shape(url):
         return False
-    if not getattr(getattr(cfg, "shopify", None), "autodetect", True):
+    if not getattr(
+        getattr(getattr(cfg, "adapters", None), "shopify", None), "autodetect", True
+    ):
         return False
     dom = cache_mod.registered_domain(url)
     if dom in _static_known(cfg):  # already certain → not a *candidate*

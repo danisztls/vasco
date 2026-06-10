@@ -728,7 +728,7 @@ async def fetch_mercadolivre(
     filtered: dict[str, int] = {}
     demoted = 0
     if page_type == "search" and products:
-        ml_cfg = getattr(cfg, "mercadolivre", None)
+        ml_cfg = getattr(getattr(cfg, "adapters", None), "mercadolivre", None)
         if getattr(ml_cfg, "relevance_filter", True):
             query = _search_query(url)
             if query:
@@ -753,11 +753,12 @@ async def fetch_mercadolivre(
     else:
         warnings = []
 
+    shopping = getattr(getattr(cfg, "adapters", None), "shopping", None)
     currency = next(
         (p["currency"] for p in products if p.get("currency")),
-        getattr(getattr(cfg, "shopping", None), "currency", None) or "BRL",
+        getattr(shopping, "currency", None) or "BRL",
     )
-    language = getattr(getattr(cfg, "shopping", None), "language", None) or "pt-BR"
+    language = getattr(shopping, "language", None) or "pt-BR"
     markdown = _render_markdown(products, page_type=page_type, currency=currency)
     title = (
         products[0].get("title")

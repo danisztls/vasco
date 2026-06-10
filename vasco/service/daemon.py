@@ -120,7 +120,7 @@ class Dispatcher:
             kw = _pick(params, _MAP_KEYS)
             return await asyncio.to_thread(lambda: list(_map.map_site(url, **kw)))
         if op == protocol.OP_SEARCH:
-            backend = params.get("backend") or self.cfg.search.default_backend
+            backend = params.get("backend") or "ddg"
             searcher = get_searcher(backend, cfg=self.cfg)
             query = params["query"]
             kw = _pick(params, _SEARCH_KEYS)

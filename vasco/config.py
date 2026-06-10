@@ -10,14 +10,12 @@ import yaml
 
 @dataclass(frozen=True)
 class SearchCfg:
-    default_backend: str = "ddg"
     region: str = "us-en"
     max_results: int = 10
 
 
 @dataclass(frozen=True)
 class FetchCfg:
-    default_mode: str = "auto"
     workers: int = 4
     ttl_seconds: int = 86400
     failure_ttl_seconds: int = 900
@@ -181,6 +179,23 @@ class SteamCfg:
 
 
 @dataclass(frozen=True)
+class AdaptersCfg:
+    """Per-source content-adapter knobs, grouped so site-scraping config stays
+    separate from the global infrastructure sections. Each sub-section is the
+    adapter's own dataclass; YAML nests under ``adapters:`` and env vars use the
+    ``VASCO_ADAPTERS_<SUB>_<FIELD>`` prefix."""
+
+    shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
+    aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
+    mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
+    shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
+    shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
+    steam: SteamCfg = field(default_factory=SteamCfg)
+    youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
+    wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
+
+
+@dataclass(frozen=True)
 class ServiceCfg:
     """vascod (`vasco serve`) coordination knobs. Single-flight is pure upside;
     per-domain pacing (rate limit + concurrency cap) is a politeness/anti-bot
@@ -202,36 +217,35 @@ class Config:
     browser: BrowserCfg = field(default_factory=BrowserCfg)
     cache: CacheCfg = field(default_factory=CacheCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
-    youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
-    wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
     quality: QualityCfg | None = field(default_factory=QualityCfg)
     answer: AnswerCfg = field(default_factory=AnswerCfg)
-    shopping: ShoppingCfg = field(default_factory=ShoppingCfg)
-    aliexpress: AliExpressCfg = field(default_factory=AliExpressCfg)
-    mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
-    shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
-    shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
-    steam: SteamCfg = field(default_factory=SteamCfg)
+    adapters: AdaptersCfg = field(default_factory=AdaptersCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
 
 
+# Global (top-level) sections. Adapter sections live under `adapters` (nested),
+# handled separately in load_config so they don't mix with infrastructure config.
 _SECTIONS: dict[str, type] = {
     "search": SearchCfg,
     "fetch": FetchCfg,
     "browser": BrowserCfg,
     "cache": CacheCfg,
     "logging": LoggingCfg,
-    "youtube": YouTubeCfg,
-    "wikimedia": WikimediaCfg,
     "quality": QualityCfg,
     "answer": AnswerCfg,
+    "service": ServiceCfg,
+}
+
+# Per-source content-adapter sections, nested under the `adapters` key.
+_ADAPTER_SECTIONS: dict[str, type] = {
     "shopping": ShoppingCfg,
     "aliexpress": AliExpressCfg,
     "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
     "shopee": ShopeeCfg,
     "steam": SteamCfg,
-    "service": ServiceCfg,
+    "youtube": YouTubeCfg,
+    "wikimedia": WikimediaCfg,
 }
 
 
@@ -296,7 +310,9 @@ def load_config() -> Config:
     """Load config from $XDG_CONFIG_HOME/vasco/config.yaml then apply VASCO_* env overrides.
 
     Missing file is not an error: defaults are returned. Env var pattern is
-    VASCO_<SECTION>_<FIELD>, e.g. VASCO_FETCH_WORKERS=8.
+    VASCO_<SECTION>_<FIELD>, e.g. VASCO_FETCH_WORKERS=8; adapter sections nest
+    under `adapters`, so their env prefix is VASCO_ADAPTERS_<SUB>_<FIELD>,
+    e.g. VASCO_ADAPTERS_STEAM_COUNTRY=US.
     """
     cfg = Config()
     path = _config_path()
@@ -318,6 +334,21 @@ def load_config() -> Config:
             current = _apply_overrides(current, section_data)
         current = _apply_env(current, name)
         sections[name] = current
+
+    # Adapter sections, nested under the `adapters` key. Env vars use the
+    # compound prefix VASCO_ADAPTERS_<SUB>_<FIELD>, mirroring the config path.
+    adapters_data = data.get("adapters", {})
+    if not isinstance(adapters_data, dict):
+        adapters_data = {}
+    adapter_sections: dict[str, Any] = {}
+    for sub in _ADAPTER_SECTIONS:
+        current = getattr(cfg.adapters, sub)
+        sub_data = adapters_data.get(sub, {})
+        if isinstance(sub_data, dict) and sub_data:
+            current = _apply_overrides(current, sub_data)
+        current = _apply_env(current, f"adapters_{sub}")
+        adapter_sections[sub] = current
+    sections["adapters"] = AdaptersCfg(**adapter_sections)
 
     # quality: None / false in YAML disables scoring entirely.
     quality_raw = data.get("quality")

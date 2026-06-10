@@ -45,24 +45,26 @@ _HISTORY_LIMIT = 10
 
 def resolve_api_key(cfg: Any | None) -> str:
     """ITAD key from env (in-process convenience) then config
-    (``steam.itad_api_key``). Mirrors :func:`vasco.summarize.resolve_api_key` —
-    env only reaches in-process tools (CLI), so vascod must read the key from
+    (``adapters.steam.itad_api_key``). Mirrors :func:`vasco.summarize.resolve_api_key`
+    — env only reaches in-process tools (CLI), so vascod must read the key from
     config. Presence of a key is the *only* enable switch."""
     env_key = os.environ.get("VASCO_ITAD_API_KEY") or os.environ.get("ITAD_API_KEY")
     if env_key:
         return env_key
     try:
-        return getattr(getattr(cfg, "steam", None), "itad_api_key", "") or ""
+        steam = getattr(getattr(cfg, "adapters", None), "steam", None)
+        return getattr(steam, "itad_api_key", "") or ""
     except Exception:
         return ""
 
 
 def _country(cfg: Any | None) -> str:
     """ITAD ``country`` (uppercased ISO alpha-2) — always the Steam region
-    (``steam.country``, default ``BR``), so the historical low's currency matches
-    the displayed store price. Not a separate knob: a mismatched currency in one
-    envelope has no sane use."""
-    c = (getattr(getattr(cfg, "steam", None), "country", "BR") or "BR").strip()
+    (``adapters.steam.country``, default ``BR``), so the historical low's currency
+    matches the displayed store price. Not a separate knob: a mismatched currency
+    in one envelope has no sane use."""
+    steam = getattr(getattr(cfg, "adapters", None), "steam", None)
+    c = (getattr(steam, "country", "BR") or "BR").strip()
     return (c or "BR").upper()
 
 

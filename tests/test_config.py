@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from vasco.config import BrowserCfg, Config, YouTubeCfg, load_config
+from vasco.config import (
+    AdaptersCfg,
+    BrowserCfg,
+    Config,
+    SteamCfg,
+    YouTubeCfg,
+    load_config,
+)
 
 
 def _write_yaml(tmp_path: Path, body: str) -> Path:
@@ -30,20 +37,21 @@ def test_missing_file_returns_defaults() -> None:
     cfg = load_config()
     assert cfg == Config()
     assert cfg.fetch.workers == 4
-    assert cfg.youtube.cookies_from_browser == ""
+    assert cfg.adapters.youtube.cookies_from_browser == ""
 
 
 def test_reads_yaml_overrides(tmp_path: Path) -> None:
     _write_yaml(
         tmp_path,
-        "fetch:\n  workers: 7\n  deadline_seconds: 22.5\nyoutube:\n  cookies_from_browser: firefox\n",
+        "fetch:\n  workers: 7\n  deadline_seconds: 22.5\n"
+        "adapters:\n  youtube:\n    cookies_from_browser: firefox\n",
     )
     cfg = load_config()
     assert cfg.fetch.workers == 7
     assert cfg.fetch.deadline_seconds == 22.5
-    assert cfg.youtube.cookies_from_browser == "firefox"
+    assert cfg.adapters.youtube.cookies_from_browser == "firefox"
     # Untouched sections keep defaults
-    assert cfg.search.default_backend == "ddg"
+    assert cfg.search.max_results == 10
 
 
 def test_malformed_yaml_falls_back_to_defaults(tmp_path: Path) -> None:
@@ -67,9 +75,26 @@ def test_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_youtube_cookies_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VASCO_YOUTUBE_COOKIES_FROM_BROWSER", "chrome")
+    monkeypatch.setenv("VASCO_ADAPTERS_YOUTUBE_COOKIES_FROM_BROWSER", "chrome")
     cfg = load_config()
-    assert cfg.youtube == YouTubeCfg(cookies_from_browser="chrome")
+    assert cfg.adapters.youtube == YouTubeCfg(cookies_from_browser="chrome")
+
+
+def test_adapters_nested_yaml_and_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # YAML nests under `adapters`; env uses the VASCO_ADAPTERS_<SUB>_<FIELD> prefix.
+    _write_yaml(
+        tmp_path, "adapters:\n  steam:\n    country: US\n    language: english\n"
+    )
+    cfg = load_config()
+    assert cfg.adapters.steam == SteamCfg(country="US", language="english")
+
+    monkeypatch.setenv("VASCO_ADAPTERS_STEAM_COUNTRY", "PT")
+    cfg = load_config()
+    # Env overrides the YAML value; the untouched field keeps its YAML value.
+    assert cfg.adapters.steam.country == "PT"
+    assert cfg.adapters.steam.language == "english"
 
 
 def test_unknown_section_is_ignored(tmp_path: Path) -> None:
@@ -108,3 +133,33 @@ def test_browser_user_data_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("VASCO_BROWSER_USER_DATA_DIR", "/tmp/vasco-profile")
     cfg = load_config()
     assert cfg.browser.user_data_dir == "/tmp/vasco-profile"
+
+
+def test_template_shows_real_defaults(tmp_path: Path) -> None:
+    """config.yaml.template must display the *real* dataclass defaults: de-commenting
+    every config line and loading it must round-trip to Config(). Guards the "show
+    defaults" contract against drift when a field is added/renamed."""
+    import re
+
+    import yaml
+
+    template = Path(__file__).resolve().parents[1] / "config.yaml.template"
+    cfg_line = re.compile(r"^\s*(?:[a-z_][a-z0-9_]*\s*:|- )")
+    lines = []
+    for raw in template.read_text(encoding="utf-8").splitlines():
+        if not raw.startswith("#"):
+            continue  # blank separator lines
+        body = raw[1:]
+        if body.startswith(" "):
+            body = body[1:]
+        if cfg_line.match(body):  # a config line, not prose
+            lines.append(body)
+    decommented = "\n".join(lines) + "\n"
+
+    # Sanity: every section is present (catches a section silently dropped).
+    parsed = yaml.safe_load(decommented)
+    assert set(parsed) >= set(Config().__dataclass_fields__)
+    assert set(parsed["adapters"]) == set(AdaptersCfg().__dataclass_fields__)
+
+    _write_yaml(tmp_path, decommented)
+    assert load_config() == Config()

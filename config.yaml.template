@@ -1,115 +1,95 @@
 # Vasco configuration template.
 # Copy to $XDG_CONFIG_HOME/vasco/config.yaml and uncomment what you need.
-# Env vars (VASCO_<SECTION>_<FIELD>=value) override anything set here.
-# CLI flags (where present) override env vars.
+# Every key below shows its built-in default value; the trailing comment lists the
+# allowed/possible values. Uncommenting a line as-is is a no-op (it equals the default).
+#
+# Precedence: CLI flag > env var > this file > built-in default.
+# Env vars are VASCO_<SECTION>_<FIELD>=value (e.g. VASCO_FETCH_WORKERS=8). Adapter
+# sections nest under `adapters`, so their env prefix is VASCO_ADAPTERS_<SUB>_<FIELD>
+# (e.g. VASCO_ADAPTERS_STEAM_COUNTRY=US).
 
 # search:
-#   default_backend: ddg        # "ddg" (DuckDuckGo metasearch)
-#   region: us-en
-#   max_results: 10
+#   region: us-en              # DuckDuckGo region code (e.g. us-en, br-pt, uk-en)
+#   max_results: 10            # results returned per search
 
 # fetch:
-#   default_mode: auto          # "auto" | "http" | "browser" | "wayback"
-#   workers: 4
-#   ttl_seconds: 86400
-#   failure_ttl_seconds: 900
-#   deadline_seconds: 30.0
+#   workers: 4                 # thread-pool size for fetch_many
+#   ttl_seconds: 86400         # cache TTL for successful fetches (seconds)
+#   failure_ttl_seconds: 900   # base negative-cache TTL; scaled per failure reason
+#   deadline_seconds: 30.0     # hard per-fetch upper bound / kill-switch (seconds)
 #   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# browser:
-#   headless: true
-#   locale: en-US
-#   spoof_os: ""                # Camoufox OS persona (windows/macos/linux); empty = match the host OS
-#   prewarm: false              # MCP-only: warm Camoufox at server startup
-#   user_data_dir: ""           # persistent profile dir; non-empty enables cookie persistence
-#   block_ads: true             # abort third-party ad/tracker requests to cut page weight → faster renders (default on)
-#   network_blocklist_paths:    # hostlists for ad/tracker blocking; empty = bundled conservative default
-#     - ~/.config/vasco/netblock.txt
-#     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt
-#   clear_cookies_on_wall: true # on a login wall (e.g. MercadoLivre account-verification), clear that
-#                               #   domain's cookies + retry once (default on; only acts on a persistent
-#                               #   user_data_dir; domain-scoped so other sites' cookies are preserved)
+# browser:                      # all resolved server-side by `vasco browser-server`
+#   headless: true             # true | false
+#   locale: en-US              # browser UI locale
+#   spoof_os: ""               # "" = match host | windows | macos | linux
+#   prewarm: false             # MCP-only: warm Camoufox at server startup
+#   user_data_dir: ""          # persistent profile dir; "" = ephemeral (no cookies)
+#   block_ads: true            # abort third-party ad/tracker requests (faster renders)
+#   network_blocklist_paths: []  # local files or remote URLs; [] = bundled default
+#   clear_cookies_on_wall: true  # on a login wall, clear that domain's cookies + retry once
 #   # --- Cloudflare Turnstile solving (opt-in; all off = today's behavior) ---
-#   solve_turnstile: false      # click the challenge checkbox + wait for clearance
-#   virtual_display: false      # launch a real (non-headless) Firefox in Xvfb; REQUIRES Xvfb
-#                               #   installed on the host (e.g. `pacman -S xorg-server-xvfb`)
-#   humanize: true              # human-like (Bezier) cursor movement; needed to click the checkbox
-#   disable_coop: true          # allow clicking the cross-origin Turnstile iframe
-#   block_images: false         # skip image loading to cut the headful render cost
-#   window: [1280, 720]         # fixed window size; omit for a random one
-#   # NOTE: solving needs a persistent user_data_dir so the cf_clearance cookie is
-#   # reused across fetches once obtained. Set virtual_display+humanize+disable_coop
-#   # +solve_turnstile together; they're a unit.
-#   # --- Manual (human-in-the-loop) solving via VNC, for challenges the auto-solve
-#   # can't clear. When on, vasco runs its own sized Xvfb + x11vnc (loopback) and,
-#   # on an unsolvable challenge, fires notify-send + holds the page open so you can
-#   # connect a VNC viewer and solve by hand. `vasco browser-solve <url>` triggers it.
-#   manual_solve: false         # enable the notify + VNC hold fallback
-#   manual_solve_timeout: 60.0  # seconds to hold for a human before resuming as normal
-#   vnc_display_size: [1280, 720]
-#   vnc_display: ":99"          # managed Xvfb display (auto-falls back if taken)
-#   vnc_port: 5900              # x11vnc loopback port → connect to localhost:5900
+#   solve_turnstile: false     # auto-click the challenge checkbox + wait for clearance
+#   virtual_display: false     # launch a real (non-headless) Firefox in Xvfb; REQUIRES Xvfb
+#   humanize: false            # human-like (Bezier) cursor movement; needed to click
+#   disable_coop: false        # allow clicking the cross-origin Turnstile iframe
+#   block_images: false        # skip image loading to cut headful render cost
+#   window: []                 # fixed [width, height]; [] = Camoufox random
+#   # --- Manual (human-in-the-loop) solving via VNC, for what auto-solve can't clear ---
+#   manual_solve: false        # notify-send + hold the page open for a human via VNC
+#   manual_solve_timeout: 60.0 # seconds to hold for a human before resuming as normal
+#   vnc_display_size: [1280, 720]  # managed Xvfb framebuffer [width, height]
+#   vnc_display: ":99"         # managed Xvfb display number (auto-fallback if taken)
+#   vnc_port: 5900             # x11vnc loopback port -> connect to localhost:5900
 
 # cache:
-#   path: ""                    # empty → $XDG_DATA_HOME/vasco/cache.sqlite
+#   path: ""                   # "" = $XDG_DATA_HOME/vasco/cache.sqlite
 
 # logging:
-#   enabled: true
-#   path: ""                    # empty → $XDG_DATA_HOME/vasco/logs
+#   enabled: true              # true | false (logs successes too)
+#   path: ""                   # "" = $XDG_DATA_HOME/vasco/logs
 
-# youtube:
-#   cookies_from_browser: ""    # "" disables; e.g. "firefox", "chrome", "brave"
+# quality:                      # set this section to `false` (or remove it) to disable scoring
+#   blocklist_paths: []        # local files or remote URLs (plain-domain or uBlacklist); [] = bundled
+#   detect_paywall: true       # flag pages served by known paywall/metering vendors
+#   paywall_vendor_paths: []   # vendor fingerprint lists (local/remote); [] = bundled default
 
-# wikimedia:
-#   username: ""                # Wikimedia Enterprise account; or VASCO_WIKIMEDIA_USERNAME
-#   password: ""                # or VASCO_WIKIMEDIA_PASSWORD
-#                               # Sign up free at https://dashboard.enterprise.wikimedia.com/signup/
-#                               # Without credentials, falls back to the free REST API (all languages, no cap)
-
-# quality:                       # remove or set to `false` to disable scoring entirely
-#   blocklist_paths:            # local files or remote URLs (plain-domain or uBlacklist format)
-#     - ~/.config/vasco/blocklist.txt
-#     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt
-#   detect_paywall: true        # flag pages served by known paywall/metering vendors (default on)
-#   paywall_vendor_paths:       # vendor fingerprint lists (local or remote); empty = bundled default
-#     - ~/.config/vasco/paywall_vendors.txt
-
-# answer:                        # LLM endpoint for the `answer` command (fetch + LLM answer over a page)
-#   model: deepseek-v4-flash
+# answer:                       # LLM endpoint for the `answer` command (fetch + LLM answer over a page)
+#   model: deepseek-v4-flash   # any model id available on the endpoint
 #   base_url: https://api.deepseek.com/v1   # any OpenAI-compatible chat endpoint
-#   api_key: ""                 # or set DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+#   api_key: ""                # or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
 
-# aliexpress:                    # AliExpress adapter (search cards + detail/reviews)
-#   currency: BRL               # label stamped on the envelope
-#   language: pt_BR             # AliExpress locale code (underscore); drives the reviews endpoint
-#   country: BR
-#   reviews_page_size: 6        # top reviews fetched per product page from feedback.aliexpress.com
-#                               # needs the browser tier with a warm/cleared persistent profile
+# service:                      # vascod (`vasco serve`) coordination knobs
+#   single_flight: true        # collapse concurrent identical fetches into one
+#   rate_limit_rps: 1.0        # max network fetch starts/sec per domain; 0 = off
+#   max_concurrent_per_domain: 2  # max simultaneous in-flight fetches per domain; 0 = unlimited
 
-# mercadolivre:                  # MercadoLivre adapter (search + product)
-#   relevance_filter: true      # relevance-sort search results so ad-placement off-keyword items sink
-#   drop_off_query: false       # true = hard-drop off-keyword results (loses synonyms); false = demote only
-#   min_query_token_coverage: 1 # when dropping: min distinct query tokens a result must match (1 = zero-keyword)
-
-# shopify:                       # generic Shopify adapter (product/collection/search via platform JSON)
-#   domains: []                 # extra registered domains to always treat as Shopify (myshopify.com auto)
-#   autodetect: true            # probe unknown product/collection URLs; fall through to normal fetch on a miss
-#   collection_limit: 250       # products.json page size cap (Shopify hard-caps at 250)
-
-# shopee:                        # Shopee BR adapter (product pages via the Product JSON-LD spine)
-#   currency: BRL               # label stamped on the envelope
-#   language: pt-BR             # label stamped on the envelope
-#                               # product pages only; search/category carry no embeddable structured data
-
-# steam:                         # Steam store adapter (app pages + search via store JSON APIs)
-#   country: BR                 # Steam storefront `cc` — sets the price currency (e.g. BR → BRL)
-#   language: portuguese        # Steam storefront `l` — locale of descriptions/genres
-#   itad_api_key: ""            # IsThereAnyDeal key (or VASCO_ITAD_API_KEY) → historical-price enrichment
-#                               # on app pages. The only ITAD switch: set = enabled, empty = off.
-#                               # Currency follows `country`; recent price-log depth is fixed.
-
-# service:                          # vascod (`vasco serve`) coordination knobs
-#   single_flight: true            # collapse concurrent identical fetches into one (default on)
-#   rate_limit_rps: 1.0            # max network fetch starts/sec per registered domain; 0 disables
-#   max_concurrent_per_domain: 2  # max simultaneous in-flight fetches per registered domain; 0 = unlimited
-#                                  # both pace before the fetch deadline starts, so queue wait is free
+# adapters:                     # per-source content adapters (env: VASCO_ADAPTERS_<SUB>_<FIELD>)
+#   shopping:                   # Google Shopping (labels only; parser is PT-BR)
+#     currency: BRL            # label stamped on the envelope
+#     language: pt-BR          # label stamped on the envelope
+#   aliexpress:
+#     currency: BRL            # label stamped on the envelope
+#     language: pt_BR          # AliExpress locale code (underscore); drives the reviews endpoint
+#     country: BR              # reviews endpoint country
+#     reviews_page_size: 6     # top reviews fetched per product page
+#   mercadolivre:
+#     relevance_filter: true   # relevance-sort search results so ad-placement off-keyword items sink
+#     drop_off_query: false    # true = hard-drop off-keyword (loses synonyms); false = demote only
+#     min_query_token_coverage: 1  # when dropping: min distinct query tokens a result must match
+#   shopify:                    # generic Shopify (product/collection/search via platform JSON)
+#     domains: []              # extra registered domains to always treat as Shopify (myshopify.com auto)
+#     autodetect: true         # probe unknown product/collection URLs; fall through on a miss
+#     collection_limit: 250    # products.json page-size cap (Shopify hard-caps at 250)
+#   shopee:                     # Shopee BR (product pages via Product JSON-LD)
+#     currency: BRL            # label stamped on the envelope
+#     language: pt-BR          # label stamped on the envelope
+#   steam:                      # Steam store (app pages + search via store JSON APIs)
+#     country: BR              # Steam storefront cc — sets the price currency (BR -> BRL)
+#     language: portuguese     # Steam storefront l — locale of descriptions/genres
+#     itad_api_key: ""         # IsThereAnyDeal key (or VASCO_ITAD_API_KEY); "" = off. Currency follows `country`
+#   youtube:
+#     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...
+#   wikimedia:                  # "" = anonymous free REST API (all langs, no cap)
+#     username: ""             # Wikimedia Enterprise account (or VASCO_ADAPTERS_WIKIMEDIA_USERNAME)
+#     password: ""             # (or VASCO_ADAPTERS_WIKIMEDIA_PASSWORD)

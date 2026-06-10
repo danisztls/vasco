@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from vasco.adapters import mercadolivre as M
-from vasco.config import Config, MercadolivreCfg
+from vasco.config import AdaptersCfg, Config, MercadolivreCfg
 from vasco.errors import AdapterParseError
 
 FX = Path(__file__).parent / "fixtures" / "mercadolivre"
@@ -405,7 +405,9 @@ async def test_fetch_search_demotes_off_query_by_default() -> None:
 
 async def test_fetch_search_drop_off_query_via_cfg() -> None:
     html = _search_html(("Caderno A5", "10"), ("Notebook Dell Inspiron", "3000"))
-    cfg = Config(mercadolivre=MercadolivreCfg(drop_off_query=True))
+    cfg = Config(
+        adapters=AdaptersCfg(mercadolivre=MercadolivreCfg(drop_off_query=True))
+    )
 
     async def fake_fetch_html(_url: str):
         return html, 200, {}, M.FailureReason.OK, "browser"
@@ -420,7 +422,9 @@ async def test_fetch_search_drop_off_query_via_cfg() -> None:
 
 async def test_fetch_search_relevance_filter_disabled() -> None:
     html = _search_html(("Caderno A5", "10"), ("Notebook Dell", "3000"))
-    cfg = Config(mercadolivre=MercadolivreCfg(relevance_filter=False))
+    cfg = Config(
+        adapters=AdaptersCfg(mercadolivre=MercadolivreCfg(relevance_filter=False))
+    )
 
     async def fake_fetch_html(_url: str):
         return html, 200, {}, M.FailureReason.OK, "browser"

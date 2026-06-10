@@ -11,8 +11,10 @@ Two page types are claimed:
 
 - **App** (``/app/<id>``) → the storefront ``appdetails`` API is the spine
   (price/genres/metacritic/release/platforms), enriched **best-effort** by the
-  public ``appreviews`` summary and the live ``GetNumberOfCurrentPlayers`` count.
-  The three calls run concurrently; only ``appdetails`` can fail the fetch.
+  public ``appreviews`` summary, the live ``GetNumberOfCurrentPlayers`` count,
+  and — when an ITAD key is configured — IsThereAnyDeal historical pricing
+  (all-time low + recent price log; see :mod:`vasco.adapters.itad`). The calls
+  run concurrently; only ``appdetails`` can fail the fetch.
 - **Search** (``/search/?term=``) → the ``storesearch`` API returns a clean list
   of apps with price/metascore/platforms.
 
@@ -38,6 +40,7 @@ from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
+from . import itad
 
 log = logging.getLogger(__name__)
 
@@ -295,6 +298,23 @@ def _merge_players(product: dict[str, Any], result: Any) -> None:
             product["player_count"] = count
 
 
+def _merge_itad(product: dict[str, Any], result: Any) -> None:
+    """Fold ITAD price history into ``product`` (best-effort — ``result`` is the
+    dict from :func:`itad.steam_price_history`, ``None``, or a gather exception):
+    ``historical_low`` (all-time-low deal), ``price_history`` (recent cuts), and
+    the ITAD game URL."""
+    if not isinstance(result, dict):
+        return
+    low = result.get("historical_low")
+    if isinstance(low, dict) and low:
+        product["historical_low"] = low
+    history = result.get("price_history")
+    if isinstance(history, list) and history:
+        product["price_history"] = history
+    if isinstance(result.get("itad_url"), str):
+        product["itad_url"] = result["itad_url"]
+
+
 def _summary_from_fetch(result: Any, *, key: str) -> Any:
     """Extract ``json(body)[key]`` from a ``gather`` result, swallowing every
     failure (exception, non-OK fetch, bad JSON) — enrichment is optional."""
@@ -396,6 +416,13 @@ def _render_app(p: dict[str, Any]) -> str:
         facts.append(rv)
     if p.get("player_count") is not None:
         facts.append(f"{p['player_count']:,} playing now")
+    low = p.get("historical_low")
+    if isinstance(low, dict) and low.get("price") is not None:
+        cur = low.get("currency") or p.get("currency") or ""
+        s = f"all-time low {cur} {low['price']:,.2f}".strip()
+        if low.get("date"):
+            s += f" ({low['date']})"
+        facts.append(s)
     if p.get("genres"):
         facts.append(", ".join(p["genres"]))
     if p.get("release_date"):
@@ -492,14 +519,22 @@ def _success_envelope(
 
 
 async def _fetch_app(
-    url: str, app_id: str, cc: str, lang: str, fetch_html: HtmlFetcher
+    url: str,
+    app_id: str,
+    cc: str,
+    lang: str,
+    fetch_html: HtmlFetcher,
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
-    # appdetails is the spine; reviews + players are best-effort. Run all three
-    # concurrently — only the spine can fail the fetch.
-    details, reviews, players = await asyncio.gather(
+    # appdetails is the spine; reviews, players, and ITAD price history are all
+    # best-effort. Run them concurrently — only the spine can fail the fetch.
+    # `steam_price_history` returns None with no network when no ITAD key is set,
+    # so it's free to schedule unconditionally.
+    details, reviews, players, itad_res = await asyncio.gather(
         fetch_html(_appdetails_url(app_id, cc, lang)),
         fetch_html(_appreviews_url(app_id)),
         fetch_html(_players_url(app_id)),
+        itad.steam_price_history(app_id, cfg=cfg),
         return_exceptions=True,
     )
 
@@ -545,6 +580,7 @@ async def _fetch_app(
 
     _merge_reviews(product, reviews)
     _merge_players(product, players)
+    _merge_itad(product, itad_res)
 
     return _success_envelope(
         url,
@@ -615,7 +651,9 @@ async def fetch_steam(
 
     ``appdetails``/``storesearch``/``appreviews``/players are obtained via
     ``fetch_html`` (the shared escalation chain). ``deadline`` is honored by the
-    injected fetcher's own budget.
+    injected fetcher's own budget. App pages are additionally enriched with ITAD
+    historical pricing when an ITAD key is configured (best-effort; see
+    :mod:`vasco.adapters.itad`).
     """
     claim = _claim(url)
     if claim is None:  # defensive — dispatch only calls us on a claimable URL
@@ -630,4 +668,4 @@ async def fetch_steam(
     cc, lang = _region(cfg)
     if page_type == "search":
         return await _fetch_search(url, key, cc, lang, fetch_html)
-    return await _fetch_app(url, key, cc, lang, fetch_html)
+    return await _fetch_app(url, key, cc, lang, fetch_html, cfg)

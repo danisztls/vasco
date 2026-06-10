@@ -104,6 +104,9 @@
 # steam:                         # Steam store adapter (app pages + search via store JSON APIs)
 #   country: BR                 # Steam storefront `cc` — sets the price currency (e.g. BR → BRL)
 #   language: portuguese        # Steam storefront `l` — locale of descriptions/genres
+#   itad_api_key: ""            # IsThereAnyDeal key (or VASCO_ITAD_API_KEY) → historical-price enrichment
+#                               # on app pages. The only ITAD switch: set = enabled, empty = off.
+#                               # Currency follows `country`; recent price-log depth is fixed.
 
 # service:                          # vascod (`vasco serve`) coordination knobs
 #   single_flight: true            # collapse concurrent identical fetches into one (default on)

@@ -17,6 +17,18 @@ def _fx(name: str) -> str:
     return (FX / name).read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _no_itad(monkeypatch: pytest.MonkeyPatch):
+    """Keep Steam tests hermetic: stub the ITAD enrichment off by default so an
+    ambient VASCO_ITAD_API_KEY never makes app fetches hit the network."""
+
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(S.itad, "steam_price_history", _none)
+    yield
+
+
 # --- routing ----------------------------------------------------------------
 
 
@@ -222,6 +234,43 @@ def test_fetch_app_enrichment_failure_is_best_effort() -> None:
     assert p["price"] == 73.99
     assert "review_score_desc" not in p
     assert "player_count" not in p
+
+
+def test_fetch_app_folds_itad_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _itad(appid: str, *, cfg=None, **k):
+        assert appid == "1145360"
+        return {
+            "itad_id": "GID",
+            "itad_url": "https://isthereanydeal.com/game/hades/info/",
+            "historical_low": {
+                "price": 19.74,
+                "currency": "BRL",
+                "cut": 73,
+                "date": "2023-11-21",
+            },
+            "price_history": [{"date": "2024-11-27", "price": 22.19, "cut": 70}],
+            "currency": "BRL",
+        }
+
+    monkeypatch.setattr(S.itad, "steam_price_history", _itad)
+    env = asyncio.run(
+        S.fetch_steam(
+            "https://store.steampowered.com/app/1145360/Hades/",
+            fetch_html=_app_fetcher(),
+        )
+    )
+    p = env["quality"]["products"][0]
+    assert p["historical_low"]["price"] == 19.74
+    assert p["price_history"][0]["date"] == "2024-11-27"
+    assert p["itad_url"].endswith("/hades/info/")
+    assert "all-time low BRL 19.74 (2023-11-21)" in env["markdown"]
+
+
+def test_merge_itad_ignores_non_dicts() -> None:
+    p: dict = {"title": "x"}
+    S._merge_itad(p, None)
+    S._merge_itad(p, RuntimeError("boom"))
+    assert p == {"title": "x"}
 
 
 def test_fetch_app_success_false_is_not_found() -> None:

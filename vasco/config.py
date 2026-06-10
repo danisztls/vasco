@@ -170,10 +170,14 @@ class ShopeeCfg:
 class SteamCfg:
     """Steam store adapter knobs. `country`/`language` are Steam's storefront
     region selectors (`cc`/`l`): they set the price currency and the locale of
-    descriptions/genres returned by the JSON APIs. Defaults target Brazil."""
+    descriptions/genres returned by the JSON APIs. Defaults target Brazil.
+    `itad_api_key` (or `VASCO_ITAD_API_KEY`) is the **only** switch for
+    IsThereAnyDeal historical-price enrichment on app pages — set it to enable,
+    leave empty to disable (the currency follows `country`)."""
 
     country: str = "BR"
     language: str = "portuguese"
+    itad_api_key: str = ""
 
 
 @dataclass(frozen=True)

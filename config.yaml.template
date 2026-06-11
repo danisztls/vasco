@@ -49,6 +49,13 @@
 #   enabled: true              # true | false (logs successes too)
 #   path: ""                   # "" = $XDG_DATA_HOME/vasco/logs
 
+# ocr:                          # Tesseract OCR fallback for image-only (scanned) PDF pages
+#   enabled: true              # true | false (false = pdftotext only, today's behavior)
+#   language: eng              # tesseract -l code(s), e.g. "eng+por" (traineddata must be installed)
+#   dpi: 200                   # pdftoppm rasterization DPI (300 = better, slower)
+#   max_pages: 50              # cap pages OCR'd per document (cost/latency guard)
+#   min_page_chars: 16         # a page's native text below this ⇒ OCR that page
+
 # quality:                      # set this section to `false` (or remove it) to disable scoring
 #   blocklist_paths: []        # local files or remote URLs (plain-domain or uBlacklist); [] = bundled
 #   detect_paywall: true       # flag pages served by known paywall/metering vendors

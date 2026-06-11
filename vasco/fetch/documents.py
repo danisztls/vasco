@@ -8,6 +8,7 @@ applies here too.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -74,8 +75,27 @@ async def _fetch_pdf(
     phases.attempts += 1
 
     t_parse = time.monotonic()
+    ocr_cfg = getattr(cfg, "ocr", None)
+    ocr_opts = (
+        pdf.OcrOptions(
+            enabled=ocr_cfg.enabled,
+            language=ocr_cfg.language,
+            dpi=ocr_cfg.dpi,
+            max_pages=ocr_cfg.max_pages,
+            min_page_chars=ocr_cfg.min_page_chars,
+        )
+        if ocr_cfg is not None
+        else pdf.OcrOptions()
+    )
     try:
-        text, meta = pdf.pdf_to_text(body)
+        # OCR can run several subprocesses for seconds; offload so it never blocks
+        # the event loop, and pass the deadline so the page loop stops in time.
+        text, meta = await asyncio.to_thread(
+            pdf.pdf_to_text,
+            body,
+            ocr=ocr_opts,
+            deadline_monotonic=deadline_monotonic,
+        )
     except FileNotFoundError as exc:
         phases.parse_ms += _ms_since(t_parse)
         return _failure_envelope(

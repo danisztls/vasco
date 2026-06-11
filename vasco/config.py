@@ -77,6 +77,21 @@ class LoggingCfg:
 
 
 @dataclass(frozen=True)
+class OcrCfg:
+    """OCR fallback for image-only PDF pages (Tesseract). A page whose native
+    `pdftotext` text is below `min_page_chars` is rasterized and OCR'd; digital
+    pages are kept verbatim, so a fully digital PDF is untouched."""
+
+    enabled: bool = True  # OCR fallback for image-only PDF pages
+    language: str = (
+        "eng"  # tesseract -l code(s), e.g. "eng+por" (needs traineddata installed)
+    )
+    dpi: int = 200  # pdftoppm rasterization DPI (300 = best/slow)
+    max_pages: int = 50  # cap pages OCR'd (cost/latency guard)
+    min_page_chars: int = 16  # a page's native text below this ⇒ OCR that page
+
+
+@dataclass(frozen=True)
 class YouTubeCfg:
     cookies_from_browser: str = ""  # "" disables; e.g. "firefox", "chrome", "brave"
 
@@ -219,6 +234,7 @@ class Config:
     browser: BrowserCfg = field(default_factory=BrowserCfg)
     cache: CacheCfg = field(default_factory=CacheCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
+    ocr: OcrCfg = field(default_factory=OcrCfg)
     quality: QualityCfg | None = field(default_factory=QualityCfg)
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     adapters: AdaptersCfg = field(default_factory=AdaptersCfg)
@@ -233,6 +249,7 @@ _SECTIONS: dict[str, type] = {
     "browser": BrowserCfg,
     "cache": CacheCfg,
     "logging": LoggingCfg,
+    "ocr": OcrCfg,
     "quality": QualityCfg,
     "answer": AnswerCfg,
     "service": ServiceCfg,

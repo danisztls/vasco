@@ -40,6 +40,11 @@ def test_is_mercadolivre_url(url: str, expected: bool) -> None:
     "url,expected",
     [
         ("https://www.mercadolivre.com.br/notebook-asus/p/MLB43417665", "product"),
+        # /up/MLBU<id> "unified product" detail page (not a search/listing).
+        (
+            "https://www.mercadolivre.com.br/almofada-lombar/up/MLBU1490047005",
+            "product",
+        ),
         ("https://produto.mercadolivre.com.br/MLB-123-foo", "product"),
         ("https://articulo.mercadolivre.com.br/MLB-456", "product"),
         ("https://lista.mercadolivre.com.br/notebook", "search"),
@@ -74,6 +79,8 @@ def test_product_id() -> None:
     assert M._product_id("MLB-123-foo") == "MLB123"
     assert M._product_id(None, "MLB99") == "MLB99"
     assert M._product_id("no-id-here") is None
+    # /up/ "unified product" id keeps its MLBU prefix (not collapsed to MLB…).
+    assert M._product_id("https://x/up/MLBU1490047005") == "MLBU1490047005"
 
 
 def test_brand_name_handles_str_and_object() -> None:
@@ -206,6 +213,23 @@ async def test_fetch_product_reports_single_product() -> None:
     assert env["quality"]["page_type"] == "product"
     assert env["quality"]["result_count"] == 1
     assert env["quality"]["products"][0]["product_id"] == "MLB43417665"
+    assert env["quality"]["products"][0]["seller"] == "Loja oficial Asus"
+
+
+async def test_fetch_up_product_routes_to_product_parser() -> None:
+    """The /up/MLBU<id> "unified product" form is a detail page — it must route to
+    the product parser (rich PDP fields), not the search/listing parser."""
+    html = _fx("product.html")
+    up_url = "https://www.mercadolivre.com.br/almofada-lombar/up/MLBU1490047005"
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(up_url, fetch_html=fake_fetch_html)
+
+    assert env["quality"]["page_type"] == "product"
+    assert env["quality"]["result_count"] == 1
+    # PDP-only field the search shape never produces, proving the product path ran.
     assert env["quality"]["products"][0]["seller"] == "Loja oficial Asus"
 
 

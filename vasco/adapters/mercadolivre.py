@@ -15,8 +15,9 @@ scraping ``poly-card`` markup brittle):
   MercadoLivre's premium-ad placement (off-keyword products injected into the
   native order) sinks to the bottom; off-keyword items are demoted by default and
   dropped only when ``mercadolivre.drop_off_query`` is set.
-- **Product/detail pages** (``.../p/MLB<id>``, ``produto.mercadolivre.com.br/
-  MLB-<id>-...``) embed a single rich ``Product`` (offers with shippingDetails,
+- **Product/detail pages** (``.../p/MLB<id>``, the ``.../up/MLBU<id>`` "unified
+  product" form, ``produto.mercadolivre.com.br/MLB-<id>-...``) embed a single
+  rich ``Product`` (offers with shippingDetails,
   itemCondition, aggregateRating, brand, sku, color, description). A few
   display-only extras JSON-LD omits — seller, sold-count, installments,
   struck-through original price, the spec table — are lifted best-effort from the
@@ -73,7 +74,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _GALLERY_CAP: int = 6
-_MLB_RE = re.compile(r"MLB-?(\d+)", re.IGNORECASE)
+# MLB<digits> item ids plus the MLBU<digits> "unified product" family id (the
+# /up/ form). The optional letter is captured so MLBU1490047005 stays distinct
+# from a hypothetical MLB1490047005 — it is never collapsed away.
+_MLB_RE = re.compile(r"MLB-?([A-Z]?\d+)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -91,15 +95,16 @@ def is_mercadolivre_url(url: str) -> bool:
 def _page_type(url: str) -> str:
     """Classify a URL as a 'search' (listing) or 'product' (detail) page.
 
-    Product surfaces: the ``produto.`` host, the catalog ``/p/MLB<id>`` form, and
-    bare item URLs ending in an ``MLB-<id>`` slug. Everything else (``lista.``,
-    ``/ofertas``, category browse, homepage) is a search/listing page.
+    Product surfaces: the ``produto.`` host, the catalog ``/p/MLB<id>`` form, the
+    ``/up/MLBU<id>`` "unified product" form, and bare item URLs ending in an
+    ``MLB-<id>`` slug. Everything else (``lista.``, ``/ofertas``, category browse,
+    homepage) is a search/listing page.
     """
     host = _host(url)
     path = (urlsplit(url).path or "/").lower()
     if host.startswith("produto."):
         return "product"
-    if "/p/mlb" in path:
+    if "/p/mlb" in path or "/up/mlb" in path:  # /p/MLB… catalog, /up/MLBU… unified
         return "product"
     if re.search(r"/mlb-?\d+", path):
         return "product"

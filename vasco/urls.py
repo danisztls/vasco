@@ -65,6 +65,33 @@ _TRACKING_EXACT = {
     "scm",
 }
 
+# Host-scoped tracking params. The global _TRACKING_EXACT list above is
+# deliberately conservative — generic names (`page`, `sid`, `tab_id`, …) are
+# load-bearing on *some* site, so they're kept globally. But the same name can be
+# unambiguous tracking on one specific site while content-bearing elsewhere;
+# these rules drop such params only on the matching host, mirroring
+# _REDIRECT_RULES' host-scoping below (and ClearURLs' per-provider catalog). Each
+# rule is (host_regex, frozenset_of_param_names); matched against the decoded key.
+_HOST_TRACKING_RULES: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
+    # MercadoLibre/Livre: the catalog/product id lives in the path
+    # (/p/MLB…, /up/MLBU…), so `pdp_filters` (offer selector) and `sid` (click
+    # source, e.g. =bookmarks) only carry click context — fold onto one cache
+    # row. (ClearURLs #1249.) Matches the international TLDs (.com.br/.com.ar/…).
+    (
+        re.compile(r"^(?:[a-z0-9-]+\.)*mercadoli(?:vre|bre)\.com(?:\.[a-z]{2})?$"),
+        frozenset({"pdp_filters", "sid"}),
+    ),
+    # OLX Brazil homefeed / recommendation click context. Pagination on OLX is
+    # `?o=N` (not `page`), so `page=home` here is a click-source tag, droppable
+    # on this host only — globally `page` stays (it's pagination everywhere else).
+    (
+        re.compile(r"^(?:[a-z0-9-]+\.)*olx\.com\.br$"),
+        frozenset(
+            {"rec", "custom_tag", "gallery_id", "tab_id", "is_fallback", "page", "lis"}
+        ),
+    ),
+)
+
 # AMP query params stripped to fold AMP variants into the canonical row.
 # `?amp=1` is the vivareal / generic-CMS form; `?output=amp` is Twitter/X
 # and several news sites. We only drop `output` when its value is the
@@ -137,6 +164,14 @@ def _is_tracking_param(key: str) -> bool:
     if key in _TRACKING_EXACT:
         return True
     return any(key.startswith(p) for p in _TRACKING_PREFIXES)
+
+
+def _host_tracking_params(host: str) -> frozenset[str]:
+    """Params to drop for `host` via the host-scoped rules (empty if none match)."""
+    for host_re, params in _HOST_TRACKING_RULES:
+        if host_re.match(host):
+            return params
+    return frozenset()
 
 
 def _is_amp_param(key: str, value: str) -> bool:
@@ -321,7 +356,9 @@ def normalize_url(url: str) -> str:
       - Sort query params alphabetically (preserving order of repeated keys)
       - Drop a curated denylist of tracking params (utm_*/mtm_* prefixes plus
         ad-click, social-share, email, and Alibaba spm/scm IDs — see
-        _TRACKING_EXACT/_TRACKING_PREFIXES)
+        _TRACKING_EXACT/_TRACKING_PREFIXES), plus host-scoped tracking params
+        for sites where a generic name is unambiguous tracking (MercadoLivre
+        pdp_filters/sid, OLX homefeed tags — see _HOST_TRACKING_RULES)
       - Drop AMP markers: ``?amp=`` (any AMP-ish value) and ``?output=amp``;
         strip ``/amp/`` segments and ``/amp`` suffix from the path
       - Leave percent-encoded characters alone
@@ -366,6 +403,7 @@ def normalize_url(url: str) -> str:
 
     query = ""
     if parts.query:
+        host_drop = _host_tracking_params(host)
         tokens = [tok for tok in parts.query.split("&") if tok != ""]
         triples: list[tuple[str, str, bool]] = []
         for tok in tokens:
@@ -376,7 +414,7 @@ def normalize_url(url: str) -> str:
                 k, v = tok, ""
                 has_eq = False
             k_dec = unquote(k)
-            if _is_tracking_param(k_dec):
+            if _is_tracking_param(k_dec) or k_dec in host_drop:
                 continue
             if _is_amp_param(k_dec, unquote(v)):
                 continue

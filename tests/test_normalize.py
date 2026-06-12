@@ -74,6 +74,36 @@ from vasco.urls import normalize_url, registered_domain
             "https://example.com/foo?b=2&a=1&c=3",
             "https://example.com/foo?a=1&b=2&c=3",
         ),
+        # Host-scoped tracking params (_HOST_TRACKING_RULES): names too generic
+        # for the global denylist, but unambiguous tracking on a specific site.
+        # MercadoLivre: pdp_filters (offer selector) + sid (click source) drop;
+        # the catalog id stays in the path, the fragment is dropped as usual.
+        (
+            "https://www.mercadolivre.com.br/almofada-anatomica-encosto-suporte-lombar-copespuma-theva/up/MLBU1490047005?pdp_filters=item_id%3AMLB1048202138&sid=bookmarks#polycard_client=bookmark&wid=MLB1048202138&sid=bookmarks",
+            "https://www.mercadolivre.com.br/almofada-anatomica-encosto-suporte-lombar-copespuma-theva/up/MLBU1490047005",
+        ),
+        # Sibling international TLD (.com.ar) matches the same rule.
+        (
+            "https://www.mercadolibre.com.ar/up/MLAU3834371722?pdp_filters=item_id%3AMLA123",
+            "https://www.mercadolibre.com.ar/up/MLAU3834371722",
+        ),
+        # OLX: all seven homefeed/recommendation click tags drop.
+        (
+            "https://es.olx.com.br/norte-do-espirito-santo/autos-e-pecas/carros-vans-e-utilitarios/fiat-doblo-elx-1-6-16v-4-5p-2003-1509445101?rec=h&custom_tag=homefeed&gallery_id=user_profile_last_search&tab_id=tudo&is_fallback=false&page=home&lis=homefeed%7CNA%7Cuser_profile_last_search%7C0",
+            "https://es.olx.com.br/norte-do-espirito-santo/autos-e-pecas/carros-vans-e-utilitarios/fiat-doblo-elx-1-6-16v-4-5p-2003-1509445101",
+        ),
+        # OLX `page` is a click tag (OLX paginates with ?o=), but a real search
+        # param on the same host survives — the rule drops only listed names.
+        (
+            "https://www.olx.com.br/imoveis?q=apartamento&page=home",
+            "https://www.olx.com.br/imoveis?q=apartamento",
+        ),
+        # NEGATIVE: host-scoping doesn't leak — page/sid/pdp_filters are all KEPT
+        # on a non-OLX/ML host (only sorted), preserving global conservatism.
+        (
+            "https://example.com/x?page=2&sid=abc&pdp_filters=y",
+            "https://example.com/x?page=2&pdp_filters=y&sid=abc",
+        ),
         ("HTTPS://EXAMPLE.COM/FOO", "https://example.com/FOO"),
         # YouTube short links upgrade to the canonical /watch?v=… form so
         # both URL shapes hit the same cache row.

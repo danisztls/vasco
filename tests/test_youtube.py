@@ -295,6 +295,25 @@ async def test_fetch_youtube_vtt_download_returns_none(
 
 
 @pytest.mark.asyncio
+async def test_fetch_youtube_stale_ytdlp_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'Requested format is not available' is rewritten to name the stale
+    yt-dlp cause and the bump command, not left looking like a bad format."""
+    _patch_workers(
+        monkeypatch,
+        info_exc=RuntimeError("ERROR: Requested format is not available"),
+    )
+    env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
+    msg = env["failure"]["message"].lower()
+    assert env["failure"]["reason"] == FailureReason.SERVER_ERROR.value
+    assert "stale" in msg
+    assert "upgrade-package yt-dlp" in msg
+    # the original error is preserved for debugging
+    assert "requested format is not available" in msg
+
+
+@pytest.mark.asyncio
 async def test_fetch_youtube_auto_captions_used_when_no_subs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -336,6 +355,32 @@ def test_ytdlp_base_opts_disables_extractor_retries() -> None:
     """Extractor failures (login_required, private, removed) are terminal —
     yt-dlp's default 3 retries just wastes time before we surface them."""
     assert youtube._ytdlp_base_opts(None)["extractor_retries"] == 0
+
+
+def test_ytdlp_base_opts_ignores_no_formats_error() -> None:
+    """We only pull subtitles, so a video-format resolution failure (e.g. the JS
+    challenge solver is absent) must not abort metadata + caption extraction."""
+    assert youtube._ytdlp_base_opts(None)["ignore_no_formats_error"] is True
+
+
+def test_ytdlp_base_opts_remote_components_off_by_default() -> None:
+    """The JS challenge solver fetches+runs remote code, so it's opt-in:
+    absent from the opts unless explicitly configured."""
+    from vasco.config import Config
+
+    assert "remote_components" not in youtube._ytdlp_base_opts(None)
+    assert "remote_components" not in youtube._ytdlp_base_opts(Config())
+
+
+def test_ytdlp_base_opts_remote_components_opt_in() -> None:
+    from vasco.config import AdaptersCfg, Config, YouTubeCfg
+
+    cfg = Config(
+        adapters=AdaptersCfg(youtube=YouTubeCfg(remote_components="ejs:github"))
+    )
+    opts = youtube._ytdlp_base_opts(cfg)
+    # yt-dlp wants a list; the colon-bearing token is kept whole, not split
+    assert opts["remote_components"] == ["ejs:github"]
 
 
 def test_ytdlp_base_opts_passes_cookies_from_browser() -> None:

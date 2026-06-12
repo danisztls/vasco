@@ -97,6 +97,9 @@
 #     itad_api_key: ""         # IsThereAnyDeal key (or VASCO_ITAD_API_KEY); "" = off. Currency follows `country`
 #   youtube:
 #     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...
+#     remote_components: ""    # "" = off (opt-in) | "ejs:github" enables yt-dlp's JS
+#                              # challenge solver (needs deno/a JS runtime on PATH).
+#                              # Fetches+runs solver code from GitHub — see caveats.
 #   wikimedia:                  # "" = anonymous free REST API (all langs, no cap)
 #     username: ""             # Wikimedia Enterprise account (or VASCO_ADAPTERS_WIKIMEDIA_USERNAME)
 #     password: ""             # (or VASCO_ADAPTERS_WIKIMEDIA_PASSWORD)

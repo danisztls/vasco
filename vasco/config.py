@@ -94,6 +94,10 @@ class OcrCfg:
 @dataclass(frozen=True)
 class YouTubeCfg:
     cookies_from_browser: str = ""  # "" disables; e.g. "firefox", "chrome", "brave"
+    # yt-dlp remote components to allow (space-separated), enabling YouTube's JS
+    # challenge solver. "" = off (opt-in): fetches+runs solver code from GitHub.
+    # e.g. "ejs:github" (needs a JS runtime like deno on PATH).
+    remote_components: str = ""
 
 
 @dataclass(frozen=True)

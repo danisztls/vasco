@@ -187,18 +187,34 @@ def _ytdlp_base_opts(cfg: Any | None) -> dict[str, Any]:
     # extractor errors, which are almost always terminal (login_required,
     # private, age-gated, removed). Network-level retries (`retries`) are
     # untouched — those still benefit from yt-dlp's default backoff.
+    #
+    # `ignore_no_formats_error=True`: we only ever pull subtitles (never a video
+    # format), but yt-dlp's info extraction otherwise raises "Requested format
+    # is not available" when its format/signature solving fails — which it now
+    # does whenever the JS-challenge solver (deno/EJS remote-components) is
+    # absent, even though captions are fully available. Ignoring the no-formats
+    # error lets metadata + caption extraction succeed regardless.
     opts: dict[str, Any] = {
         "skip_download": True,
         "quiet": True,
         "no_warnings": True,
         "extractor_retries": 0,
+        "ignore_no_formats_error": True,
     }
     browser = ""
+    components = ""
     if cfg is not None:
         yt = getattr(getattr(cfg, "adapters", None), "youtube", None)
         browser = (getattr(yt, "cookies_from_browser", "") or "").strip().lower()
+        components = (getattr(yt, "remote_components", "") or "").strip()
     if browser:
         opts["cookiesfrombrowser"] = (browser,)
+    # Opt-in (default off): allow yt-dlp to fetch+run its remote JS challenge
+    # solver (e.g. "ejs:github"), which resolves YouTube's signed formats under a
+    # JS runtime. Off by default because it fetches+executes remote code; the
+    # subtitle path stays functional without it via `ignore_no_formats_error`.
+    if components:
+        opts["remote_components"] = components.split()
     return opts
 
 
@@ -290,6 +306,57 @@ def _classify_ytdlp_error(exc: BaseException) -> FailureReason:
     return FailureReason.SERVER_ERROR
 
 
+# yt-dlp error signatures that mean its *extractor* failed to resolve a format
+# — never that the caller asked for a bad one. YouTube changes its player/format
+# signing on a roughly monthly cadence; an extractor that hasn't caught up (or
+# can't run the JS challenge solver) then resolves no formats and surfaces
+# "Requested format is not available" (and the siblings below). We pull only
+# subtitles, so `_ytdlp_base_opts` sets `ignore_no_formats_error` to suppress
+# this in the normal path; these markers are the backstop for when it leaks out
+# anyway, rewritten to name the real cause + fix instead of reading like a
+# wrong-format request.
+_STALE_YTDLP_MARKERS = (
+    "requested format is not available",
+    "failed to extract any player response",
+    "nsig extraction failed",
+    "unable to extract player",
+)
+
+
+def _ytdlp_version() -> str:
+    try:
+        import yt_dlp.version as _v
+
+        return _v.__version__
+    except Exception:  # pragma: no cover - version module always present
+        return "unknown"
+
+
+def _ytdlp_failure(url: str, exc: BaseException, *, prefix: str = "") -> dict[str, Any]:
+    """Build a failure envelope for a yt-dlp exception.
+
+    Detects the stale-yt-dlp signature and rewrites the message to name the
+    real cause (and the one-line fix) so it isn't mistaken for a wrong-format
+    or broken-video error. Classification stays ``SERVER_ERROR`` (transient,
+    short negative-cache TTL) so it self-heals once yt-dlp is bumped.
+    """
+    detail = f"{type(exc).__name__}: {exc}"
+    if any(m in str(exc).lower() for m in _STALE_YTDLP_MARKERS):
+        detail = (
+            f"yt-dlp ({_ytdlp_version()}) could not resolve any format — a yt-dlp "
+            "extraction failure, not a wrong-format request. Usual cause: a stale "
+            "yt-dlp (YouTube breaks it ~monthly) — bump it with "
+            "`uv lock --upgrade-package yt-dlp && uv sync`; if it's already "
+            "current, enable YouTube's JS challenge solver via "
+            "`adapters.youtube.remote_components: ejs:github` (needs a JS runtime "
+            "like deno on PATH). "
+            f"[original: {detail}]"
+        )
+    if prefix:
+        detail = f"{prefix}: {detail}"
+    return _failure_envelope(url, _classify_ytdlp_error(exc), detail)
+
+
 async def fetch_youtube(
     url: str,
     *,
@@ -318,9 +385,7 @@ async def fetch_youtube(
     except asyncio.TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "yt-dlp metadata timeout")
     except Exception as exc:
-        return _failure_envelope(
-            url, _classify_ytdlp_error(exc), f"{type(exc).__name__}: {exc}"
-        )
+        return _ytdlp_failure(url, exc)
 
     title = info.get("title") or None
     uploader = info.get("uploader") or info.get("channel") or None
@@ -358,11 +423,7 @@ async def fetch_youtube(
     except asyncio.TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "caption download timeout")
     except Exception as exc:
-        return _failure_envelope(
-            url,
-            _classify_ytdlp_error(exc),
-            f"caption download failed: {type(exc).__name__}: {exc}",
-        )
+        return _ytdlp_failure(url, exc, prefix="caption download failed")
 
     if not vtt_content:
         return _failure_envelope(

@@ -31,9 +31,13 @@ from .urlutils import (
     _ACCEPT_ENCODING,
     _HTTP_TIMEOUT_FLOOR,
     _RECOVERABLE_REASONS,
+    _SNIFF_BYTES,
+    _binary_type_skips_body,
     _content_type,
+    _is_binary_unsupported,
     _is_pdf,
     _is_plaintext_response,
+    _looks_binary,
     _pandoc_format,
     _route_key,
     _tier_deadline,
@@ -107,6 +111,15 @@ async def _http_fetch(
     Connection/DNS/timeout failures are folded into the (html, status, headers)
     tuple using sentinel `status=0` and `_failure_hint` header so that
     `bot_detect.classify` can map them to FailureReason without exceptions.
+
+    The response is **streamed**, not eagerly read, so the body download can be
+    skipped for a binary blob recognized from its `Content-Type` header alone
+    (`_binary_type_skips_body`) — a large image/video/archive is rejected without
+    pulling the bytes. `application/octet-stream` is ambiguous (sometimes a
+    mislabeled text file), so only a `_SNIFF_BYTES` prefix is read to tell binary
+    from text; everything else (html/plain/json/xml/unknown) is read in full.
+    The verdict itself is re-derived downstream in `_do_fetch_html`
+    (`_is_binary_unsupported`); this only governs how much gets downloaded.
     """
     if httpx is None:
         return "", 0, {"_failure_hint": "dns_fail"}
@@ -124,11 +137,34 @@ async def _http_fetch(
             timeout=timeout,
             headers=headers_out,
         ) as client:
-            resp = await client.get(url)
-            text = resp.text
-            hdrs = {str(k): str(v) for k, v in resp.headers.items()}
-            hdrs.setdefault("_url_final", str(resp.url))
-            return text, int(resp.status_code), hdrs
+            async with client.stream("GET", url) as resp:
+                hdrs = {str(k): str(v) for k, v in resp.headers.items()}
+                hdrs.setdefault("_url_final", str(resp.url))
+                status = int(resp.status_code)
+                ct = _content_type(hdrs, "")
+
+                # Definite binary from the header: don't download the body at all.
+                if _binary_type_skips_body(ct):
+                    return "", status, hdrs
+
+                # Ambiguous octet-stream: sniff a small prefix, then either stop
+                # (binary) or read the rest (mislabeled text).
+                if ct == "application/octet-stream":
+                    buf = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        buf += chunk
+                        if len(buf) >= _SNIFF_BYTES:
+                            break
+                    sniff = bytes(buf).decode("utf-8", "replace")
+                    if _looks_binary(sniff):
+                        return sniff, status, hdrs
+                    async for chunk in resp.aiter_bytes():
+                        buf += chunk
+                    return bytes(buf).decode("utf-8", "replace"), status, hdrs
+
+                # Text-ish: read the full body and decode via httpx's charset.
+                await resp.aread()
+                return resp.text, status, hdrs
     except asyncio.TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
     except Exception as exc:
@@ -495,6 +531,21 @@ async def _do_fetch_html(
                 and _pandoc_format(url_final, headers) is None
             ):
                 ct = _content_type(headers, "")
+                if _is_binary_unsupported(ct, html):
+                    # A binary blob (image / audio / video / archive / octet-
+                    # stream). Fail fast: mojibake-ing it through trafilatura gives
+                    # zero words, which would read as an unrendered shell and
+                    # escalate to the browser tier — which then tries to *download*
+                    # the blob and times out (a misleading TIMEOUT). UNSUPPORTED_
+                    # CONTENT_TYPE is honest and carries a ~24h negative-cache TTL.
+                    return _HtmlOutcome(
+                        html,
+                        status,
+                        headers,
+                        FailureReason.UNSUPPORTED_CONTENT_TYPE,
+                        "http",
+                        browser_started,
+                    )
                 if _is_plaintext_response(ct, html):
                     # A text/plain / Markdown body (raw .md / .txt / RFC / LICENSE)
                     # is already readable text. Pass it through verbatim — running

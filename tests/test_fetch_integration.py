@@ -803,3 +803,55 @@ def test_html_mislabeled_as_textplain_still_extracts(
         assert "<html" not in env["markdown"].lower()
     finally:
         cache.close()
+
+
+def test_binary_blob_fails_fast_without_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A binary blob (image/png) fails fast as UNSUPPORTED_CONTENT_TYPE on the
+    http tier — no mojibake extraction, no browser escalation (which would try
+    to download the blob and time out)."""
+    monkeypatch.setattr(
+        core_mod,
+        "_http_fetch",
+        _stub_http(
+            "\x89PNG\r\n\x1a\n\x00\x00binary",
+            200,
+            {"Content-Type": "image/png", "Content-Length": "12345"},
+        ),
+    )
+
+    browser_calls: list[str] = []
+
+    class _SpyPool:
+        async def fetch(self, url: str, *a: Any, **kw: Any):
+            browser_calls.append(url)
+            return "", 0, {}
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _SpyPool())
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://cdn.example/logo.png", cache=cache, deadline=10.0
+            )
+        )
+        assert env["failure"]["reason"] == "unsupported_content_type"
+        assert env["mode_used"] == "http"
+        assert env["attempts"] == 1
+        assert browser_calls == []
+        # Message surfaces the type + size as metadata (no prescribed remedy).
+        msg = env["failure"]["message"]
+        assert "image/png" in msg
+        assert "12345 bytes" in msg
+        # The structured content_type field is also set for programmatic use.
+        assert env["content_type"] == "image/png"
+        # Permanent (the URL's type won't change) → long negative-cache TTL.
+        assert fetch_mod._ttl_for(env, None) == int(900 * 96.0)
+    finally:
+        cache.close()

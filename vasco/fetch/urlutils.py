@@ -97,6 +97,19 @@ def _parse_retry_after(headers: dict[str, str] | None) -> int | None:
     return None
 
 
+def _content_length(headers: dict[str, str] | None) -> int | None:
+    """The ``Content-Length`` header as an int, or ``None`` if absent/unparseable."""
+    if not headers:
+        return None
+    for k, v in headers.items():
+        if str(k).lower() == "content-length":
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _is_pdf(url: str, headers: dict[str, str] | None) -> bool:
     path = urlsplit(url).path.lower()
     if path.endswith(".pdf"):
@@ -163,6 +176,109 @@ def _is_plaintext_response(content_type: str | None, body: str) -> bool:
     if head.startswith("<!doctype html") or head.startswith("<html"):
         return False
     return True
+
+
+# Binary major types vasco can't turn into text (no extractor / converter).
+_BINARY_MAJOR_PREFIXES: tuple[str, ...] = ("image/", "audio/", "video/", "font/")
+
+# Specific ``application/*`` subtypes that are binary blobs (archives,
+# executables, disk images, raw bytes). ``application/pdf`` and the pandoc
+# office formats are routed to their converters upstream (`_is_pdf` /
+# `_pandoc_format`) and never reach this check.
+_BINARY_APP_TYPES: frozenset[str] = frozenset(
+    {
+        "application/octet-stream",
+        "application/zip",
+        "application/gzip",
+        "application/x-gzip",
+        "application/x-bzip2",
+        "application/x-xz",
+        "application/x-tar",
+        "application/x-7z-compressed",
+        "application/x-rar-compressed",
+        "application/vnd.rar",
+        "application/x-msdownload",
+        "application/x-executable",
+        "application/x-sharedlib",
+        "application/wasm",
+        "application/java-archive",
+        "application/vnd.android.package-archive",
+        "application/x-iso9660-image",
+        "application/x-apple-diskimage",
+    }
+)
+
+
+def _looks_binary(text: str) -> bool:
+    """Heuristic: does a decoded body look like binary rather than text?
+
+    A binary blob decoded as text (httpx ``.text``) is littered with NUL / other
+    control bytes and U+FFFD decode-replacement chars. Used to confirm a generic
+    ``application/octet-stream`` (the 'unknown bytes' type, occasionally a
+    *mislabeled* text file) really is binary before failing it.
+    """
+    if not text:
+        return False
+    sample = text[:4096]
+    if "\x00" in sample:
+        return True
+    suspicious = sum(
+        1 for ch in sample if ch == "�" or (ord(ch) < 32 and ch not in "\t\n\r\f\v")
+    )
+    return suspicious / len(sample) > 0.05
+
+
+# How many bytes of an ambiguous body (``application/octet-stream``) to download
+# before deciding binary-vs-text. Enough for a confident `_looks_binary` verdict
+# without pulling the whole blob.
+_SNIFF_BYTES: int = 8192
+
+
+def _binary_type_skips_body(content_type: str | None) -> bool:
+    """True for a content-type that is *definitely* binary from the header alone,
+    so the response body needn't be downloaded at all to reject it.
+
+    Everything `_is_binary_unsupported` recognizes **except** the ambiguous
+    ``application/octet-stream`` (the generic 'unknown bytes' type, occasionally
+    a mislabeled text file), which still needs a small content sniff. Lets the
+    http tier skip pulling a large image / video / archive just to discard it.
+    """
+    if not content_type:
+        return False
+    ct = content_type.split(";", 1)[0].strip().lower()
+    if not ct:
+        return False
+    if ct.startswith(_BINARY_MAJOR_PREFIXES):
+        return True
+    return ct in _BINARY_APP_TYPES and ct != "application/octet-stream"
+
+
+def _is_binary_unsupported(content_type: str | None, body: str) -> bool:
+    """True for a 200 body that is a binary blob vasco can't convert to text
+    (image / audio / video / font / archive / executable / octet-stream).
+
+    Such a blob must NOT reach trafilatura: it mojibakes to zero words, which
+    reads as an unrendered shell and pointlessly escalates to the browser tier —
+    which then tries to *download* the blob and times out. It fails fast as
+    ``UNSUPPORTED_CONTENT_TYPE`` instead. PDFs and pandoc office docs are routed
+    to their converters upstream, so they never reach here. SVG (``image/svg+xml``)
+    counts as binary too: it's XML in theory but a *graphic* in practice (an icon /
+    logo / diagram), which trafilatura extracts nothing useful from.
+    ``application/octet-stream`` is treated as binary only when the decoded body
+    actually looks binary (`_looks_binary`).
+    """
+    if not content_type:
+        return False
+    ct = content_type.split(";", 1)[0].strip().lower()
+    if not ct:
+        return False
+    if ct.startswith(_BINARY_MAJOR_PREFIXES):
+        return True
+    if ct in _BINARY_APP_TYPES:
+        if ct == "application/octet-stream":
+            return _looks_binary(body)
+        return True
+    return False
 
 
 def _normalize_url(url: str, cache: Any | None) -> str | None:

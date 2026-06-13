@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from vasco import fetch as fetch_mod
+from vasco.fetch.urlutils import _looks_binary
 
 
 @pytest.mark.asyncio
@@ -127,3 +128,94 @@ async def test_http_fetch_returns_timeout_sentinel_when_deadline_passed() -> Non
     assert text == ""
     assert status == 0
     assert hdrs.get("_failure_hint") == "timeout"
+
+
+def _patch_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def patched(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fetch_mod.httpx, "AsyncClient", patched)
+
+
+class _ExplodingStream(httpx.AsyncByteStream):
+    """A response body that fails the test if anything tries to download it."""
+
+    async def __aiter__(self):
+        raise AssertionError("body must not be downloaded for a header-binary")
+        yield b""  # pragma: no cover — unreachable, makes this an async generator
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_skips_body_for_header_detected_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A binary blob recognized from its Content-Type header is rejected WITHOUT
+    downloading the body — answering 'do we fetch the whole file?' with 'no'."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png", "content-length": "9999999"},
+            stream=_ExplodingStream(),
+        )
+
+    _patch_transport(monkeypatch, handler)
+
+    deadline = time.monotonic() + 5.0
+    text, status, hdrs = await fetch_mod._http_fetch(
+        "https://cdn.example/big.png", deadline_monotonic=deadline
+    )
+    # Empty body returned (never read), but the headers came back for classifying.
+    assert text == ""
+    assert status == 200
+    assert hdrs["content-type"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_octet_stream_binary_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An octet-stream whose body looks binary comes back as the sniffed prefix,
+    so the chain rejects it as UNSUPPORTED_CONTENT_TYPE downstream."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=b"\x00\x01\x02\x03\x04binary\x00\x00bytes",
+        )
+
+    _patch_transport(monkeypatch, handler)
+    text, status, _ = await fetch_mod._http_fetch(
+        "https://x.example/blob", deadline_monotonic=time.monotonic() + 5.0
+    )
+    assert status == 200
+    assert _looks_binary(text) is True
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_octet_stream_text_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An octet-stream that's actually text (mislabeled) is read in full."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=b"This is plain text mislabeled as octet-stream.\n" * 4,
+        )
+
+    _patch_transport(monkeypatch, handler)
+    text, _, _ = await fetch_mod._http_fetch(
+        "https://x.example/readme", deadline_monotonic=time.monotonic() + 5.0
+    )
+    assert "mislabeled as octet-stream" in text
+    assert _looks_binary(text) is False

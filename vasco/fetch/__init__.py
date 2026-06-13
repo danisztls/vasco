@@ -66,6 +66,7 @@ from .core import _do_fetch_html
 from .documents import _fetch_pandoc_doc, _fetch_pdf
 from .phases import _Phases, _convert_html, _ms_since, _stamp_phases
 from .urlutils import (
+    _content_length,
     _content_type,
     _is_pdf,
     _normalize_url,
@@ -567,14 +568,32 @@ async def _fetch_html_envelope(
             return document, browser_started
 
         if outcome.reason != FailureReason.OK:
+            if outcome.reason == FailureReason.UNSUPPORTED_CONTENT_TYPE:
+                # Produced by the http tier for a binary blob (see core). Surface
+                # the type + size as metadata and let the client decide what to do.
+                # Skip the partial-markdown conversion below — the body is binary,
+                # so trafilatura would only mojibake it.
+                size = _content_length(headers)
+                size_part = f", {size} bytes" if size else ""
+                message = (
+                    f"binary content ({base['content_type']}{size_part}) is not "
+                    "text-extractable — vasco returns text (HTML / PDF / office "
+                    "docs / plain text), not images, audio, video, or archives."
+                )
+            else:
+                message = f"{outcome.reason} after {mode_used} tier"
             envelope = _failure_envelope(
                 base=base,
                 reason=outcome.reason,
-                message=f"{outcome.reason} after {mode_used} tier",
+                message=message,
                 retry_after=_parse_retry_after(headers),
                 partial_html=html if raw else None,
             )
-            if not raw and html:
+            if (
+                not raw
+                and html
+                and outcome.reason != FailureReason.UNSUPPORTED_CONTENT_TYPE
+            ):
                 t_parse = time.monotonic()
                 try:
                     markdown, _meta = convert.html_to_markdown(

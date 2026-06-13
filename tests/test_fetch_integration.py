@@ -41,7 +41,11 @@ def _disable_browser(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _stub_http(html: str, status: int = 200, headers: dict | None = None):
     async def _fake(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         hdrs = dict(headers or {})
         hdrs.setdefault("_url_final", url)
@@ -448,7 +452,11 @@ def _stub_http_dispatch(routes: dict[str, tuple[str, int]], default: tuple[str, 
     """
 
     async def _fake(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         body, status = default
         for suffix, payload in routes.items():
@@ -687,7 +695,9 @@ def test_gitlab_bare_project_on_plain_host_is_not_probed(
     gitlab_mod._reset_for_tests()
     fetched: list[str] = []
 
-    async def _spy(url: str, *, deadline_monotonic: float, cfg=None):
+    async def _spy(
+        url: str, *, deadline_monotonic: float, cfg=None, profile: str = "browser"
+    ):
         fetched.append(url)
         return "<html><body><p>plain page</p></body></html>", 200, {"_url_final": url}
 

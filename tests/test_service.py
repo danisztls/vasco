@@ -37,7 +37,11 @@ def _disable_browser(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _stub_http(html: str, status: int = 200, headers: dict | None = None):
     async def _fake(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         hdrs = dict(headers or {})
         hdrs.setdefault("_url_final", url)

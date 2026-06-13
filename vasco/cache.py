@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS adapter_probe (
   updated_at  INTEGER,
   PRIMARY KEY (provider, domain)
 );
+
+-- Learned per-route HTTP header profile ("browser" default / "honest" minimal).
+-- A second strategy dimension alongside fetch_strategy's starting tier, kept in
+-- its own table so it never tangles with bump()'s preferred_mode logic. Written
+-- only when the adaptive honest-header retry clears a WAF block on the http tier.
+CREATE TABLE IF NOT EXISTS route_header_profile (
+  route_key    TEXT PRIMARY KEY,
+  profile      TEXT,
+  updated_at   INTEGER
+);
 """
 
 # A probe verdict older than this is treated as unknown (re-probed), so a domain
@@ -269,6 +279,26 @@ class Cache:
             WHERE route_key = ?
             """,
             (preferred, success_count, failure_count, now, route_key),
+        )
+        self._conn.commit()
+
+    def get_header_profile(self, route_key: str) -> str | None:
+        """Learned HTTP header profile for a route, or ``None`` if unlearned."""
+        cur = self._conn.execute(
+            "SELECT profile FROM route_header_profile WHERE route_key = ?",
+            (route_key,),
+        )
+        row = cur.fetchone()
+        return row["profile"] if row is not None else None
+
+    def set_header_profile(self, route_key: str, profile: str) -> None:
+        """Persist the learned header profile for a route (upsert)."""
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO route_header_profile (route_key, profile, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (route_key, profile, int(time.time())),
         )
         self._conn.commit()
 

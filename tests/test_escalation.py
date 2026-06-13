@@ -49,6 +49,7 @@ class FakeCache:
         self.bumps: list[dict] = []
         self.preferred = strategy
         self.strategies = strategies or {}
+        self.header_profiles: dict[str, str] = {}
 
     def normalize_url(self, url: str) -> str:
         return url
@@ -73,10 +74,20 @@ class FakeCache:
     def bump(self, route_key: str, *, mode: str, success: bool) -> None:
         self.bumps.append({"route_key": route_key, "mode": mode, "success": success})
 
+    def get_header_profile(self, route_key: str) -> str | None:
+        return self.header_profiles.get(route_key)
+
+    def set_header_profile(self, route_key: str, profile: str) -> None:
+        self.header_profiles[route_key] = profile
+
 
 def _make_http(html: str, status: int = 200, headers: dict | None = None):
     async def _fake_http(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         return html, status, dict(headers or {})
 
@@ -120,7 +131,11 @@ def _disable_wayback(monkeypatch: pytest.MonkeyPatch) -> None:
     from vasco.adapters import wayback as wayback_mod
 
     async def _no_snapshot(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> str | None:
         return None
 
@@ -192,7 +207,11 @@ def test_preferred_browser_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
     http_calls: list[str] = []
 
     async def _http_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         http_calls.append(url)
         return "", 0, {}
@@ -227,7 +246,11 @@ def test_routes_under_one_domain_have_independent_strategies(
     http_calls: list[str] = []
 
     async def _http(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         http_calls.append(url)
         return CLEAN_HTML, 200, {}
@@ -270,7 +293,11 @@ def test_seed_strategy_sets_starting_tier(monkeypatch: pytest.MonkeyPatch) -> No
     http_calls: list[str] = []
 
     async def _http_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         http_calls.append(url)
         return "", 0, {}
@@ -298,7 +325,11 @@ def test_deadline_exceeded_before_escalation(
     cache = FakeCache()
 
     async def _slow_http(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         # Burn the budget so the remaining time falls below BROWSER_MIN_BUDGET.
         burn = max(
@@ -312,7 +343,11 @@ def test_deadline_exceeded_before_escalation(
     browser_called: list[str] = []
 
     async def _browser_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         browser_called.append(url)
         return "", 0, {}
@@ -441,7 +476,11 @@ def test_http_not_found_does_not_escalate(monkeypatch: pytest.MonkeyPatch) -> No
     browser_called: list[str] = []
 
     async def _browser_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         browser_called.append(url)
         return "", 0, {}
@@ -552,7 +591,8 @@ def test_phase_timings_record_escalation(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert env["mode_used"] == "browser"
     assert "failure" not in env
-    assert env["attempts"] == 2
+    # http(browser) block → honest-header retry (also blocked here) → browser.
+    assert env["attempts"] == 3
     assert env["escalated_from"] == "http"
 
 
@@ -630,7 +670,11 @@ def _patch_wayback_snapshot(
     calls: list[str] = []
 
     async def _fake(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> str | None:
         calls.append(url)
         return snapshot_url
@@ -686,7 +730,11 @@ def test_wayback_recovers_after_mobile_blocked(
     clean_for_snapshot = _make_http(CLEAN_HTML, 200)
 
     async def _dispatching_http(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         if url.startswith("https://web.archive.org/"):
             return await clean_for_snapshot(
@@ -719,7 +767,11 @@ def test_explicit_wayback_mode_skips_other_tiers(
     http_calls: list[str] = []
 
     async def _http_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         http_calls.append(url)
         # Wayback's snapshot fetch uses _http_fetch, so allow archive.org URLs through.
@@ -789,7 +841,11 @@ def test_explicit_mobile_mode_calls_browser_with_mobile_flag(
     http_calls: list[str] = []
 
     async def _http_should_not_be_called(
-        url: str, *, deadline_monotonic: float, cfg: Any | None = None
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
     ) -> tuple[str, int, dict[str, str]]:
         http_calls.append(url)
         return "", 0, {}
@@ -945,3 +1001,114 @@ def test_make_adapter_fetcher_disables_wayback(
     assert wb_calls == []
     assert reason == FailureReason.BLOCKED_CLOUDFLARE
     assert state["browser_started"] is True
+
+
+# --- adaptive honest-header retry -------------------------------------------
+
+
+def _make_profile_http(browser: tuple[str, int], honest: tuple[str, int]):
+    """An `_http_fetch` stub returning different (html, status) per header profile."""
+
+    async def _fake(
+        url: str,
+        *,
+        deadline_monotonic: float,
+        cfg: Any | None = None,
+        profile: str = "browser",
+    ) -> tuple[str, int, dict[str, str]]:
+        html, status = honest if profile == "honest" else browser
+        return html, status, {}
+
+    return _fake
+
+
+def test_honest_header_retry_clears_block_and_learns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fingerprint block on the browser profile clears with honest headers: the
+    http tier retries honest (no browser launch), serves the content, and learns
+    honest so the next fetch starts there (a single http call)."""
+    cache = FakeCache()
+    monkeypatch.setattr(
+        core_mod, "_http_fetch", _make_profile_http((CF_HTML, 200), (CLEAN_HTML, 200))
+    )
+
+    async def _browser_should_not_be_called(*a: Any, **k: Any):
+        raise AssertionError("browser tier should not run — honest http cleared it")
+
+    monkeypatch.setattr(core_mod, "_browser_fetch", _browser_should_not_be_called)
+    _disable_browser_close(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://walled.example/page", cache=cache, use_cache=False, deadline=30.0
+        )
+    )
+    assert env["mode_used"] == "http"
+    assert "failure" not in env
+    assert env["word_count"] > 0
+    assert env["attempts"] == 2  # browser-profile attempt + honest retry
+    assert "honest" in cache.header_profiles.values()
+
+    # Second fetch: the learned honest profile is used first → a single http call,
+    # no retry.
+    env2 = run(
+        fetch_mod.fetch_one(
+            "https://walled.example/page", cache=cache, use_cache=False, deadline=30.0
+        )
+    )
+    assert env2["mode_used"] == "http"
+    assert env2["attempts"] == 1
+
+
+def test_honest_retry_failure_keeps_block_and_escalates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When honest headers don't clear the block either, the original failure is
+    kept and the chain escalates to the browser tier as usual."""
+    cache = FakeCache()
+    # Both profiles blocked on http; the browser tier then succeeds.
+    monkeypatch.setattr(
+        core_mod, "_http_fetch", _make_profile_http((CF_HTML, 200), (CF_HTML, 200))
+    )
+    monkeypatch.setattr(core_mod, "_browser_fetch", _make_browser(CLEAN_HTML, 200))
+    _disable_browser_close(monkeypatch)
+    _disable_wayback(monkeypatch)
+
+    env = run(
+        fetch_mod.fetch_one(
+            "https://walled2.example/page", cache=cache, use_cache=False, deadline=30.0
+        )
+    )
+    assert env["mode_used"] == "browser"
+    assert "failure" not in env
+    assert env["attempts"] == 3  # browser-profile http + honest retry + browser
+    assert "honest" not in cache.header_profiles.values()  # nothing learned
+
+
+def test_honest_profile_overrides_learned_browser_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A route learned `preferred_mode=browser` (e.g. from an earlier fingerprint
+    block), but the host is seeded honest → the http tier is still attempted with
+    honest headers (and serves it) instead of skipping straight to the browser."""
+    cache = FakeCache(strategy="browser")  # learned/seeded browser tier
+    monkeypatch.setattr(core_mod, "_http_fetch", _make_http(CLEAN_HTML, 200))
+
+    async def _browser_should_not_be_called(*a: Any, **k: Any):
+        raise AssertionError("honest http should have served it, not the browser")
+
+    monkeypatch.setattr(core_mod, "_browser_fetch", _browser_should_not_be_called)
+    _disable_browser_close(monkeypatch)
+
+    # gitlab.wikimedia.org is seeded honest; /-/raw/ isn't claimed by the adapter.
+    env = run(
+        fetch_mod.fetch_one(
+            "https://gitlab.wikimedia.org/egardner/mcp-phabricator/-/raw/main/README.md",
+            cache=cache,
+            use_cache=False,
+            deadline=30.0,
+        )
+    )
+    assert env["mode_used"] == "http"
+    assert "failure" not in env

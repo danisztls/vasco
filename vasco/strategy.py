@@ -15,6 +15,8 @@ so a site that changes its protection self-heals.
 
 from __future__ import annotations
 
+from vasco.urls import registered_domain
+
 SEED_STRATEGIES: dict[str, str] = {
     # Google Shopping is a JS-rendered SPA on every surface; the http tier only
     # ever returns an empty shell, so the chain must start at the browser.
@@ -84,3 +86,36 @@ def seed_strategy(route_key: str) -> str | None:
             if best is None or len(key) > best[0]:
                 best = (len(key), tier)
     return best[1] if best else None
+
+
+# Hosts whose WAF rejects vasco's modern-Chrome header set as a half-fingerprint
+# (a "Chrome" UA without the full header suite reads as a headless bot → 403) but
+# accepts an honest minimal client. The http tier should send the `honest` header
+# profile to these by default. Keyed by full host (a forge is subdomain-specific),
+# matched exact-host-then-registered-domain. These are *seeds*: a learned verdict
+# (cache.get_header_profile) or a user `domains:` rule still wins. Public GitLab
+# instances are the motivating set (see vasco/adapters/gitlab.py).
+SEED_HEADER_PROFILES: dict[str, str] = {
+    "gitlab.com": "honest",
+    "gitlab.wikimedia.org": "honest",
+    "gitlab.gnome.org": "honest",
+    "gitlab.freedesktop.org": "honest",
+    "salsa.debian.org": "honest",
+    "invent.kde.org": "honest",
+    "code.videolan.org": "honest",
+}
+
+
+def seed_header_profile(host: str) -> str | None:
+    """Return the seeded header profile for a host, or None if unseeded.
+
+    Matches the full host first, then its registered domain (so a ``gitlab.com``
+    seed also covers ``www.gitlab.com``), mirroring the per-domain rule lookup.
+    """
+    host = (host or "").lower()
+    if not host:
+        return None
+    if host in SEED_HEADER_PROFILES:
+        return SEED_HEADER_PROFILES[host]
+    rd = registered_domain(host)
+    return SEED_HEADER_PROFILES.get(rd) if rd else None

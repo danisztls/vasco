@@ -258,6 +258,18 @@ class ServiceCfg:
 
 
 @dataclass(frozen=True)
+class DomainCfg:
+    """Per-domain fetch overrides keyed by host. `headers` picks the HTTP header
+    profile the http tier sends — ``browser`` (default modern-Chrome shape) or
+    ``honest`` (minimal client headers, for WAFs that 403 the half-fingerprint).
+    A unified home for per-domain strategy; ``tier``/``adapter`` directives may
+    join `headers` later."""
+
+    host: str
+    headers: str = "browser"
+
+
+@dataclass(frozen=True)
 class Config:
     search: SearchCfg = field(default_factory=SearchCfg)
     fetch: FetchCfg = field(default_factory=FetchCfg)
@@ -269,6 +281,8 @@ class Config:
     answer: AnswerCfg = field(default_factory=AnswerCfg)
     adapters: AdaptersCfg = field(default_factory=AdaptersCfg)
     service: ServiceCfg = field(default_factory=ServiceCfg)
+    # Per-host overrides from the top-level `domains:` map (see DomainCfg).
+    domains: tuple[DomainCfg, ...] = ()
 
 
 # Global (top-level) sections. Adapter sections live under `adapters` (nested),
@@ -413,4 +427,35 @@ def load_config() -> Config:
     ):
         sections["quality"] = None
 
+    sections["domains"] = _load_domains(data.get("domains"))
+
     return Config(**sections)
+
+
+_VALID_HEADER_PROFILES = frozenset({"browser", "honest"})
+
+
+def _load_domains(raw: Any) -> tuple[DomainCfg, ...]:
+    """Parse the top-level ``domains:`` YAML map → a tuple of `DomainCfg`.
+
+    Accepts ``{host: {headers: honest}}`` (and a bare ``{host: honest}``
+    shorthand). Hosts are lowercased; an unknown/invalid ``headers`` value is
+    skipped (defaults stay ``browser``). YAML-only — there is no env override for
+    a free-form map.
+    """
+    if not isinstance(raw, dict):
+        return ()
+    rules: list[DomainCfg] = []
+    for host, spec in raw.items():
+        if not isinstance(host, str) or not host.strip():
+            continue
+        if isinstance(spec, str):
+            headers = spec
+        elif isinstance(spec, dict):
+            headers = spec.get("headers", "browser")
+        else:
+            continue
+        if headers not in _VALID_HEADER_PROFILES:
+            continue
+        rules.append(DomainCfg(host=host.strip().lower(), headers=headers))
+    return tuple(rules)

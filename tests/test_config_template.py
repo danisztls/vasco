@@ -50,11 +50,15 @@ def test_template_keys_are_real_config_fields() -> None:
             continue
         key = match.group(1)
         if indent <= 1:  # '# section:'
-            assert key in section_fields or key == "adapters", (
+            assert key in section_fields or key in ("adapters", "domains"), (
                 f"template references unknown section '{key}'"
             )
             current_section = key
             current_adapter = None
+        elif current_section == "domains":
+            # `domains:` is a free-form host → {headers: …} map, not dataclass
+            # fields, so its child keys (hosts) aren't validated here.
+            continue
         elif current_section == "adapters" and indent <= 3:  # '#   <adapter>:'
             assert key in adapter_fields, (
                 f"template references unknown adapter 'adapters.{key}'"

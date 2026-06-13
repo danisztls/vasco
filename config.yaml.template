@@ -71,6 +71,13 @@
 #   rate_limit_rps: 1.0        # max network fetch starts/sec per domain; 0 = off
 #   max_concurrent_per_domain: 2  # max simultaneous in-flight fetches per domain; 0 = unlimited
 
+# domains:                      # per-host fetch overrides (keyed by host; YAML only)
+#   gitlab.wikimedia.org:       # headers: browser (default modern-Chrome shape)
+#     headers: honest           #        | honest (minimal client headers — for WAFs
+#   git.example.com: honest     # that 403 the half-fingerprint). Shorthand: host: honest.
+#                               # Known public GitLab hosts are already seeded honest
+#                               # in code; the http tier also learns honest on a 403.
+
 # adapters:                     # per-source content adapters (env: VASCO_ADAPTERS_<SUB>_<FIELD>)
 #   shopping:                   # Google Shopping (labels only; parser is PT-BR)
 #     currency: BRL            # label stamped on the envelope

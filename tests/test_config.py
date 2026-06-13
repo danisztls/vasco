@@ -146,13 +146,19 @@ def test_template_shows_real_defaults(tmp_path: Path) -> None:
     template = Path(__file__).resolve().parents[1] / "config.yaml.template"
     cfg_line = re.compile(r"^\s*(?:[a-z_][a-z0-9_]*\s*:|- )")
     lines = []
+    in_domains = False  # `domains:` is a free-form example map, not defaults
     for raw in template.read_text(encoding="utf-8").splitlines():
         if not raw.startswith("#"):
             continue  # blank separator lines
         body = raw[1:]
         if body.startswith(" "):
             body = body[1:]
-        if cfg_line.match(body):  # a config line, not prose
+        if not cfg_line.match(body):  # prose, not a config line
+            continue
+        if not body.startswith(" "):  # a top-level section header
+            in_domains = body.split(":", 1)[0].strip() == "domains"
+            lines.append(body)  # keep `domains:` itself (an empty default map)
+        elif not in_domains:  # skip the illustrative domains: subtree
             lines.append(body)
     decommented = "\n".join(lines) + "\n"
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 try:  # pragma: no cover - httpx is an optional dep at import time.
     import httpx
@@ -22,6 +23,7 @@ except Exception:  # pragma: no cover
 from vasco import strategy as seed_strategies
 from vasco.adapters import wayback
 from vasco.errors import BrowserServerUnavailable, FailureReason
+from vasco.urls import registered_domain
 
 from . import bot_detect, browser
 from .phases import _HtmlOutcome, _Phases, _convert_html, _ms_since
@@ -48,38 +50,32 @@ from .urlutils import (
 # ---------------------------------------------------------------------------
 
 
-async def _http_fetch(
-    url: str,
-    *,
-    deadline_monotonic: float,
-    cfg: Any | None = None,
-) -> tuple[str, int, dict[str, str]]:
-    """HTTP-tier fetch via httpx. Returns (html, status, headers).
+# A plain, honest client UA for the `honest` header profile. NOT a spoofed
+# browser: a "Chrome" UA without the full browser header suite reads as a headless
+# bot to stricter WAFs (→ 403), but an honest client is waved through. Verified
+# against gitlab.com + gitlab.wikimedia.org. Deliberately not cfg.fetch.user_agent
+# (its default IS the Chrome UA this profile exists to avoid).
+_HONEST_USER_AGENT = "Mozilla/5.0 (compatible; Vasco/0.1)"
 
-    Connection/DNS/timeout failures are folded into the (html, status, headers)
-    tuple using sentinel `status=0` and `_failure_hint` header so that
-    `bot_detect.classify` can map them to FailureReason without exceptions.
+
+def _build_request_headers(profile: str, cfg: Any | None) -> dict[str, str]:
+    """HTTP request headers for `profile`.
+
+    `browser` (default): a full modern-Chrome shape (`Sec-Fetch-*` etc.) so WAFs
+    that reject a bare User-Agent don't short-circuit before the browser tier; the
+    UA stays configurable via `cfg.fetch.user_agent`. `honest`: a minimal set
+    (plain UA + `Accept`, no `Sec-Fetch-*`/`Upgrade-Insecure-Requests`) for WAFs
+    that 403 the half-fingerprint.
     """
-    if httpx is None:
-        return "", 0, {"_failure_hint": "dns_fail"}
-
-    remaining = deadline_monotonic - time.monotonic()
-    if remaining <= 0:
-        return "", 0, {"_failure_hint": "timeout"}
-
-    timeout = max(_HTTP_TIMEOUT_FLOOR, remaining)
-    user_agent = "Mozilla/5.0 (compatible; Vasco/0.1)"
+    if profile == "honest":
+        return {"User-Agent": _HONEST_USER_AGENT, "Accept": "*/*"}
+    user_agent = _HONEST_USER_AGENT
     if cfg is not None:
         try:
             user_agent = cfg.fetch.user_agent or user_agent
         except Exception:
             pass
-
-    # A bare User-Agent + Accept:*/* is itself a "non-browser" tell on the
-    # HTTP tier — any one missing Sec-Fetch-* header lets WAFs short-circuit
-    # before we even reach the browser tier. We send a fixed modern-Chrome
-    # shape; the UA stays configurable via cfg.fetch.user_agent.
-    headers_out = {
+    return {
         "User-Agent": user_agent,
         "Accept": (
             "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -93,6 +89,32 @@ async def _http_fetch(
         "Sec-Fetch-User": "?1",
         "Sec-Fetch-Dest": "document",
     }
+
+
+async def _http_fetch(
+    url: str,
+    *,
+    deadline_monotonic: float,
+    cfg: Any | None = None,
+    profile: str = "browser",
+) -> tuple[str, int, dict[str, str]]:
+    """HTTP-tier fetch via httpx. Returns (html, status, headers).
+
+    `profile` selects the header set (see `_build_request_headers`): `browser`
+    (default modern-Chrome shape) or `honest` (minimal client headers).
+    Connection/DNS/timeout failures are folded into the (html, status, headers)
+    tuple using sentinel `status=0` and `_failure_hint` header so that
+    `bot_detect.classify` can map them to FailureReason without exceptions.
+    """
+    if httpx is None:
+        return "", 0, {"_failure_hint": "dns_fail"}
+
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return "", 0, {"_failure_hint": "timeout"}
+
+    timeout = max(_HTTP_TIMEOUT_FLOOR, remaining)
+    headers_out = _build_request_headers(profile, cfg)
     try:
         async with httpx.AsyncClient(
             http2=True,
@@ -269,6 +291,43 @@ async def _run_browser_tier(
     return html, status, headers, reason
 
 
+# A fingerprint block on the http tier (a WAF rejecting our header shape) may
+# clear with the honest profile. A generic 403 classifies as BLOCKED_CLOUDFLARE,
+# a mid-load bot tear-down as BLOCKED_BOT. Captcha/login/rate-limit/5xx won't
+# clear with different headers, so they're excluded.
+_HEADER_RETRY_REASONS: frozenset[FailureReason] = frozenset(
+    {FailureReason.BLOCKED_CLOUDFLARE, FailureReason.BLOCKED_BOT}
+)
+
+
+def _resolve_header_profile(
+    url: str, route: str, cache: Any | None, cfg: Any | None
+) -> str:
+    """Resolve the http-tier header profile for `url` (``browser``/``honest``).
+
+    Precedence: a user ``domains:`` rule (exact host beats registered-domain) →
+    the learned per-route profile (`cache.get_header_profile`) → the code seed
+    (`strategy.seed_header_profile`) → ``browser``.
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    rd = registered_domain(url)
+    rules = getattr(cfg, "domains", ()) or ()
+    for want in (host, rd):  # exact host wins over a registered-domain rule
+        if not want:
+            continue
+        for rule in rules:
+            if rule.host == want:
+                return rule.headers
+    if cache is not None and hasattr(cache, "get_header_profile"):
+        try:
+            learned = cache.get_header_profile(route)
+        except Exception:
+            learned = None
+        if learned:
+            return learned
+    return seed_strategies.seed_header_profile(host) or "browser"
+
+
 async def _do_fetch_html(
     url: str,
     *,
@@ -321,6 +380,10 @@ async def _do_fetch_html(
     if strategy is None:
         strategy = seed_strategies.seed_strategy(route)
 
+    # The http tier's header profile (browser default / honest) — a second
+    # learned+seeded strategy dimension, resolved once for this fetch.
+    header_profile = _resolve_header_profile(url, route, cache, cfg)
+
     browser_started = False
 
     # --- Explicit terminal: browser / mobile --------------------------------
@@ -362,8 +425,12 @@ async def _do_fetch_html(
 
     # --- mode="http" or "auto" ----------------------------------------------
     # The domain strategy chooses the starting tier in auto mode. It does NOT
-    # disable the recovery tail.
-    skip_http = mode == "auto" and strategy == "browser"
+    # disable the recovery tail. A `honest` header profile (seed/config/learned)
+    # overrides a learned "browser" tier: the profile exists precisely to make the
+    # http tier succeed where the browser-spoof headers were blocked, and the route
+    # may have learned "browser" *because* of that block — so always give honest
+    # http a chance before the browser tier.
+    skip_http = mode == "auto" and strategy == "browser" and header_profile != "honest"
 
     if not skip_http:
         t0 = time.monotonic()
@@ -371,10 +438,42 @@ async def _do_fetch_html(
             url,
             deadline_monotonic=_tier_deadline(deadline_monotonic, HTTP_MAX_BUDGET),
             cfg=cfg,
+            profile=header_profile,
         )
         phases.network_ms += _ms_since(t0)
         phases.attempts += 1
         reason = bot_detect.classify(status, html, headers)
+
+        # Adaptive honest-header retry: a fingerprint block on the browser profile
+        # may clear with honest minimal headers. Try the http tier once more before
+        # spending a browser launch, and learn the winner so the next fetch starts
+        # honest. (No-op when the profile is already honest, or budget is spent.)
+        if (
+            reason in _HEADER_RETRY_REASONS
+            and header_profile == "browser"
+            and (deadline_monotonic - time.monotonic()) >= _HTTP_TIMEOUT_FLOOR
+        ):
+            t0 = time.monotonic()
+            h_html, h_status, h_headers = await _http_fetch(
+                url,
+                deadline_monotonic=_tier_deadline(deadline_monotonic, HTTP_MAX_BUDGET),
+                cfg=cfg,
+                profile="honest",
+            )
+            phases.network_ms += _ms_since(t0)
+            phases.attempts += 1
+            if bot_detect.classify(h_status, h_html, h_headers) == FailureReason.OK:
+                html, status, headers, reason = (
+                    h_html,
+                    h_status,
+                    h_headers,
+                    FailureReason.OK,
+                )
+                if cache is not None and hasattr(cache, "set_header_profile"):
+                    try:
+                        cache.set_header_profile(route, "honest")
+                    except Exception:
+                        pass
 
         if reason == FailureReason.OK:
             # Content-sufficiency check: a 200 that converts to zero words is an

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>⚓ T1234 Improve the widget rendering pipeline</title>
+  <meta property="og:title" content="T1234 Improve the widget rendering pipeline" />
+</head>
+<body>
+  <div class="phui-header-shell">
+    <h1 class="phui-header-header">Improve the widget rendering pipeline</h1>
+    <div class="phui-header-subheader">
+      <span class="phui-tag-view"><span class="phui-tag-core">Open, High</span></span>
+    </div>
+  </div>
+
+  <div class="phui-property-list-text-content">
+    <div class="phabricator-remarkup">
+      <p>The current pipeline is slow. See <a href="/T1000">T1000</a> and the
+      <a href="https://example.org/docs">external docs</a> for context.</p>
+      <ul>
+        <li>Cache the parsed templates</li>
+        <li>Batch the network calls</li>
+      </ul>
+      <pre>def render():
+    return widget</pre>
+    </div>
+  </div>
+
+  <div class="phui-curtain">
+    <div class="phui-curtain-panel">
+      <span class="phui-curtain-panel-header">Authored By</span>
+      <div class="phui-curtain-panel-body">
+        <a href="/p/alice/" class="phui-link-person">alice</a>
+      </div>
+    </div>
+    <div class="phui-curtain-panel">
+      <span class="phui-curtain-panel-header">Assigned To</span>
+      <div class="phui-curtain-panel-body">
+        <a href="/p/bob/" class="phui-link-person">bob</a>
+      </div>
+    </div>
+    <div class="phui-curtain-panel">
+      <span class="phui-curtain-panel-header">Project Tags</span>
+      <div class="phui-curtain-panel-body">
+        <ul class="phabricator-handle-tag-list">
+          <li class="phabricator-handle-tag-list-item">
+            <a href="/tag/widgets/" class="phui-tag-view"><span class="phui-tag-core">Widgets</span></a>
+          </li>
+          <li class="phabricator-handle-tag-list-item">
+            <a href="/tag/perf/" class="phui-tag-view"><span class="phui-tag-core">Performance</span></a>
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div class="phui-curtain-panel">
+      <span class="phui-curtain-panel-header">Subscribers</span>
+      <div class="phui-curtain-panel-body">
+        <div class="phui-curtain-object-ref-view">
+          <a href="/p/carol/" class="phui-handle phui-link-person">carol</a>
+        </div>
+        <div class="phui-curtain-object-ref-view">
+          <a href="/p/dave/" class="phui-handle phui-link-person">dave</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phui-timeline-view">
+    <div class="phui-timeline-shell">
+      <div class="phabricator-anchor-view" id="100001"></div>
+      <a href="/p/carol/" class="phui-handle phui-link-person">carol</a>
+      <span class="print-only">2024-01-02 10:00:00 (UTC+0)</span>
+      <div data-sigil="transaction-comment">
+        <div class="phabricator-remarkup"><p>I started looking into this. The
+        <a href="/T1000">parser</a> is the bottleneck.</p></div>
+      </div>
+    </div>
+    <div class="phui-timeline-shell">
+      <div class="phabricator-anchor-view" id="100002"></div>
+      <a href="/p/bob/" class="phui-handle phui-link-person">bob</a>
+      <span class="print-only">2024-01-02 11:00:00 (UTC+0)</span>
+      <div class="phui-timeline-core-content">changed the status from Open to Resolved.</div>
+    </div>
+    <div class="phui-timeline-shell">
+      <div class="phabricator-anchor-view" id="100003"></div>
+      <a href="/p/dave/" class="phui-handle phui-link-person">dave</a>
+      <span class="print-only">2024-01-03 09:30:00 (UTC+0)</span>
+      <div data-sigil="transaction-comment">
+        <div class="phabricator-remarkup"><p>Confirmed, batching the calls helped.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phui-property-list-view">
+    <dl class="phui-property-list-properties">
+      <dt>Mentioned In</dt>
+      <dd><a href="/T2000" class="phui-handle">T2000: Related cleanup</a></dd>
+      <dt>Subtasks</dt>
+      <dd>
+        <a href="/T2100" class="phui-handle">T2100: Subtask one</a>
+        <a href="/T2101" class="phui-handle handle-status-closed">T2101: Subtask two</a>
+      </dd>
+    </dl>
+  </div>
+</body>
+</html>

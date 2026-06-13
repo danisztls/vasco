@@ -45,6 +45,17 @@ When `adapters.steam.itad_api_key` (or `VASCO_ITAD_API_KEY`) is set, Steam **app
 
 Rot contract: broken/non-JSON `appdetails` or a search response with **no `items` array** → `AdapterParseError` → `PARSE_FAILED`; an `appdetails` node with `success: false` (delisted/nonexistent appid — valid shape, no store page) → **`NOT_FOUND`** (not rot); a search with an empty `items` array → `success` + `["no_results"]`. One product per app page in `quality.products` (`page_type` app/search, `currency`, `result_count`, `app_id`/`query`); own envelope shape (`mode_used="steam"`, `content_type="application/x-steam"`).
 
+## `vasco/adapters/phabricator.py`
+
+Wikimedia Phabricator (Phorge) tasks + task search (`phabricator.wikimedia.org`, extensible to other public Phorge instances via `cfg.adapters.phabricator.domains`). Phabricator is **server-rendered HTML** on the plain http tier (no JS app, no bot challenge) — like Steam/Shopify it needs **no strategy seed and no probe** — but unlike them it **scrapes the HTML** rather than a JSON API (the Conduit API requires an auth token; anonymous calls get `ERR-INVALID-SESSION`, so this is an intentionally unauthenticated scraper that can only read **public** data — a safety property: prompt injection can't escalate to restricted tasks). HTML is obtained through the shared escalation chain via the injected `fetch_html`. Two page types:
+
+- **Task** (`/T<id>`): the `og:title` meta (`"T<id> <title>"`) is the structural anchor. Parses status/priority (the header subheader tag, folding Phabricator's "Closed, Resolved" form into `status="Resolved"`), the description (the property-list `.phabricator-remarkup`, converted to Markdown — links/lists/code/blockquotes preserved), author/assignee/tags/subscribers (the curtain panels), comments **with metadata** (`id`, `author`, `timestamp`, `text` — only `transaction-comment` timeline shells, capped at `cfg.adapters.phabricator.max_comments`, default 50), and related objects (mentioned-in/here, subtasks, parents, duplicates — every `dt`/`dd` property-list pair carrying object handles, keyed by a slug of its label). The single task object lands in `quality.task` (`result_count: 1`).
+- **Search / list** (`/search/?query=…&types=TASK` or `/maniphest/?…`): the `ul.phui-oi-list-view` object-item list is the anchor → a list of `{id, name, title, url, status, snippet}` in `quality.tasks` (`query`, `result_count`). Both endpoints serve over **GET** (a read needs no CSRF token); non-task object-items in a mixed result set are filtered out. Global `/search/` yields per-result status + snippet; Maniphest list status is best-effort (absent when the page only exposes it via the Javelin tooltip metadata).
+
+A **restricted** task (anonymous users are redirected to the login wall or get the policy-exception page) is surfaced as a clear **`LOGIN_REQUIRED`** failure with an actionable message — never a misleading `PARSE_FAILED`. The auth-wall markers (`you do not have permission` / `you shall not pass` / the login form / a `<title>Login</title>`) are checked **only on an anchor-less page**, so a public task whose comment text merely discusses permissions never false-fires. Own envelope shape (`mode_used="phabricator"`, `content_type="application/x-phabricator"`).
+
+Rot contract: a task page with no `og:title` `T<id>` anchor that is *not* an auth wall, or a search page with no `phui-oi-list-view` container → `AdapterParseError` → `PARSE_FAILED`; a 404 (nonexistent task) → **`NOT_FOUND`** (the chain classifies the status); a search whose container is present but holds zero task items → `success` + `["no_results"]`. Modeled on Eric Gardner's [`mcp-phabricator`](https://gitlab.wikimedia.org/egardner/mcp-phabricator) scraper backend.
+
 ## Verification recipes
 
 ```bash
@@ -105,4 +116,13 @@ VASCO_ITAD_API_KEY=<key> uv run vasco fetch "https://store.steampowered.com/app/
   | jq '.quality.products[0] | {price, currency, historical_low, price_history, itad_url}'
 # → all-time-low Steam price + recent price-change log (Steam-only, shops=61; currency from adapters.steam.country).
 # Best-effort: no key / game not on ITAD → fields simply absent (store data unaffected).
+
+uv run vasco fetch "https://phabricator.wikimedia.org/T241180" \
+  | jq '.mode_used, (.quality.task | {id, title, status, priority, author: .author.username,
+        tags: [.tags[].name], n_comments: (.comments | length), related: (.related | keys)})'
+uv run vasco fetch "https://phabricator.wikimedia.org/search/?query=parsoid+timeout&types=TASK" \
+  | jq '.quality.page_type, .quality.query, .quality.result_count, (.quality.tasks[0] | {id, status, title})'
+# Phabricator adapter: task pages → structured task in quality.task (status/priority/author/assignee/tags/
+# subscribers/description/comments-with-metadata/related); /search & /maniphest → quality.tasks. Public data
+# only (HTML scrape, no Conduit token) — a restricted task returns a LOGIN_REQUIRED failure, not PARSE_FAILED.
 ```

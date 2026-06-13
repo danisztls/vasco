@@ -200,6 +200,17 @@ class SteamCfg:
 
 
 @dataclass(frozen=True)
+class PhabricatorCfg:
+    """Phabricator/Phorge adapter knobs. `domains` extends the built-in known
+    host set (``phabricator.wikimedia.org``) so the same Phorge-markup scraper
+    works on other public instances; `max_comments` caps how many timeline
+    comments a task page parses (a cost guard on very long tasks)."""
+
+    domains: tuple[str, ...] = ()
+    max_comments: int = 50
+
+
+@dataclass(frozen=True)
 class AdaptersCfg:
     """Per-source content-adapter knobs, grouped so site-scraping config stays
     separate from the global infrastructure sections. Each sub-section is the
@@ -212,6 +223,7 @@ class AdaptersCfg:
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
     steam: SteamCfg = field(default_factory=SteamCfg)
+    phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
 
@@ -267,6 +279,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "shopify": ShopifyCfg,
     "shopee": ShopeeCfg,
     "steam": SteamCfg,
+    "phabricator": PhabricatorCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,
 }

@@ -45,6 +45,7 @@ from vasco.adapters import (
     google_shopping,
     mercadolivre,
     olx,
+    phabricator,
     realestate,
     shopee,
     shopify,
@@ -415,6 +416,16 @@ async def _dispatch_adapters(
                 url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
             )
             return finalize(envelope, route.service), state["browser_started"]
+
+    # Phabricator (task pages + task search): handled outside the route table
+    # because matching its known-host set (built-in ∪ cfg.adapters.phabricator.domains)
+    # needs cfg, which the url-only `_adapter_routes()` predicates don't carry.
+    if phabricator.is_phabricator_url(url, cfg):
+        fetch_html, state = make_fetcher()
+        envelope = await phabricator.fetch_phabricator(
+            url, deadline=deadline, cfg=cfg, fetch_html=fetch_html
+        )
+        return finalize(envelope, "phabricator"), state["browser_started"]
 
     # Shopify (product/collection/search via platform JSON endpoints): known
     # domains dispatch directly; unknown product/collection URLs are probed and

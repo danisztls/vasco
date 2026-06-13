@@ -26,12 +26,14 @@ from vasco.errors import BrowserServerUnavailable, FailureReason
 from vasco.urls import registered_domain
 
 from . import bot_detect, browser
-from .phases import _HtmlOutcome, _Phases, _convert_html, _ms_since
+from .phases import _HtmlOutcome, _Phases, _convert_html, _convert_text, _ms_since
 from .urlutils import (
     _ACCEPT_ENCODING,
     _HTTP_TIMEOUT_FLOOR,
     _RECOVERABLE_REASONS,
+    _content_type,
     _is_pdf,
+    _is_plaintext_response,
     _pandoc_format,
     _route_key,
     _tier_deadline,
@@ -492,12 +494,22 @@ async def _do_fetch_html(
                 and not _is_pdf(url_final, headers)
                 and _pandoc_format(url_final, headers) is None
             ):
-                markdown, meta = _convert_html(html, url_final, phases)
-                escalate_empty = (
-                    mode == "auto"
-                    and meta.get("word_count", 0) == 0
-                    and (deadline_monotonic - time.monotonic()) >= BROWSER_MIN_BUDGET
-                )
+                ct = _content_type(headers, "")
+                if _is_plaintext_response(ct, html):
+                    # A text/plain / Markdown body (raw .md / .txt / RFC / LICENSE)
+                    # is already readable text. Pass it through verbatim — running
+                    # it through the HTML extractor yields zero words, which would
+                    # otherwise look like an unrendered shell and pointlessly
+                    # escalate to the browser tier (or fail EMPTY_BODY).
+                    markdown, meta = _convert_text(html, ct, phases)
+                else:
+                    markdown, meta = _convert_html(html, url_final, phases)
+                    escalate_empty = (
+                        mode == "auto"
+                        and meta.get("word_count", 0) == 0
+                        and (deadline_monotonic - time.monotonic())
+                        >= BROWSER_MIN_BUDGET
+                    )
             if not escalate_empty:
                 if cache is not None and hasattr(cache, "bump"):
                     try:

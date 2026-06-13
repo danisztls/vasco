@@ -136,6 +136,35 @@ def _content_type(headers: dict[str, str] | None, default: str) -> str:
     return default
 
 
+# Bare content-types whose body is already human-readable text. They must NOT
+# be run through trafilatura (an HTML *article* extractor — structureless text
+# has no DOM, so it's discarded → empty result); the body is passed through
+# verbatim instead. (RTF is text-ish but a pandoc format, so it's caught by
+# `_pandoc_format` upstream and never reaches here.)
+_PLAINTEXT_TYPES: frozenset[str] = frozenset(
+    {"text/plain", "text/markdown", "text/x-markdown", "text/x-rst"}
+)
+
+
+def _is_plaintext_response(content_type: str | None, body: str) -> bool:
+    """True when a 200 body should be passed through verbatim rather than
+    HTML-extracted.
+
+    Two conditions: its declared type is a plain-text family, **and** it doesn't
+    actually sniff as HTML. Some servers mislabel an HTML document as
+    ``text/plain``; those still want trafilatura, so the sniff keeps the "only
+    HTML reaches trafilatura, raw text passes through" split honest.
+    """
+    if not content_type:
+        return False
+    if content_type.split(";", 1)[0].strip().lower() not in _PLAINTEXT_TYPES:
+        return False
+    head = (body or "").lstrip()[:256].lower()
+    if head.startswith("<!doctype html") or head.startswith("<html"):
+        return False
+    return True
+
+
 def _normalize_url(url: str, cache: Any | None) -> str | None:
     if cache is not None and hasattr(cache, "normalize_url"):
         try:

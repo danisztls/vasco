@@ -718,3 +718,88 @@ def test_gitlab_bare_project_on_plain_host_is_not_probed(
     finally:
         cache.close()
         gitlab_mod._reset_for_tests()
+
+
+# A real Markdown document body (headings, list, link) — structureless from
+# trafilatura's DOM-walking point of view, so it would convert to zero words.
+_RAW_MARKDOWN = (
+    "# mcp-phabricator\n\n"
+    "A Model Context Protocol server for Phabricator.\n\n"
+    "## Install\n\n"
+    "- `pip install mcp-phabricator`\n"
+    "- Configure your token\n\n"
+    "See the [docs](https://example.org/docs) for details.\n"
+)
+
+
+def test_textplain_body_passes_through_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A text/plain (raw Markdown) 200 is returned verbatim on the http tier:
+    no trafilatura extraction, no EMPTY_BODY, no pointless browser escalation."""
+    monkeypatch.setattr(
+        core_mod,
+        "_http_fetch",
+        _stub_http(_RAW_MARKDOWN, 200, {"Content-Type": "text/plain; charset=utf-8"}),
+    )
+
+    browser_calls: list[str] = []
+
+    class _SpyPool:
+        async def fetch(self, url: str, *a: Any, **kw: Any):
+            browser_calls.append(url)
+            return "", 0, {}
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_mod, "_pool", None, raising=False)
+    monkeypatch.setattr(browser_mod, "get_browser", lambda cfg=None: _SpyPool())
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://gitlab.example/egardner/mcp-phabricator/-/raw/main/README.md",
+                cache=cache,
+                deadline=10.0,
+            )
+        )
+        assert "failure" not in env
+        assert env["mode_used"] == "http"
+        assert env["markdown"] == _RAW_MARKDOWN
+        assert env["word_count"] > 0
+        assert "plaintext_passthrough" in env["warnings"]
+        # The whole point: the browser tier never ran for a plain-text file.
+        assert browser_calls == []
+    finally:
+        cache.close()
+
+
+def test_html_mislabeled_as_textplain_still_extracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real HTML document served with a text/plain header still goes through
+    trafilatura (the passthrough only fires for bodies that don't sniff as HTML)."""
+    html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        core_mod,
+        "_http_fetch",
+        _stub_http(html, 200, {"Content-Type": "text/plain"}),
+    )
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://example.com/weird-server", cache=cache, deadline=10.0
+            )
+        )
+        assert "failure" not in env
+        assert env["mode_used"] == "http"
+        # Extracted, not dumped raw — so the passthrough warning is absent.
+        assert "plaintext_passthrough" not in env["warnings"]
+        assert "<html" not in env["markdown"].lower()
+    finally:
+        cache.close()

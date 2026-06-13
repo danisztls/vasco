@@ -74,6 +74,24 @@ def _convert_html(html: str, url: str, phases: _Phases) -> tuple[str, dict[str, 
     return markdown, meta
 
 
+def _convert_text(
+    text: str, content_type: str | None, phases: _Phases
+) -> tuple[str, dict[str, Any]]:
+    """Pass a plain-text body through verbatim (no HTML extraction).
+
+    Mirrors `_convert_html`'s signature/timing so the OK branch can pick between
+    them on content-type. Parse cost is negligible (nothing is parsed), but it's
+    still accounted so `parse_ms` stays meaningful. Never raises.
+    """
+    t0 = time.monotonic()
+    try:
+        markdown, meta = convert.text_to_markdown(text, content_type=content_type)
+    except Exception:
+        markdown, meta = text or "", {"word_count": len((text or "").split())}
+    phases.parse_ms += _ms_since(t0)
+    return markdown, meta
+
+
 def _stamp_phases(
     envelope: dict[str, Any],
     *,

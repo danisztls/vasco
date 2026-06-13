@@ -116,6 +116,41 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
+def text_to_markdown(text: str, *, content_type: str | None = None) -> tuple[str, dict]:
+    """Pass a plain-text / Markdown body through verbatim, with the same
+    metadata shape `html_to_markdown` returns.
+
+    trafilatura is an HTML *article* extractor: given structureless plain text
+    (a raw ``.md`` / ``.txt`` / RFC / ``LICENSE``) it has no DOM to walk and
+    discards everything → empty result. Such a body is already human-readable,
+    so it becomes the envelope Markdown unchanged — no extraction, nothing
+    stripped (`boilerplate_ratio` is 0.0). ``content_type`` is informational
+    (recorded in the warning) and not used to mutate the body.
+    """
+    body = text or ""
+    wc = _word_count(body)
+    warnings: list[str] = ["plaintext_passthrough"]
+    if len(body.strip()) < 200:
+        warnings.append("short_content")
+    metadata = {
+        "title": None,
+        "byline": None,
+        "published": None,
+        "modified": None,
+        "language": None,
+        "site_name": None,
+        "image": None,
+        "word_count": wc,
+        "links": [],
+        "quality": {
+            "trafilatura_confidence": round(min(1.0, wc / 800.0), 4),
+            "boilerplate_ratio": 0.0,
+        },
+        "warnings": warnings,
+    }
+    return body, metadata
+
+
 def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     """Convert HTML to Markdown via trafilatura and return (markdown, metadata).
 

@@ -42,6 +42,7 @@ from vasco.envelope import (
 from vasco.errors import FailureReason
 from vasco.adapters import (
     aliexpress,
+    gitlab,
     google_shopping,
     mercadolivre,
     olx,
@@ -446,6 +447,24 @@ async def _dispatch_adapters(
         except shopify.NotShopify:
             return None, state["browser_started"]
         return finalize(envelope, "shopify"), state["browser_started"]
+
+    # GitLab (projects + issues + merge requests via the public /api/v4 JSON):
+    # known hosts (gitlab.com ∪ cfg.adapters.gitlab.domains) dispatch directly;
+    # an unknown host on a claimable URL is probed and falls through on a miss
+    # (NotGitLab). Placed *after* shopify: a bare-project shape (`/a/b`) overlaps
+    # shopify's `/products/x` candidate, and a probe miss returns here (exiting
+    # dispatch), so shopify must get first refusal on its own candidates. GitLab
+    # owns a minimal-header httpx client (the chain's headers 403 on self-hosted
+    # WAFs), so it takes no `fetch_html` and never touches the browser pool.
+    is_known_gitlab = gitlab.is_gitlab_url(url, cfg, cache)
+    if is_known_gitlab or gitlab.is_gitlab_candidate(url, cfg, cache):
+        try:
+            envelope = await gitlab.fetch_gitlab(
+                url, deadline=deadline, cfg=cfg, cache=cache, probe=not is_known_gitlab
+            )
+        except gitlab.NotGitLab:
+            return None, False
+        return finalize(envelope, "gitlab"), False
 
     return None, False
 

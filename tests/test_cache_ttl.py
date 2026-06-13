@@ -175,6 +175,22 @@ def test_purge_domain_no_match_returns_zero(cache: Cache, fake_time) -> None:
     assert cache.get("https://example.com/a") is not None
 
 
+def test_purge_domain_clears_apex_and_subdomain_probe_verdicts(
+    cache: Cache, fake_time
+) -> None:
+    # Shopify keys probe verdicts by registered domain; GitLab by full host. A
+    # purge of the eTLD+1 must clear both the apex key and any subdomain key.
+    cache.set_probe("shopify", "wikimedia.org", False)
+    cache.set_probe("gitlab", "gitlab.wikimedia.org", True)
+    cache.set_probe("gitlab", "gitlab.example.com", True)  # unrelated domain, kept
+
+    cache.purge_domain("wikimedia.org")
+
+    assert cache.get_probe("shopify", "wikimedia.org") is None
+    assert cache.get_probe("gitlab", "gitlab.wikimedia.org") is None
+    assert cache.get_probe("gitlab", "gitlab.example.com") is True
+
+
 def test_stats_reports_entries(cache: Cache, fake_time) -> None:
     assert cache.stats()["entries"] == 0
     cache.put(_success_envelope("https://example.com/a"), ttl_seconds=10)

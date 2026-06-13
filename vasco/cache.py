@@ -334,8 +334,14 @@ class Cache:
             "DELETE FROM fetch_cache WHERE _registered_domain(url) = ?", (target,)
         )
         # Forget any adapter-probe verdict for the domain too, so a re-fetch
-        # re-discovers it fresh rather than trusting a stale memo.
-        self._conn.execute("DELETE FROM adapter_probe WHERE domain = ?", (target,))
+        # re-discovers it fresh rather than trusting a stale memo. Match both the
+        # registered-domain key (shopify) and any host-scoped key under it
+        # (gitlab keys by full host, e.g. gitlab.wikimedia.org), so a purge of the
+        # eTLD+1 clears subdomain verdicts as well.
+        self._conn.execute(
+            "DELETE FROM adapter_probe WHERE domain = ? OR domain LIKE ?",
+            (target, f"%.{target}"),
+        )
         self._conn.commit()
         return cur.rowcount
 

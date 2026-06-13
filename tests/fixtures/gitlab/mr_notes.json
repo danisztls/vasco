@@ -1,0 +1,16 @@
+[
+  {
+    "id": 401,
+    "body": "mentioned in commit abc123",
+    "system": true,
+    "created_at": "2015-05-22T09:00:00.000Z",
+    "author": {"id": 11, "username": "1and1_ebusiness", "name": "1&1 eBusiness"}
+  },
+  {
+    "id": 402,
+    "body": "LGTM — nice work on the recursion guard.",
+    "system": false,
+    "created_at": "2015-05-24T16:20:00.000Z",
+    "author": {"id": 9, "username": "dzaporozhets", "name": "Dmitriy Z"}
+  }
+]

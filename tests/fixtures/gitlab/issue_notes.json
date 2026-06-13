@@ -1,0 +1,23 @@
+[
+  {
+    "id": 301,
+    "body": "changed the description",
+    "system": true,
+    "created_at": "2015-07-30T14:30:00.000Z",
+    "author": {"id": 7, "username": "jacobvosmaer", "name": "Jacob Vosmaer"}
+  },
+  {
+    "id": 302,
+    "body": "I can reproduce this on staging — looks like a nil approver.",
+    "system": false,
+    "created_at": "2015-07-31T08:15:00.000Z",
+    "author": {"id": 9, "username": "dzaporozhets", "name": "Dmitriy Z"}
+  },
+  {
+    "id": 303,
+    "body": "Fixed in !4567, deploying now.",
+    "system": false,
+    "created_at": "2015-08-01T08:55:00.000Z",
+    "author": {"id": 7, "username": "jacobvosmaer", "name": "Jacob Vosmaer"}
+  }
+]

@@ -211,6 +211,19 @@ class PhabricatorCfg:
 
 
 @dataclass(frozen=True)
+class GitLabCfg:
+    """GitLab adapter knobs (public REST API, no auth). `domains` extends the
+    built-in known-host set (`gitlab.com`) so a self-hosted instance is served
+    without a probe; `autodetect` lets a claimable URL on an *unknown* host be
+    probed against the `/api/v4` endpoint (Shopify-style, falling through on a
+    miss); `max_comments` caps how many issue/MR notes (comments) are parsed."""
+
+    domains: tuple[str, ...] = ()
+    autodetect: bool = True
+    max_comments: int = 20
+
+
+@dataclass(frozen=True)
 class AdaptersCfg:
     """Per-source content-adapter knobs, grouped so site-scraping config stays
     separate from the global infrastructure sections. Each sub-section is the
@@ -224,6 +237,7 @@ class AdaptersCfg:
     shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
     steam: SteamCfg = field(default_factory=SteamCfg)
     phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
+    gitlab: GitLabCfg = field(default_factory=GitLabCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
 
@@ -280,6 +294,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "shopee": ShopeeCfg,
     "steam": SteamCfg,
     "phabricator": PhabricatorCfg,
+    "gitlab": GitLabCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,
 }

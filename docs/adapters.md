@@ -56,6 +56,17 @@ A **restricted** task (anonymous users are redirected to the login wall or get t
 
 Rot contract: a task page with no `og:title` `T<id>` anchor that is *not* an auth wall, or a search page with no `phui-oi-list-view` container → `AdapterParseError` → `PARSE_FAILED`; a 404 (nonexistent task) → **`NOT_FOUND`** (the chain classifies the status); a search whose container is present but holds zero task items → `success` + `["no_results"]`. Modeled on Eric Gardner's [`mcp-phabricator`](https://gitlab.wikimedia.org/egardner/mcp-phabricator) scraper backend.
 
+## `vasco/adapters/gitlab.py`
+
+GitLab projects, issues, and merge requests (`gitlab.com` + any self-hosted instance). It fetches the site's **public JSON API** (`/api/v4`, GET, no token for public data) rather than scraping the Vue SPA. Unlike Steam/Shopify (which ride the injected `fetch_html`), it uses its **own minimal-header httpx client** (like the ITAD client): vasco's escalation-chain "modern-Chrome" headers (`Sec-Fetch-*` etc.) trip self-hosted GitLab WAFs into a **403** (a minimal GET sails through), and a JSON endpoint gains nothing from the browser tier (which would wrap it in Firefox's JSON viewer) or the wayback tail — so it takes no `fetch_html` and never touches the browser pool. Scope is intentionally the **"not in git" layer**: no code/tree/commit/pipeline fetching (that's `git`'s job). Three page types, claimed by URL shape (the project path is everything before GitLab's `/-/` separator, nested groups allowed; it is URL-encoded as the API `:id`):
+
+- **Project** (a bare `/<namespace>/<project>` path): `/api/v4/projects/<enc>?license=true` is the **spine/anchor** (`id` + `path_with_namespace`) → name, description, `star_count`, `forks_count`, `open_issues_count`, topics, license, `default_branch`, visibility, `last_activity_at`. Enriched **best-effort** with the rendered README — the project's `readme_url` (`…/-/blob/<branch>/<file>`) is rewritten to the raw route (`…/-/raw/…`) and included verbatim (capped at 20k chars); a README miss never fails the fetch.
+- **Issue** (`/-/issues/<iid>`) / **Merge request** (`/-/merge_requests/<iid>`): the `/projects/<enc>/issues|merge_requests/<iid>` object is the anchor (`iid` + `title`) → state, author, labels, dates, vote/note counts (MR adds source/target branch, `merge_status`, `draft`). Comments come from the `…/<iid>/notes` endpoint **best-effort** (concurrent `asyncio.gather`; system notes dropped; capped at `cfg.adapters.gitlab.max_comments`, default 20) — a non-array body (some instances gate the notes API anonymously → `{"message": "401 …"}`) yields zero comments, not a failure.
+
+Host coverage uses a **Shopify-style probe** (the user chose "detect any host"): `gitlab.com` ∪ `cfg.adapters.gitlab.domains` are *known* (served directly); a claimable URL on an **unknown** host is **probed** (the API call doubles as the probe) and the verdict is persisted in the `adapter_probe` table — **keyed by full host**, not registered domain, since a GitLab instance is subdomain-specific (`gitlab.wikimedia.org` is GitLab, `www.wikimedia.org` is not; `cache purge <eTLD+1>` clears these host-scoped verdicts too). Valid GitLab JSON confirms the host (memoized True); a **non-JSON** body marks it not-GitLab (memoized False); anything ambiguous (a JSON 404 / non-object) raises `NotGitLab` → the dispatcher **falls through to a normal fetch**, so a non-GitLab lookalike is never a failure. The branch runs **after** Shopify (a bare `/a/b` shape overlaps Shopify's `/products/x` candidate). `autodetect: false` disables probing (known hosts only). Own envelope shape (`mode_used="gitlab"`, `content_type="application/x-gitlab"`); `quality` carries `provider`/`page_type`/`host`/`result_count` (always 1 — a detail page) plus the `project`/`issue`/`merge_request` object and `comments`.
+
+Rot contract (on a *known* host): a non-JSON API body → `PARSE_FAILED`; a JSON 404 / not-an-object body → **`NOT_FOUND`** (project/issue/MR absent or private); a parsed object → `success`. Authentication is never sent, so a private project simply 404s (honest `NOT_FOUND`), never an escalation surface.
+
 ## Verification recipes
 
 ```bash
@@ -125,4 +136,14 @@ uv run vasco fetch "https://phabricator.wikimedia.org/search/?query=parsoid+time
 # Phabricator adapter: task pages → structured task in quality.task (status/priority/author/assignee/tags/
 # subscribers/description/comments-with-metadata/related); /search & /maniphest → quality.tasks. Public data
 # only (HTML scrape, no Conduit token) — a restricted task returns a LOGIN_REQUIRED failure, not PARSE_FAILED.
+
+uv run vasco fetch "https://gitlab.wikimedia.org/egardner/mcp-phabricator" \
+  | jq '.mode_used, (.quality.project | {path_with_namespace, star_count, forks_count, default_branch, license})'
+uv run vasco fetch "https://gitlab.com/gitlab-org/gitlab/-/issues/1" \
+  | jq '.quality.page_type, (.quality.issue | {iid, state, author, labels}), (.quality.comments | length)'
+uv run vasco fetch "https://gitlab.com/gitlab-org/gitlab/-/merge_requests/1" \
+  | jq '.quality.merge_request | {iid, state, source_branch, target_branch, merge_status}'
+# GitLab adapter: public /api/v4 JSON (no auth). Self-hosted hosts auto-detected via a persisted probe
+# (gitlab.com + cfg.adapters.gitlab.domains skip it). Project pages include the README; issues/MRs include
+# best-effort comments. A non-GitLab /a/b lookalike falls through to a normal fetch (never a failure).
 ```

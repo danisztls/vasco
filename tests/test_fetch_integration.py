@@ -552,3 +552,159 @@ def test_shopify_probe_miss_falls_through_to_normal_fetch(
     finally:
         cache.close()
         shopify_mod._reset_for_tests()
+
+
+_GITLAB_FX = FIXTURES / "gitlab"
+
+
+def _stub_gitlab_api(routes: dict[str, tuple[str, int]], default: tuple[str, int]):
+    """Stub for `gitlab._api_get` (the adapter's own httpx seam): serves a
+    (body, status) by URL-substring, defaulting otherwise. Reason is always OK
+    (an HTTP response arrived); the adapter keys on the status + body shape."""
+    from vasco.errors import FailureReason
+
+    async def _fake(url: str, *, deadline: float, cfg: Any = None):
+        body, status = default
+        for needle, payload in routes.items():
+            if needle in url:
+                body, status = payload
+                break
+        return body, status, FailureReason.OK
+
+    return _fake
+
+
+def test_gitlab_project_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known-host (gitlab.com) project URL → structured envelope with README
+    through the real cache, then a clean cache roundtrip."""
+    from vasco.adapters import gitlab as gitlab_mod
+
+    gitlab_mod._reset_for_tests()
+    project = (_GITLAB_FX / "project.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_api_get",
+        _stub_gitlab_api(
+            {
+                "/api/v4/projects/": (project, 200),
+                "/-/raw/": ("# mcp-phabricator\n\nAn MCP server.", 200),
+            },
+            default=("not found", 404),
+        ),
+    )
+    _disable_browser(monkeypatch)
+
+    url = "https://gitlab.com/egardner/mcp-phabricator"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "gitlab"
+        assert "failure" not in env
+        assert env["quality"]["provider"] == "gitlab"
+        assert env["quality"]["page_type"] == "project"
+        assert env["quality"]["project"]["star_count"] == 11
+        assert "## README" in env["markdown"]
+
+        again = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert again["from_cache"] is True
+        assert again["quality"]["project"]["star_count"] == 11
+    finally:
+        cache.close()
+        gitlab_mod._reset_for_tests()
+
+
+def test_gitlab_probe_confirms_self_hosted_and_memoizes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown forge-hinted host on a bare-project URL is probed; valid GitLab
+    JSON confirms it → structured envelope + a persisted True verdict (by host)."""
+    from vasco.adapters import gitlab as gitlab_mod
+
+    gitlab_mod._reset_for_tests()
+    project = (_GITLAB_FX / "project.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_api_get",
+        _stub_gitlab_api(
+            {"/api/v4/projects/": (project, 200), "/-/raw/": ("# readme", 200)},
+            default=("not found", 404),
+        ),
+    )
+    _disable_browser(monkeypatch)
+
+    url = "https://gitlab.wikimedia.org/egardner/mcp-phabricator"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "gitlab"
+        assert env["quality"]["provider"] == "gitlab"
+        assert cache.get_probe("gitlab", "gitlab.wikimedia.org") is True
+    finally:
+        cache.close()
+        gitlab_mod._reset_for_tests()
+
+
+def test_gitlab_probe_miss_falls_through_to_normal_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A forge-hinted unknown host whose /api/v4 path returns HTML (not GitLab) →
+    the bare /a/b URL falls through to a normal HTML→markdown fetch, never a
+    failure, and the host is negative-memoized so it's not re-probed."""
+    from vasco.adapters import gitlab as gitlab_mod
+
+    gitlab_mod._reset_for_tests()
+    # The probe (gitlab._api_get) sees HTML → not GitLab; the fall-through normal
+    # fetch goes through the regular http tier (core._http_fetch).
+    monkeypatch.setattr(
+        gitlab_mod, "_api_get", _stub_gitlab_api({}, default=("<html>nope</html>", 200))
+    )
+    article = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(article, 200))
+    _disable_browser(monkeypatch)
+
+    url = "https://git.not-really.example/some/page"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "http"  # fell through to the normal path
+        assert "failure" not in env
+        assert env["quality"].get("provider") != "gitlab"
+        assert gitlab_mod._probe_memo.get("git.not-really.example") is False
+    finally:
+        cache.close()
+        gitlab_mod._reset_for_tests()
+
+
+def test_gitlab_bare_project_on_plain_host_is_not_probed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-forge host's bare /a/b URL is NOT a GitLab probe candidate — it goes
+    straight to a normal fetch with no /api/v4 round-trip (no spraying the web)."""
+    from vasco.adapters import gitlab as gitlab_mod
+
+    gitlab_mod._reset_for_tests()
+    fetched: list[str] = []
+
+    async def _spy(url: str, *, deadline_monotonic: float, cfg=None):
+        fetched.append(url)
+        return "<html><body><p>plain page</p></body></html>", 200, {"_url_final": url}
+
+    monkeypatch.setattr(core_mod, "_http_fetch", _spy)
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://news.example/world/story", cache=cache, deadline=10.0
+            )
+        )
+        assert env["mode_used"] == "http"
+        # No /api/v4 probe was attempted — only the page itself was fetched.
+        assert not any("/api/v4/" in u for u in fetched)
+        assert gitlab_mod._probe_memo.get("news.example") is None
+    finally:
+        cache.close()
+        gitlab_mod._reset_for_tests()

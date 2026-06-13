@@ -98,6 +98,10 @@
 #   phabricator:                # Phabricator/Phorge tasks + task search (HTML scrape, public data only)
 #     domains: []              # extra Phorge instance hosts (phabricator.wikimedia.org built in)
 #     max_comments: 50         # cap timeline comments parsed per task page
+#   gitlab:                     # GitLab projects + issues + merge requests (public /api/v4, no auth)
+#     domains: []              # extra known GitLab hosts (gitlab.com built in); skips the probe
+#     autodetect: true         # probe unknown hosts on claimable URLs (falls through on a miss)
+#     max_comments: 20         # cap issue/MR notes (comments) parsed
 #   youtube:
 #     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...
 #     remote_components: ""    # "" = off (opt-in) | "ejs:github" enables yt-dlp's JS

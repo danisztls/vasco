@@ -48,6 +48,10 @@ _VTT_META_RE = re.compile(r"^(WEBVTT|Kind:|Language:)")
 _SPONSORBLOCK_URL = "https://sponsor.ajay.app/api/skipSegments"
 _SPONSORBLOCK_CATEGORIES = '["sponsor","selfpromo","interaction","intro","outro"]'
 
+# Pseudo-"subtitle" keys yt-dlp lists under ``subtitles`` that are chat replays
+# (JSON only), not caption text — never selectable as a transcript source.
+_NON_CAPTION_SUBS = frozenset({"live_chat", "rechat"})
+
 
 # ---------------------------------------------------------------------------
 # URL helpers
@@ -272,7 +276,15 @@ def _select_language(
     subs: dict[str, Any], auto: dict[str, Any]
 ) -> tuple[str | None, bool]:
     """Prefer human subtitles (en → en-orig → any), then auto-captions
-    (*-orig → en → any). Returns (lang, is_auto)."""
+    (*-orig → en → any). Returns (lang, is_auto).
+
+    yt-dlp lists ``live_chat`` (and ``rechat``) under ``subtitles``, but those
+    are chat-replay tracks served only as JSON — not caption text. Selecting one
+    makes ``_download_vtt`` write a ``.live_chat.json`` and no ``.vtt``, which we
+    would surface as the misleading "wrote no VTT file". Drop them so a video
+    with *only* a chat replay falls through to its real auto-captions.
+    """
+    subs = {k: v for k, v in subs.items() if k not in _NON_CAPTION_SUBS}
     for lang in ("en", "en-orig"):
         if lang in subs:
             return lang, False

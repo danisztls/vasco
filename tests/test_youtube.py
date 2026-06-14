@@ -153,6 +153,33 @@ def test_apply_sponsorblock_malformed_segment_ignored() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _select_language — caption-track selection
+# ---------------------------------------------------------------------------
+
+
+def test_select_language_prefers_human_english() -> None:
+    assert youtube._select_language({"en": [], "de": []}, {"en": []}) == ("en", False)
+
+
+def test_select_language_falls_back_to_auto() -> None:
+    assert youtube._select_language({}, {"fr-orig": [], "en": []}) == ("fr-orig", True)
+
+
+def test_select_language_skips_live_chat_for_auto_captions() -> None:
+    """``live_chat``/``rechat`` are JSON chat replays yt-dlp files under
+    ``subtitles`` — they must not be picked as a transcript source, or
+    ``_download_vtt`` writes no ``.vtt`` and we mislabel a captioned video as
+    having no usable captions. A video with *only* a chat replay must fall
+    through to its real auto-captions (regression: youtube.com/watch?v=wKXgeNwNRJ4)."""
+    lang, is_auto = youtube._select_language({"live_chat": []}, {"en": []})
+    assert (lang, is_auto) == ("en", True)
+
+
+def test_select_language_no_tracks_returns_none() -> None:
+    assert youtube._select_language({"live_chat": []}, {}) == (None, False)
+
+
+# ---------------------------------------------------------------------------
 # fetch_youtube — end-to-end with mocked workers
 # ---------------------------------------------------------------------------
 

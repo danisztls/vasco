@@ -1,13 +1,18 @@
-"""YouTube transcript fetcher.
+"""YouTube adapter: video transcripts + channel/playlist/search video listings.
 
 Public surface:
 - ``is_youtube_url(url)`` — match youtube.com (all TLDs), m.youtube.com,
   music.youtube.com, youtu.be (with or without www.).
+- ``classify_youtube_url(url)`` — ``video`` / ``channel`` / ``playlist`` /
+  ``search`` / ``other``; chooses which branch ``fetch_youtube`` takes.
 - ``extract_video_id(url)`` — parse a video ID from any supported URL form.
 - ``fetch_youtube(url, *, deadline, cfg=None)`` — return a v0.1 envelope.
 
 The envelope uses ``mode_used="youtube"`` and ``content_type="text/youtube"``.
-On any caption/network failure it returns a failure envelope rather than raising.
+A *video* URL yields a transcript (or, captionless, its description + metadata);
+a *channel*/*playlist*/*search* URL yields a video listing in ``quality.videos``
+(mirroring the content-adapter listing convention). On any failure it returns a
+failure envelope rather than raising.
 
 yt-dlp is imported lazily inside the worker helpers so the module import stays cheap.
 """
@@ -21,6 +26,7 @@ import re
 import tempfile
 import time
 from typing import Any
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from .. import envelope
 from ..urls import YT_VIDEO_ID_RE
@@ -79,6 +85,66 @@ def extract_video_id(url: str) -> str | None:
 
 def canonical_url(video_id: str) -> str:
     return f"https://youtube.com/watch?v={video_id}"
+
+
+# Channel path forms: /@handle, /channel/UC..., /c/Name, /user/Name (+ tabs).
+_YT_CHANNEL_PATH_RE = re.compile(
+    r"^/(?:@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)(?:/|$)",
+    re.IGNORECASE,
+)
+
+# Channel tab segments that already point at a listing — don't append /videos.
+_YT_CHANNEL_TABS = frozenset(
+    {
+        "videos",
+        "shorts",
+        "streams",
+        "live",
+        "playlists",
+        "featured",
+        "community",
+        "about",
+    }
+)
+
+
+def classify_youtube_url(url: str) -> str:
+    """Classify a YouTube URL into the branch ``fetch_youtube`` should take.
+
+    Returns one of ``video`` / ``channel`` / ``playlist`` / ``search`` /
+    ``other``. ``video`` wins whenever a video ID parses (so a
+    ``/watch?v=…&list=…`` video-in-playlist stays a transcript, not a listing).
+    ``other`` is the homepage/feed/unhandled tail.
+    """
+    if extract_video_id(url):
+        return "video"
+    parts = urlsplit(url or "")
+    path = (parts.path or "/").rstrip("/") or "/"
+    query = parse_qs(parts.query)
+    if path == "/results" and query.get("search_query"):
+        return "search"
+    if path == "/playlist" and query.get("list"):
+        return "playlist"
+    if _YT_CHANNEL_PATH_RE.match(parts.path or ""):
+        return "channel"
+    return "other"
+
+
+def _channel_listing_url(url: str) -> str:
+    """Normalize a channel URL to its videos-tab listing.
+
+    A bare channel root (``/@handle``, ``/channel/UC…``) lists *tab playlists*
+    under flat extraction, not videos — appending ``/videos`` makes yt-dlp
+    return the uploads directly. A URL already on a listing tab (``/videos``,
+    ``/streams``, …) is left untouched. Query/fragment are dropped.
+    """
+    parts = urlsplit(url)
+    segments = [s for s in parts.path.split("/") if s]
+    if segments and segments[-1].lower() in _YT_CHANNEL_TABS:
+        new_path = parts.path
+    else:
+        new_path = parts.path.rstrip("/") + "/videos"
+    return urlunsplit((parts.scheme or "https", parts.netloc, new_path, "", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +295,38 @@ def _extract_info(url: str, cfg: Any | None) -> dict[str, Any]:
         return ydl.extract_info(url, download=False) or {}
 
 
+def _max_videos(cfg: Any | None) -> int:
+    if cfg is None:
+        return 50
+    yt = getattr(getattr(cfg, "adapters", None), "youtube", None)
+    return max(1, int(getattr(yt, "max_videos", 50) or 50))
+
+
+def _extract_flat_info(url: str, cfg: Any | None, limit: int) -> dict[str, Any]:
+    """Flat-extract a channel/playlist/search URL into a playlist info dict.
+
+    ``extract_flat="in_playlist"`` lists entries (id/title/url/duration/views)
+    without resolving each video — fast, and it sidesteps the per-video
+    format/JS-challenge solving that the transcript path has to guard against.
+    ``playlistend`` caps how many entries are pulled.
+    """
+    import yt_dlp
+
+    opts = _ytdlp_base_opts(cfg) | {
+        "extract_flat": "in_playlist",
+        "playlistend": max(1, int(limit)),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False) or {}
+
+
+def _fmt_date(yyyymmdd: Any) -> str | None:
+    """``YYYYMMDD`` → ``YYYY-MM-DD``; anything else → None."""
+    if isinstance(yyyymmdd, str) and len(yyyymmdd) == 8 and yyyymmdd.isdigit():
+        return f"{yyyymmdd[0:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
+    return None
+
+
 def _download_vtt(url: str, lang: str, is_auto: bool, cfg: Any | None) -> str | None:
     import yt_dlp
 
@@ -375,15 +473,51 @@ async def fetch_youtube(
     deadline: float = 30.0,
     cfg: Any | None = None,
 ) -> dict[str, Any]:
-    """Fetch a YouTube transcript and return a Vasco envelope."""
-    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+    """Route a YouTube URL to the transcript or listing branch.
 
-    video_id = extract_video_id(url)
-    if not video_id:
-        return _failure_envelope(
-            url, FailureReason.INVALID_URL, "could not parse YouTube video ID"
+    A *video* URL returns a transcript (captionless → description + metadata);
+    a *channel*/*playlist*/*search* URL returns a video listing. Anything else
+    (homepage, feed) is not a fetchable resource → ``INVALID_URL``.
+    """
+    deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
+    kind = classify_youtube_url(url)
+
+    if kind == "video":
+        video_id = extract_video_id(url)
+        if not video_id:  # pragma: no cover - classify guarantees a video ID here
+            return _failure_envelope(
+                url, FailureReason.INVALID_URL, "could not parse YouTube video ID"
+            )
+        return await _fetch_video(
+            url, video_id, deadline_monotonic=deadline_monotonic, cfg=cfg
         )
 
+    if kind in ("channel", "playlist", "search"):
+        return await _fetch_collection(
+            url, kind, deadline_monotonic=deadline_monotonic, cfg=cfg
+        )
+
+    return _failure_envelope(
+        url,
+        FailureReason.INVALID_URL,
+        "unsupported YouTube URL — not a video, channel, playlist, or search "
+        "result (homepage/feed pages aren't fetchable)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Video transcript branch
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_video(
+    url: str,
+    video_id: str,
+    *,
+    deadline_monotonic: float,
+    cfg: Any | None,
+) -> dict[str, Any]:
+    """Fetch a single video's transcript (or, captionless, its metadata)."""
     # Step 1: metadata + caption listing via yt-dlp.
     remaining = deadline_monotonic - time.monotonic()
     if remaining <= 0:
@@ -401,18 +535,17 @@ async def fetch_youtube(
 
     title = info.get("title") or None
     uploader = info.get("uploader") or info.get("channel") or None
-    upload_date = info.get("upload_date")  # YYYYMMDD
-    published = None
-    if isinstance(upload_date, str) and len(upload_date) == 8 and upload_date.isdigit():
-        published = f"{upload_date[0:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
+    published = _fmt_date(info.get("upload_date"))
     duration = info.get("duration")
 
     selected_lang, is_auto = _select_language(
         info.get("subtitles") or {}, info.get("automatic_captions") or {}
     )
     if not selected_lang:
-        return _failure_envelope(
-            url, FailureReason.UNSUPPORTED_CONTENT_TYPE, "video has no captions"
+        # No captions — fall back to the description + chapters yt-dlp already
+        # fetched, rather than failing outright. Only fail when there's nothing.
+        return _captionless_video_envelope(
+            url, info, title=title, uploader=uploader, published=published
         )
 
     # Step 2: VTT download + SponsorBlock segments concurrently.
@@ -482,3 +615,217 @@ async def fetch_youtube(
         },
         token_count_estimate=io_mod.estimate_tokens(transcript),
     )
+
+
+def _captionless_video_envelope(
+    url: str,
+    info: dict[str, Any],
+    *,
+    title: str | None,
+    uploader: str | None,
+    published: str | None,
+) -> dict[str, Any]:
+    """Build a video envelope from description + chapters when there are no
+    captions. Fails only when the video carries no usable text at all."""
+    description = (info.get("description") or "").strip()
+    chapters_md = _render_chapters(info.get("chapters") or [])
+    body = "\n\n".join(p for p in (description, chapters_md) if p).strip()
+    if not body:
+        return _failure_envelope(
+            url,
+            FailureReason.UNSUPPORTED_CONTENT_TYPE,
+            "video has no captions and no description",
+        )
+
+    from .. import io as io_mod
+
+    duration = info.get("duration")
+    quality = _common.compact(
+        {
+            "video_duration_seconds": int(duration)
+            if isinstance(duration, (int, float))
+            else None,
+            "view_count": info.get("view_count"),
+            "like_count": info.get("like_count"),
+        }
+    )
+    return envelope.success_envelope(
+        base=_base_envelope(url, http_status=200),
+        markdown=body,
+        metadata={
+            "title": title,
+            "byline": uploader,
+            "published": published,
+            "modified": None,
+            "language": info.get("language") or None,
+            "site_name": "YouTube",
+            "word_count": len(body.split()),
+            "quality": quality,
+            "warnings": ["no_captions"],
+        },
+        token_count_estimate=io_mod.estimate_tokens(body),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Channel / playlist / search listing branch
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_collection(
+    url: str,
+    kind: str,
+    *,
+    deadline_monotonic: float,
+    cfg: Any | None,
+) -> dict[str, Any]:
+    """Flat-extract a channel/playlist/search URL into a video-listing envelope."""
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return _failure_envelope(
+            url, FailureReason.DEADLINE_EXCEEDED, "deadline elapsed before listing"
+        )
+    limit = _max_videos(cfg)
+    target = _channel_listing_url(url) if kind == "channel" else url
+    try:
+        info = await asyncio.wait_for(
+            asyncio.to_thread(_extract_flat_info, target, cfg, limit), timeout=remaining
+        )
+    except asyncio.TimeoutError:
+        return _failure_envelope(url, FailureReason.TIMEOUT, "yt-dlp listing timeout")
+    except Exception as exc:
+        return _ytdlp_failure(url, exc)
+
+    return _build_collection_envelope(url, kind, info, limit)
+
+
+def _video_entry(e: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one flat-extracted entry into a listing record."""
+    vid = e.get("id")
+    duration = e.get("duration")
+    return _common.compact(
+        {
+            "id": vid,
+            "title": e.get("title"),
+            "url": e.get("url")
+            or e.get("webpage_url")
+            or (canonical_url(vid) if vid else None),
+            "duration_seconds": int(duration)
+            if isinstance(duration, (int, float))
+            else None,
+            "view_count": e.get("view_count"),
+            "uploader": e.get("uploader") or e.get("channel"),
+            "upload_date": _fmt_date(e.get("upload_date")),
+        }
+    )
+
+
+def _build_collection_envelope(
+    url: str, kind: str, info: dict[str, Any], limit: int
+) -> dict[str, Any]:
+    """Assemble the listing envelope from a yt-dlp playlist info dict.
+
+    No ``entries`` key means the listing anchor is gone (rot) → ``PARSE_FAILED``;
+    an empty ``entries`` is a genuinely empty collection → success + no_results.
+    """
+    raw_entries = info.get("entries")
+    if raw_entries is None:
+        return _failure_envelope(
+            url,
+            FailureReason.PARSE_FAILED,
+            f"expected a {kind} video listing but yt-dlp returned no entries",
+        )
+
+    videos: list[dict[str, Any]] = []
+    for e in raw_entries:
+        if not isinstance(e, dict):
+            continue
+        record = _video_entry(e)
+        if record.get("id") or record.get("url"):
+            videos.append(record)
+        if len(videos) >= limit:
+            break
+
+    name = info.get("title") or info.get("channel") or info.get("uploader")
+    uploader = info.get("uploader") or info.get("channel")
+    markdown = _render_videos_markdown(kind, name, videos)
+    quality: dict[str, Any] = {
+        "provider": "youtube",
+        "page_type": kind,
+        "result_count": len(videos),
+        "videos": videos,
+    }
+    if info.get("channel_follower_count"):
+        quality["subscriber_count"] = info["channel_follower_count"]
+
+    from .. import io as io_mod
+
+    return envelope.success_envelope(
+        base=_base_envelope(url, http_status=200),
+        markdown=markdown,
+        metadata={
+            "title": name or f"YouTube {kind}",
+            "byline": uploader,
+            "published": None,
+            "modified": None,
+            "language": None,
+            "site_name": "YouTube",
+            "word_count": len(markdown.split()),
+            "quality": quality,
+            "warnings": ["no_results"] if not videos else [],
+        },
+        token_count_estimate=io_mod.estimate_tokens(markdown),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+
+def _fmt_duration(seconds: Any) -> str | None:
+    """Seconds → ``H:MM:SS`` / ``M:SS``; non-numeric or negative → None."""
+    if not isinstance(seconds, (int, float)) or seconds < 0:
+        return None
+    total = int(seconds)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _render_chapters(chapters: Any) -> str:
+    """Render a yt-dlp chapter list as a Markdown bullet list (empty → "")."""
+    if not isinstance(chapters, list):
+        return ""
+    lines: list[str] = []
+    for ch in chapters:
+        if not isinstance(ch, dict) or not ch.get("title"):
+            continue
+        ts = _fmt_duration(ch.get("start_time"))
+        lines.append(f"- {ts + ' ' if ts else ''}{ch['title']}")
+    return "## Chapters\n" + "\n".join(lines) if lines else ""
+
+
+def _render_videos_markdown(
+    kind: str, name: str | None, videos: list[dict[str, Any]]
+) -> str:
+    """Render a video listing as a numbered Markdown list."""
+    lines = [f"# {name or f'YouTube {kind}'}", ""]
+    if not videos:
+        lines.append("_No videos found._")
+        return "\n".join(lines)
+    for i, v in enumerate(videos, 1):
+        bits = [v.get("title") or "(untitled)"]
+        dur = _fmt_duration(v.get("duration_seconds"))
+        if dur:
+            bits.append(dur)
+        views = v.get("view_count")
+        if isinstance(views, int):
+            bits.append(f"{views:,} views")
+        line = f"{i}. " + " — ".join(bits)
+        if v.get("url"):
+            line += f"\n   {v['url']}"
+        lines.append(line)
+    return "\n".join(lines)

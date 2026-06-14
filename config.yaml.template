@@ -109,11 +109,12 @@
 #     domains: []              # extra known GitLab hosts (gitlab.com built in); skips the probe
 #     autodetect: true         # probe unknown hosts on claimable URLs (falls through on a miss)
 #     max_comments: 20         # cap issue/MR notes (comments) parsed
-#   youtube:
+#   youtube:                    # video transcripts + channel/playlist/search video listings
 #     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...
 #     remote_components: ""    # "" = off (opt-in) | "ejs:github" enables yt-dlp's JS
 #                              # challenge solver (needs deno/a JS runtime on PATH).
 #                              # Fetches+runs solver code from GitHub — see caveats.
+#     max_videos: 50           # cap on videos listed for a channel/playlist/search URL
 #   wikimedia:                  # "" = anonymous free REST API (all langs, no cap)
 #     username: ""             # Wikimedia Enterprise account (or VASCO_ADAPTERS_WIKIMEDIA_USERNAME)
 #     password: ""             # (or VASCO_ADAPTERS_WIKIMEDIA_PASSWORD)

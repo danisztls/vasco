@@ -98,6 +98,9 @@ class YouTubeCfg:
     # challenge solver. "" = off (opt-in): fetches+runs solver code from GitHub.
     # e.g. "ejs:github" (needs a JS runtime like deno on PATH).
     remote_components: str = ""
+    # Cap on videos listed for a channel/playlist/search URL. Flat extraction
+    # stops after this many entries (yt-dlp `playlistend`).
+    max_videos: int = 50
 
 
 @dataclass(frozen=True)

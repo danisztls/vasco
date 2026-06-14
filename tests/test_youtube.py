@@ -422,3 +422,273 @@ def test_ytdlp_base_opts_passes_cookies_from_browser() -> None:
     # Other base options are preserved
     assert opts["skip_download"] is True
     assert opts["quiet"] is True
+
+
+# ---------------------------------------------------------------------------
+# URL classification + channel-listing normalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url, kind",
+    [
+        ("https://www.youtube.com/watch?v=abc", "video"),
+        ("https://youtu.be/abc", "video"),
+        ("https://www.youtube.com/shorts/abc", "video"),
+        # A video-in-playlist URL stays a transcript, not a listing.
+        ("https://www.youtube.com/watch?v=abc&list=PL1", "video"),
+        ("https://www.youtube.com/@SomeChannel", "channel"),
+        ("https://www.youtube.com/@SomeChannel/videos", "channel"),
+        ("https://www.youtube.com/@SomeChannel/streams", "channel"),
+        ("https://www.youtube.com/channel/UCabc123", "channel"),
+        ("https://www.youtube.com/c/SomeName", "channel"),
+        ("https://www.youtube.com/user/SomeName", "channel"),
+        ("https://www.youtube.com/playlist?list=PL123", "playlist"),
+        ("https://www.youtube.com/results?search_query=cats", "search"),
+        ("https://www.youtube.com/", "other"),
+        ("https://www.youtube.com/feed/trending", "other"),
+        # No search_query / list → not a search / playlist.
+        ("https://www.youtube.com/results", "other"),
+        ("https://www.youtube.com/playlist", "other"),
+    ],
+)
+def test_classify_youtube_url(url: str, kind: str) -> None:
+    assert youtube.classify_youtube_url(url) == kind
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # Bare channel root → append the videos tab.
+        ("https://www.youtube.com/@Chan", "https://www.youtube.com/@Chan/videos"),
+        (
+            "https://www.youtube.com/channel/UCabc/",
+            "https://www.youtube.com/channel/UCabc/videos",
+        ),
+        # Already on a listing tab → untouched (query dropped).
+        (
+            "https://www.youtube.com/@Chan/videos",
+            "https://www.youtube.com/@Chan/videos",
+        ),
+        (
+            "https://www.youtube.com/@Chan/streams?x=1",
+            "https://www.youtube.com/@Chan/streams",
+        ),
+    ],
+)
+def test_channel_listing_url(url: str, expected: str) -> None:
+    assert youtube._channel_listing_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (0, "0:00"),
+        (65, "1:05"),
+        (3725, "1:02:05"),
+        (None, None),
+        (-5, None),
+        ("x", None),
+    ],
+)
+def test_fmt_duration(seconds: object, expected: str | None) -> None:
+    assert youtube._fmt_duration(seconds) == expected
+
+
+# ---------------------------------------------------------------------------
+# Captionless-video fallback → description + metadata
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_captionless_falls_back_to_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workers(
+        monkeypatch,
+        info={
+            "title": "No Caps",
+            "id": "abc123",
+            "uploader": "Chan",
+            "upload_date": "20240102",
+            "duration": 100,
+            "description": "This is the video description.",
+            "view_count": 50,
+            "like_count": 5,
+            "subtitles": {},
+            "automatic_captions": {},
+        },
+        sb=[],
+    )
+    env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
+    assert "failure" not in env
+    assert env["warnings"] == ["no_captions"]
+    assert "This is the video description." in env["markdown"]
+    assert env["title"] == "No Caps"
+    assert env["byline"] == "Chan"
+    assert env["published"] == "2024-01-02"
+    assert env["quality"]["video_duration_seconds"] == 100
+    assert env["quality"]["view_count"] == 50
+    assert env["quality"]["like_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_captionless_renders_chapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workers(
+        monkeypatch,
+        info={
+            "title": "x",
+            "id": "abc123",
+            "subtitles": {},
+            "automatic_captions": {},
+            "description": "Desc",
+            "chapters": [
+                {"title": "Intro", "start_time": 0},
+                {"title": "Part 2", "start_time": 65},
+            ],
+        },
+        sb=[],
+    )
+    env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
+    assert "failure" not in env
+    assert "## Chapters" in env["markdown"]
+    assert "0:00 Intro" in env["markdown"]
+    assert "1:05 Part 2" in env["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_no_captions_no_description_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A video with neither captions nor any description has no usable text."""
+    _patch_workers(
+        monkeypatch,
+        info={"title": "x", "id": "abc123", "subtitles": {}, "automatic_captions": {}},
+        sb=[],
+    )
+    env = await youtube.fetch_youtube("https://youtu.be/abc123", deadline=10.0)
+    assert env["failure"]["reason"] == FailureReason.UNSUPPORTED_CONTENT_TYPE.value
+    assert "no captions" in env["failure"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Channel / playlist / search listings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_channel_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    entries = [
+        {
+            "id": "v1",
+            "title": "First",
+            "url": "https://youtube.com/watch?v=v1",
+            "duration": 65,
+            "view_count": 1234,
+        },
+        {"id": "v2", "title": "Second", "duration": 3725},  # no url → canonical
+    ]
+
+    def fake_flat(url: str, cfg: object | None, limit: int) -> dict:
+        return {
+            "title": "My Channel",
+            "uploader": "My Channel",
+            "channel_follower_count": 9999,
+            "entries": entries,
+        }
+
+    monkeypatch.setattr(youtube, "_extract_flat_info", fake_flat)
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/@MyChannel", deadline=10.0
+    )
+    assert "failure" not in env
+    assert env["mode_used"] == "youtube"
+    assert env["content_type"] == "text/youtube"
+    assert env["title"] == "My Channel"
+    q = env["quality"]
+    assert q["provider"] == "youtube"
+    assert q["page_type"] == "channel"
+    assert q["result_count"] == 2
+    assert q["subscriber_count"] == 9999
+    assert [v["id"] for v in q["videos"]] == ["v1", "v2"]
+    assert q["videos"][0]["url"] == "https://youtube.com/watch?v=v1"
+    assert q["videos"][0]["duration_seconds"] == 65
+    assert q["videos"][1]["url"] == "https://youtube.com/watch?v=v2"
+    assert "First" in env["markdown"]
+    assert env["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_search_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        youtube,
+        "_extract_flat_info",
+        lambda url, cfg, limit: {
+            "title": "cats",
+            "entries": [{"id": "s1", "title": "Cat"}],
+        },
+    )
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/results?search_query=cats", deadline=10.0
+    )
+    assert "failure" not in env
+    assert env["quality"]["page_type"] == "search"
+    assert env["quality"]["result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_collection_empty_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        youtube,
+        "_extract_flat_info",
+        lambda url, cfg, limit: {"title": "Empty", "entries": []},
+    )
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/playlist?list=PLempty", deadline=10.0
+    )
+    assert "failure" not in env
+    assert env["warnings"] == ["no_results"]
+    assert env["quality"]["page_type"] == "playlist"
+    assert env["quality"]["result_count"] == 0
+    assert env["quality"]["videos"] == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_collection_no_entries_parse_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A listing URL whose result carries no ``entries`` key is rot, not empty."""
+    monkeypatch.setattr(
+        youtube, "_extract_flat_info", lambda url, cfg, limit: {"title": "x"}
+    )
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/results?search_query=cats", deadline=10.0
+    )
+    assert env["failure"]["reason"] == FailureReason.PARSE_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_fetch_youtube_collection_respects_max_videos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vasco.config import AdaptersCfg, Config, YouTubeCfg
+
+    captured: dict[str, int] = {}
+    entries = [{"id": f"v{i}", "title": f"T{i}"} for i in range(10)]
+
+    def fake_flat(url: str, cfg: object | None, limit: int) -> dict:
+        captured["limit"] = limit
+        return {"entries": entries}
+
+    monkeypatch.setattr(youtube, "_extract_flat_info", fake_flat)
+    cfg = Config(adapters=AdaptersCfg(youtube=YouTubeCfg(max_videos=3)))
+    env = await youtube.fetch_youtube(
+        "https://www.youtube.com/@C", deadline=10.0, cfg=cfg
+    )
+    # The cap is pushed into yt-dlp (playlistend) and re-enforced on the result.
+    assert captured["limit"] == 3
+    assert env["quality"]["result_count"] == 3

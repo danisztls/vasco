@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS fetch_cache (
   word_count     INTEGER,
   token_count    INTEGER,
   quality_json   TEXT,
-  links_json     TEXT,
   markdown       TEXT,
   warnings_json  TEXT,
   status         INTEGER,
@@ -149,7 +148,6 @@ class Cache:
             "word_count": row["word_count"],
             "token_count_estimate": row["token_count"],
             "quality": json.loads(row["quality_json"]) if row["quality_json"] else {},
-            "links": json.loads(row["links_json"]) if row["links_json"] else [],
             "markdown": row["markdown"] or "",
             "warnings": json.loads(row["warnings_json"])
             if row["warnings_json"]
@@ -184,9 +182,9 @@ class Cache:
             INSERT OR REPLACE INTO fetch_cache (
                 url, final_url, canonical_url, title, byline, published, modified,
                 language, site_name, image, word_count, token_count, quality_json,
-                links_json, markdown, warnings_json, status, failure_reason,
+                markdown, warnings_json, status, failure_reason,
                 failure_json, mode_used, fetched_at, ttl_expires, content_type, html_gz
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized,
@@ -203,9 +201,6 @@ class Cache:
                 envelope.get("token_count_estimate"),
                 json.dumps(envelope.get("quality", {}))
                 if envelope.get("quality") is not None
-                else None,
-                json.dumps(envelope.get("links", []))
-                if envelope.get("links") is not None
                 else None,
                 envelope.get("markdown"),
                 json.dumps(envelope.get("warnings", []))

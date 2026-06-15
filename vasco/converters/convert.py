@@ -1,4 +1,4 @@
-"""HTML → Markdown conversion via trafilatura + lightweight link/metadata extraction.
+"""HTML → Markdown conversion via trafilatura + lightweight metadata extraction.
 
 Best-effort heuristics:
 - `trafilatura_confidence` is approximated as `min(1.0, word_count / 800.0)`.
@@ -9,9 +9,7 @@ Both are useful relative signals, not absolute measurements.
 from __future__ import annotations
 
 import re
-from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin
 
 # trafilatura is imported lazily: it pulls htmldate → dateparser, whose
 # timezone-parser build costs ~430ms at import time. Deferring it to the first
@@ -51,65 +49,6 @@ def _visible_html_chars(html: str) -> int:
     return len(_WS_RE.sub(" ", stripped).strip())
 
 
-class _LinkParser(HTMLParser):
-    """Collect <a href> tags with their anchor text and rel attribute."""
-
-    def __init__(self, base_url: str | None) -> None:
-        super().__init__(convert_charrefs=True)
-        self.base_url = base_url
-        self.links: list[dict[str, str | None]] = []
-        self._current: dict[str, str | None] | None = None
-        self._buf: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "a":
-            return
-        attrd = {k.lower(): v for k, v in attrs}
-        href = attrd.get("href")
-        if not href:
-            return
-        rel = attrd.get("rel")
-        if self.base_url:
-            try:
-                href = urljoin(self.base_url, href)
-            except Exception:
-                pass
-        self._current = {"url": href, "anchor": "", "rel": rel}
-        self._buf = []
-
-    def handle_data(self, data: str) -> None:
-        if self._current is not None:
-            self._buf.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() != "a" or self._current is None:
-            return
-        anchor = _WS_RE.sub(" ", "".join(self._buf)).strip()
-        self._current["anchor"] = anchor
-        self.links.append(self._current)
-        self._current = None
-        self._buf = []
-
-
-def _extract_links(html: str, base_url: str | None) -> list[dict[str, str | None]]:
-    parser = _LinkParser(base_url)
-    try:
-        parser.feed(html)
-    except Exception:
-        # HTMLParser is forgiving but a corrupt input shouldn't kill us.
-        pass
-    # De-dupe while preserving order.
-    seen: set[str] = set()
-    out: list[dict[str, str | None]] = []
-    for link in parser.links:
-        key = str(link.get("url"))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(link)
-    return out
-
-
 def _word_count(text: str) -> int:
     if not text:
         return 0
@@ -141,7 +80,6 @@ def text_to_markdown(text: str, *, content_type: str | None = None) -> tuple[str
         "site_name": None,
         "image": None,
         "word_count": wc,
-        "links": [],
         "quality": {
             "trafilatura_confidence": round(min(1.0, wc / 800.0), 4),
             "boilerplate_ratio": 0.0,
@@ -155,7 +93,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     """Convert HTML to Markdown via trafilatura and return (markdown, metadata).
 
     Metadata keys: title, byline, published, modified, language, site_name,
-    word_count, links, quality {trafilatura_confidence, boilerplate_ratio},
+    word_count, quality {trafilatura_confidence, boilerplate_ratio},
     warnings.
     """
     warnings: list[str] = []
@@ -173,7 +111,6 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
             "site_name": None,
             "image": None,
             "word_count": 0,
-            "links": _extract_links(html, url),
             "quality": {"trafilatura_confidence": 0.0, "boilerplate_ratio": 1.0},
             "warnings": warnings,
         }
@@ -236,7 +173,6 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
         "site_name": site_name,
         "image": image,
         "word_count": wc,
-        "links": _extract_links(html, url),
         "quality": {
             "trafilatura_confidence": round(confidence, 4),
             "boilerplate_ratio": round(boilerplate_ratio, 4),

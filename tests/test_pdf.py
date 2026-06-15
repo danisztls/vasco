@@ -206,6 +206,5 @@ def test_metadata_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("title", "byline", "published", "modified", "language", "site_name"):
         assert key in meta
     assert isinstance(meta["word_count"], int)
-    assert isinstance(meta["links"], list)
     assert isinstance(meta["quality"], dict)
     assert isinstance(meta["warnings"], list)

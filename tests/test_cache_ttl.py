@@ -43,7 +43,6 @@ def _success_envelope(url: str = "https://example.com/foo") -> dict:
         "word_count": 100,
         "token_count_estimate": 130,
         "quality": {"trafilatura_confidence": 0.9, "boilerplate_ratio": 0.1},
-        "links": [{"url": "https://example.com/a", "anchor": "a", "rel": None}],
         "markdown": "# hi",
         "warnings": [],
     }
@@ -70,7 +69,6 @@ def test_put_then_get_returns_envelope(cache: Cache, fake_time) -> None:
     assert got["cache_age_seconds"] == 0
     assert got["title"] == "Example"
     assert got["quality"]["trafilatura_confidence"] == 0.9
-    assert got["links"][0]["url"] == "https://example.com/a"
     assert got["markdown"] == "# hi"
 
 

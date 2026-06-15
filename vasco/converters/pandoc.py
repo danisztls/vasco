@@ -78,7 +78,6 @@ def pandoc_to_markdown(body: bytes, *, fmt: str) -> tuple[str, dict[str, Any]]:
         "language": None,
         "site_name": None,
         "word_count": word_count,
-        "links": [],
         "quality": {},
         "warnings": warnings,
     }

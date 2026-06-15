@@ -618,7 +618,6 @@ async def _fetch_html_envelope(
                     "language": None,
                     "site_name": None,
                     "word_count": len((html or "").split()),
-                    "links": [],
                     "quality": {},
                     "warnings": ["raw"],
                 },

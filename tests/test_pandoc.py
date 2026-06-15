@@ -78,7 +78,6 @@ def test_pandoc_metadata_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("title", "byline", "published", "modified", "language", "site_name"):
         assert key in meta
     assert isinstance(meta["word_count"], int)
-    assert isinstance(meta["links"], list)
     assert isinstance(meta["quality"], dict)
     assert isinstance(meta["warnings"], list)
 
@@ -175,7 +174,6 @@ def test_docx_url_routes_to_pandoc(
             "language": None,
             "site_name": None,
             "word_count": len(fake_md.split()),
-            "links": [],
             "quality": {},
             "warnings": [],
         }
@@ -229,7 +227,6 @@ def test_pandoc_redirect_detection(
             "language": None,
             "site_name": None,
             "word_count": len(fake_md.split()),
-            "links": [],
             "quality": {},
             "warnings": [],
         }

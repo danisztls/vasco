@@ -221,7 +221,6 @@ def pdf_to_text(
         "language": language,
         "site_name": None,
         "word_count": word_count,
-        "links": [],
         "quality": {},
         "warnings": warnings,
     }

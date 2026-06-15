@@ -180,7 +180,7 @@ def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
 @server.tool(
     description=(
         "Fetch a single URL and return its envelope: clean Markdown plus "
-        "metadata (title, byline, published, word_count, links, etc.) or a "
+        "metadata (title, byline, published, word_count, etc.) or a "
         "typed failure object. Always returns the full content. YouTube URLs "
         "return a transcript; PDFs are rendered to text; Wikipedia/Wikimedia "
         "URLs use the Enterprise API when configured. Set refresh=true to "

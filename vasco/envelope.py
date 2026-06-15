@@ -45,7 +45,6 @@ class FetchEnvelope(TypedDict, total=False):
     word_count: int
     token_count_estimate: int
     quality: dict[str, Any]
-    links: list[Any]
     markdown: str
     warnings: list[str]
     # Failure (set by ``failure_envelope``, mutually exclusive with success).
@@ -98,7 +97,6 @@ def success_envelope(
             "word_count": metadata.get("word_count", 0),
             "token_count_estimate": token_count_estimate,
             "quality": metadata.get("quality", {}),
-            "links": metadata.get("links", []),
             "markdown": markdown,
             "warnings": list(metadata.get("warnings", [])),
         }

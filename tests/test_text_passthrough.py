@@ -64,7 +64,6 @@ def test_text_to_markdown_is_verbatim() -> None:
         "language",
         "site_name",
         "image",
-        "links",
     ):
         assert key in meta
 

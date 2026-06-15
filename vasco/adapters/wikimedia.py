@@ -366,15 +366,12 @@ def _standard_to_fields(article: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
     html = (article.get("article_body") or {}).get("html") or ""
     if html:
-        markdown, conv_meta = convert.html_to_markdown(html, url="")
-        links = conv_meta.get("links", [])
+        markdown, _conv_meta = convert.html_to_markdown(html, url="")
     else:
         markdown = article.get("abstract") or ""
-        links = []
 
     quality = _extract_quality(article)
     meta = _meta(article, quality)
-    meta["links"] = links
     return markdown, meta
 
 
@@ -409,7 +406,6 @@ def _meta(article: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
         "modified": article.get("date_modified"),
         "language": in_lang.get("identifier"),
         "quality": quality,
-        "links": [],
         "warnings": [],
     }
 
@@ -469,7 +465,6 @@ def _success_envelope(
             "site_name": site_name,
             "word_count": _word_count(markdown),
             "quality": meta.get("quality", {}),
-            "links": meta.get("links", []),
             "warnings": meta.get("warnings", []),
         },
         token_count_estimate=io_mod.estimate_tokens(markdown),

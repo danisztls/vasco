@@ -178,7 +178,6 @@ def test_youtube_url_routes_to_youtube_fetcher(
             "word_count": 2,
             "token_count_estimate": 2,
             "quality": {},
-            "links": [],
             "markdown": "hello world",
             "warnings": [],
         }
@@ -245,7 +244,6 @@ def test_youtube_raw_flag_adds_warning(
             "word_count": 1,
             "token_count_estimate": 1,
             "quality": {},
-            "links": [],
             "markdown": "hi",
             "warnings": [],
         }

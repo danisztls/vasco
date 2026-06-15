@@ -54,7 +54,6 @@ def _full_success() -> dict:
             "image": "https://example.com/og.png",
             "word_count": 100,
             "quality": {"boilerplate_ratio": 0.1},
-            "links": [{"url": "https://example.com/a", "anchor": "a"}],
             "warnings": ["x"],
         },
         token_count_estimate=130,

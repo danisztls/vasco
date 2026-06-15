@@ -188,6 +188,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                             "input_tokens": 0,
                             "output_tokens": 0,
                             "cost_usd": 0.0,
+                            "fell_back": 0,  # times this provider served as a fallback
                         },
                     )
                     entry["calls"] += 1
@@ -198,6 +199,8 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                     cost = rec.get("cost_usd")
                     if isinstance(cost, (int, float)):
                         entry["cost_usd"] += float(cost)
+                    if rec.get("fell_back") is True:
+                        entry["fell_back"] += 1
 
     duration_stats: dict[str, dict[str, int]] = {}
     for tool, vals in durations.items():
@@ -241,6 +244,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             "input_tokens": int(entry["input_tokens"]),
             "output_tokens": int(entry["output_tokens"]),
             "cost_usd": round(entry["cost_usd"], 6),
+            "fell_back": int(entry["fell_back"]),
         }
 
     today = datetime.now(timezone.utc).date()

@@ -105,23 +105,38 @@ def test_unknown_section_is_ignored(tmp_path: Path) -> None:
 
 def test_answer_defaults() -> None:
     cfg = load_config()
-    # No default provider/model — the capability is disabled until configured.
-    assert cfg.answer.provider == ""
-    assert cfg.answer.model == ""
-    assert cfg.answer.api_key == ""
+    # No default provider chain — the capability is disabled until configured.
+    assert cfg.answer.providers == ()
 
 
-def test_answer_yaml_overrides(tmp_path: Path) -> None:
-    _write_yaml(tmp_path, "answer:\n  model: my-model\n  api_key: sk-123\n")
+def test_answer_providers_chain_from_yaml(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path,
+        "answer:\n"
+        "  providers:\n"
+        "    - {provider: claude_cli, model: sonnet}\n"
+        "    - {provider: deepseek, model: my-model, api_key: sk-123}\n",
+    )
     cfg = load_config()
-    assert cfg.answer.model == "my-model"
-    assert cfg.answer.api_key == "sk-123"
+    assert [p.provider for p in cfg.answer.providers] == ["claude_cli", "deepseek"]
+    assert cfg.answer.providers[0].model == "sonnet"  # primary
+    assert cfg.answer.providers[1].api_key == "sk-123"  # fallback
 
 
-def test_answer_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_answer_env_overrides_to_single_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A config chain is fully replaced by the VASCO_ANSWER_* single-provider env.
+    _write_yaml(
+        tmp_path,
+        "answer:\n  providers:\n    - {provider: deepseek, model: cfg-model}\n",
+    )
+    monkeypatch.setenv("VASCO_ANSWER_PROVIDER", "claude_cli")
     monkeypatch.setenv("VASCO_ANSWER_MODEL", "env-model")
     cfg = load_config()
-    assert cfg.answer.model == "env-model"
+    assert len(cfg.answer.providers) == 1
+    assert cfg.answer.providers[0].provider == "claude_cli"
+    assert cfg.answer.providers[0].model == "env-model"
 
 
 def test_browser_user_data_dir_from_yaml(tmp_path: Path) -> None:

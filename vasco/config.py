@@ -119,20 +119,32 @@ class QualityCfg:
 
 
 @dataclass(frozen=True)
-class AnswerCfg:
-    """Backend for the `answer` command (fetch + LLM answer over a page).
+class ProviderCfg:
+    """One answer backend: a provider + its model (+ api_key for HTTP providers).
 
-    There is **no default provider**: the capability stays disabled until
-    `provider` is set to either ``"deepseek"`` (an OpenAI-compatible HTTP endpoint,
-    resolved from the built-in ``deepseek.PROVIDER_ENDPOINTS`` registry) or
-    ``"claude_cli"`` (shell out to ``claude -p``, billed against the user's Claude
-    Code subscription via OAuth — no API key; ``claude`` must be on PATH). `model`
-    is the model for whichever provider is active and is required.
+    `provider` is ``"deepseek"`` (OpenAI-compatible HTTP; endpoint from the
+    built-in ``deepseek.PROVIDER_ENDPOINTS`` registry) or ``"claude_cli"`` (shell
+    out to ``claude -p`` on the user's Claude Code subscription via OAuth — no API
+    key; ``claude`` must be on PATH). `model` is required.
     """
 
-    provider: str = ""  # "" = disabled | "deepseek" | "claude_cli"
-    model: str = ""  # model for the active provider (deepseek id, or claude alias/id)
+    provider: str = ""  # "deepseek" | "claude_cli"
+    model: str = ""  # model id/alias for the provider
     api_key: str = ""  # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+
+
+@dataclass(frozen=True)
+class AnswerCfg:
+    """Backend(s) for the `answer` command (fetch + LLM answer over a page).
+
+    `providers` is an **ordered chain**: the first entry is the primary, the rest
+    are fallbacks tried in order when an entry is unavailable or fails. There is no
+    default — an empty chain disables the capability. A single-provider env
+    override (``VASCO_ANSWER_PROVIDER``/``MODEL``/``API_KEY``) replaces the whole
+    chain (see ``_load_answer``).
+    """
+
+    providers: tuple[ProviderCfg, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -306,7 +318,7 @@ _SECTIONS: dict[str, type] = {
     "logging": LoggingCfg,
     "ocr": OcrCfg,
     "quality": QualityCfg,
-    "answer": AnswerCfg,
+    # `answer` is handled by `_load_answer` (a provider chain, not flat scalars).
     "service": ServiceCfg,
 }
 
@@ -438,9 +450,50 @@ def load_config() -> Config:
     ):
         sections["quality"] = None
 
+    sections["answer"] = _load_answer(data.get("answer"))
     sections["domains"] = _load_domains(data.get("domains"))
 
     return Config(**sections)
+
+
+def _load_answer(raw: Any) -> AnswerCfg:
+    """Parse the `answer:` section into an ordered provider chain.
+
+    A single-provider env override takes precedence over the config file: if
+    ``VASCO_ANSWER_PROVIDER`` is set, the whole chain becomes that one entry
+    (with ``VASCO_ANSWER_MODEL`` / ``VASCO_ANSWER_API_KEY``). Otherwise the
+    chain comes from ``answer.providers`` (a list of ``{provider, model,
+    api_key}`` maps; malformed entries are skipped). YAML-only for the list —
+    there is no per-field env override for a chain.
+    """
+    env_provider = os.environ.get("VASCO_ANSWER_PROVIDER")
+    if env_provider:
+        return AnswerCfg(
+            providers=(
+                ProviderCfg(
+                    provider=env_provider.strip(),
+                    model=os.environ.get("VASCO_ANSWER_MODEL", ""),
+                    api_key=os.environ.get("VASCO_ANSWER_API_KEY", ""),
+                ),
+            )
+        )
+    if not isinstance(raw, dict):
+        return AnswerCfg()
+    entries = raw.get("providers")
+    if not isinstance(entries, list):
+        return AnswerCfg()
+    providers: list[ProviderCfg] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        providers.append(
+            ProviderCfg(
+                provider=str(entry.get("provider", "")).strip(),
+                model=str(entry.get("model", "")),
+                api_key=str(entry.get("api_key", "")),
+            )
+        )
+    return AnswerCfg(providers=tuple(providers))
 
 
 _VALID_HEADER_PROFILES = frozenset({"browser", "honest"})

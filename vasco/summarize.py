@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 from vasco import fetch as _fetch
@@ -32,36 +33,28 @@ _QUESTION_SYSTEM = (
 )
 
 
-def resolve_api_key(cfg: Any | None) -> str:
-    """Resolve the answer API key from env → config, in that order."""
+def resolve_api_key(pcfg: Any) -> str:
+    """Resolve a provider's API key from env → its config entry, in that order."""
     env_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get(
         "VASCO_ANSWER_API_KEY"
     )
     if env_key:
         return env_key
-    if cfg is not None:
-        try:
-            return cfg.answer.api_key or ""
-        except AttributeError:
-            return ""
-    return ""
+    return getattr(pcfg, "api_key", "") or ""
 
 
-def _answer_backend_status(cfg: Any | None) -> tuple[str | None, str | None]:
-    """Readiness of the configured answer backend.
+def _backend_status(pcfg: Any) -> tuple[str | None, str | None]:
+    """Readiness of one provider-chain entry.
 
-    Returns ``(error_code, message)`` describing why the backend can't run, or
-    ``(None, None)`` when it's ready to call. This drives both the
-    unconfigured/disabled state (no provider selected) and the provider-specific
-    requirements — there is no implicit default provider or model.
+    Returns ``(error_code, message)`` for why this entry can't run, or
+    ``(None, None)`` when it's ready. There is no default provider/model.
     """
-    ac = getattr(cfg, "answer", None)
-    provider = (getattr(ac, "provider", "") or "").strip()
+    provider = (getattr(pcfg, "provider", "") or "").strip()
     if provider in PROVIDER_ENDPOINTS:  # OpenAI-compatible HTTP providers
-        if not resolve_api_key(cfg):
+        if not resolve_api_key(pcfg):
             return "no_api_key", (
-                "No answer API key configured. "
-                "Set DEEPSEEK_API_KEY or answer.api_key in config.yaml."
+                "No API key for the answer provider. "
+                "Set DEEPSEEK_API_KEY or its api_key in config.yaml."
             )
     elif provider == "claude_cli":
         if not binary_available(DEFAULT_BINARY):
@@ -71,35 +64,68 @@ def _answer_backend_status(cfg: Any | None) -> tuple[str | None, str | None]:
             )
     else:
         return "answer_not_configured", (
-            "No answer provider configured. Set answer.provider to "
-            "'deepseek' or 'claude_cli' in config.yaml."
+            "No answer provider configured. Add an answer.providers entry with "
+            "provider 'deepseek' or 'claude_cli'."
         )
-    # Both providers require an explicit model (no default).
-    if not getattr(ac, "model", ""):
-        return "answer_not_configured", "Set answer.model for the configured provider."
+    if not getattr(pcfg, "model", ""):
+        return "answer_not_configured", "Set a model for the answer provider."
     return None, None
+
+
+@dataclass
+class _AnswerResult:
+    """Outcome of running the answer provider chain over a page."""
+
+    text: str | None = None
+    usage: dict[str, Any] | None = None
+    provider: str | None = None  # the provider that actually served the answer
+    model: str | None = None
+    fell_back: bool = False  # a non-primary chain entry served it
+    error: str | None = None  # error code when text is None
+    message: str | None = None
+
+
+async def _run_backend(
+    system: str, user: str, pcfg: Any
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Call one ready provider; return ``(text, usage)`` or ``(None, None)``."""
+    provider = (getattr(pcfg, "provider", "") or "").strip()
+    try:
+        if provider == "claude_cli":
+            client: Any = ClaudeCliClient(model=pcfg.model)
+        else:
+            client = DeepSeekClient(
+                api_key=resolve_api_key(pcfg),
+                base_url=PROVIDER_ENDPOINTS[provider],
+                model=pcfg.model,
+            )
+        text = await client.complete(system=system, user=user)
+    except Exception as exc:
+        log.warning("answer call failed (%s): %s", provider, exc)
+        return None, None
+    return (text or None), getattr(client, "last_usage", None)
 
 
 async def _generate(
     markdown: str, question: str | None, cfg: Any | None
-) -> tuple[str | None, dict[str, Any] | None]:
-    """Run the configured answer backend over ``markdown``.
+) -> _AnswerResult:
+    """Run the answer provider chain over ``markdown``.
 
-    Returns ``(text, usage)`` where ``usage`` is the backend's normalized token/
-    cost dict (``None`` when unavailable). Returns ``(None, None)`` when the
-    backend isn't ready or the call fails — callers translate that to a clean
-    error. Never raises.
+    Tries ``cfg.answer.providers`` in order: skips entries that aren't ready,
+    calls ready ones until one returns an answer (``fell_back`` set when a
+    non-first entry served it). Never raises.
     """
-    if not markdown or cfg is None:
-        return None, None
     ac = getattr(cfg, "answer", None)
-    if ac is None:
-        return None, None
-
-    err, _msg = _answer_backend_status(cfg)
-    if err is not None:
-        log.warning("answer requested but backend not ready: %s", err)
-        return None, None
+    if not markdown or cfg is None or ac is None:
+        return _AnswerResult()
+    providers = tuple(getattr(ac, "providers", ()) or ())
+    if not providers:
+        return _AnswerResult(
+            error="answer_not_configured",
+            message=(
+                "No answer provider configured. Set answer.providers in config.yaml."
+            ),
+        )
 
     if question:
         system = _QUESTION_SYSTEM
@@ -108,21 +134,38 @@ async def _generate(
         system = _GENERIC_SYSTEM
         user = f"Page content:\n\n{markdown}"
 
-    provider = (ac.provider or "").strip()
-    try:
-        if provider == "claude_cli":
-            client: Any = ClaudeCliClient(model=ac.model)
-        else:
-            client = DeepSeekClient(
-                api_key=resolve_api_key(cfg),
-                base_url=PROVIDER_ENDPOINTS[provider],
-                model=ac.model,
+    first_status: tuple[str | None, str | None] | None = None
+    any_ready = False
+    for index, pcfg in enumerate(providers):
+        err, msg = _backend_status(pcfg)
+        if first_status is None:
+            first_status = (err, msg)
+        if err is not None:
+            log.warning(
+                "answer provider %r not ready: %s",
+                getattr(pcfg, "provider", ""),
+                err,
             )
-        text = await client.complete(system=system, user=user)
-    except Exception as exc:
-        log.warning("answer call failed: %s", exc)
-        return None, None
-    return (text or None), getattr(client, "last_usage", None)
+            continue
+        any_ready = True
+        text, usage = await _run_backend(system, user, pcfg)
+        if text is not None:
+            return _AnswerResult(
+                text=text,
+                usage=usage,
+                provider=(pcfg.provider or "").strip() or None,
+                model=pcfg.model or None,
+                fell_back=index > 0,
+            )
+        log.warning("answer provider %r failed; trying next", pcfg.provider)
+
+    if not any_ready:
+        err, msg = first_status or ("answer_not_configured", None)
+        return _AnswerResult(error=err, message=msg)
+    return _AnswerResult(
+        error="answer_failed",
+        message="All configured answer providers failed (API error or empty content).",
+    )
 
 
 async def summarize(
@@ -134,10 +177,9 @@ async def summarize(
     """Answer ``question`` over ``markdown``, or summarize it generically.
 
     Returns the answer text, or ``None`` if it's unavailable or fails for any
-    reason (backend not configured, API error, empty content).
+    reason (no provider configured, API error, empty content).
     """
-    text, _usage = await _generate(markdown, question, cfg)
-    return text
+    return (await _generate(markdown, question, cfg)).text
 
 
 async def answer(
@@ -157,12 +199,14 @@ async def answer(
     Returns one of:
       - the fetch *failure* envelope (has ``failure``) if the page couldn't be
         fetched — propagated unchanged so callers record it;
-      - a result dict with ``answer`` set on success (plus ``provider`` and a
-        ``usage`` block: token counts and, for claude_cli, ``cost_usd``);
+      - a result dict with ``answer`` set on success (plus the **served**
+        ``provider``/``model``, a ``usage`` block — token counts and, for
+        claude_cli, ``cost_usd`` — and ``fell_back`` when a non-primary entry
+        served it);
       - a result dict with ``error`` and ``answer=None`` when the LLM step can't
-        run: ``answer_not_configured`` (no provider / missing model),
-        ``no_api_key`` / ``claude_cli_unavailable`` (provider not ready), or
-        ``answer_failed`` (the model returned nothing).
+        run: ``answer_not_configured`` (empty chain / missing model),
+        ``no_api_key`` / ``claude_cli_unavailable`` (no entry ready), or
+        ``answer_failed`` (every ready provider returned nothing).
     """
     env = await _fetch.fetch_one(
         url,
@@ -176,9 +220,7 @@ async def answer(
     if env.get("failure"):
         return env
 
-    ac = getattr(cfg, "answer", None)
-    provider = (getattr(ac, "provider", "") or "").strip()
-    reported_model = getattr(ac, "model", None) or None
+    result = await _generate(env.get("markdown") or "", question, cfg)
     final_url = (
         env.get("url_final")
         or env.get("url_canonical")
@@ -193,26 +235,19 @@ async def answer(
         "mode_used": env.get("mode_used"),
         "from_cache": env.get("from_cache", False),
         "word_count": env.get("word_count"),
-        "model": reported_model,
+        "model": result.model,
+        "provider": result.provider,
         "question": question,
-        "answer": None,
+        "answer": result.text,
     }
 
-    err, message = _answer_backend_status(cfg)
-    if err is not None:
-        base["error"] = err
-        base["message"] = message
-        return base
-
-    text, usage = await _generate(env.get("markdown") or "", question, cfg)
-    if text is None:
-        base["error"] = "answer_failed"
-        base["message"] = (
+    if result.text is None:
+        base["error"] = result.error or "answer_failed"
+        base["message"] = result.message or (
             "The answer model returned no result (API error or empty content)."
         )
         return base
 
-    base["answer"] = text
-    base["provider"] = provider or None
-    base["usage"] = usage
+    base["usage"] = result.usage
+    base["fell_back"] = result.fell_back
     return base

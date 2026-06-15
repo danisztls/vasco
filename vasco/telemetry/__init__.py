@@ -125,14 +125,16 @@ def answer_usage_fields(result: dict[str, Any]) -> dict[str, Any]:
     dropped by `record_success`, so DeepSeek's null `cost_usd` simply isn't logged
     while its token counts are. Lets `vasco logs stats` roll up per-provider usage.
     """
-    usage = result.get("usage") if isinstance(result, dict) else None
+    result = result if isinstance(result, dict) else {}
+    usage = result.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     return {
-        "provider": result.get("provider") if isinstance(result, dict) else None,
+        "provider": result.get("provider"),
         "input_tokens": usage.get("input_tokens"),
         "output_tokens": usage.get("output_tokens"),
         "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
         "cost_usd": usage.get("cost_usd"),
+        "fell_back": result.get("fell_back"),
     }
 
 

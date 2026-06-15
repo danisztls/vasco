@@ -276,12 +276,13 @@ def test_answer_usage_rolls_up_per_provider(tmp_path: Path) -> None:
                 "output_tokens": 30,
                 "cost_usd": 0.01,
             },
-            {  # HTTP provider: tokens but no cost
+            {  # HTTP provider serving as a fallback: tokens, no cost, fell_back
                 "tool": "answer",
                 "outcome": "ok",
                 "provider": "deepseek",
                 "input_tokens": 500,
                 "output_tokens": 20,
+                "fell_back": True,
             },
         ],
     )
@@ -293,12 +294,14 @@ def test_answer_usage_rolls_up_per_provider(tmp_path: Path) -> None:
             "input_tokens": 3000,
             "output_tokens": 80,
             "cost_usd": 0.03,
+            "fell_back": 0,
         },
         "deepseek": {
             "calls": 1,
             "input_tokens": 500,
             "output_tokens": 20,
             "cost_usd": 0.0,
+            "fell_back": 1,
         },
     }
     # The answer providers must NOT leak into the content-adapter rollup.

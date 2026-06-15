@@ -36,6 +36,8 @@ def test_template_keys_are_real_config_fields() -> None:
         name: {f.name for f in fields(cls)}
         for name, cls in config_mod._ADAPTER_SECTIONS.items()
     }
+    # `answer` is custom-loaded (a provider chain), so it's not in _SECTIONS.
+    answer_fields = {f.name for f in fields(config_mod.AnswerCfg)}
 
     current_section: str | None = None
     current_adapter: str | None = None
@@ -50,7 +52,7 @@ def test_template_keys_are_real_config_fields() -> None:
             continue
         key = match.group(1)
         if indent <= 1:  # '# section:'
-            assert key in section_fields or key in ("adapters", "domains"), (
+            assert key in section_fields or key in ("adapters", "domains", "answer"), (
                 f"template references unknown section '{key}'"
             )
             current_section = key
@@ -59,6 +61,11 @@ def test_template_keys_are_real_config_fields() -> None:
             # `domains:` is a free-form host → {headers: …} map, not dataclass
             # fields, so its child keys (hosts) aren't validated here.
             continue
+        elif current_section == "answer":  # '#   providers:' under answer
+            assert key in answer_fields, (
+                f"template field 'answer.{key}' is not a field of AnswerCfg"
+            )
+            seen_a_field = True
         elif current_section == "adapters" and indent <= 3:  # '#   <adapter>:'
             assert key in adapter_fields, (
                 f"template references unknown adapter 'adapters.{key}'"

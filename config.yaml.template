@@ -61,15 +61,17 @@
 #   detect_paywall: true       # flag pages served by known paywall/metering vendors
 #   paywall_vendor_paths: []   # vendor fingerprint lists (local/remote); [] = bundled default
 
-# answer:                       # backend for the `answer` command (fetch + LLM answer over a page)
-#                               # no default: the capability is OFF until `provider` is set
-#   provider: ""               # set to "deepseek" (OpenAI-compatible HTTP) or "claude_cli" (`claude -p`)
-#   model: ""                  # model for the active provider: a deepseek id (e.g. deepseek-v4-flash)
-#                               # or a claude alias/id (e.g. opus, sonnet, fable). required.
-#   api_key: ""                # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
-#                               # NOTE (claude_cli): `claude` must be on PATH (incl. the vascod service's PATH)
-#                               # and logged in to your subscription (run `claude`, then /login); the adapter
-#                               # strips ANTHROPIC_API_KEY so it bills the subscription, not the API.
+# answer:                       # backend(s) for the `answer` command (fetch + LLM answer over a page)
+#                               # `providers` is an ordered chain: first = primary, the rest are fallbacks
+#                               # tried in order when an entry is unavailable or fails. empty = disabled.
+#   providers: []              # e.g. (uncomment and fill — first entry is primary):
+#                               #   - {provider: claude_cli, model: sonnet}
+#                               #   - {provider: deepseek, model: deepseek-v4-flash, api_key: sk-...}
+#                               # claude_cli runs `claude -p` on your subscription: `claude` must be on PATH
+#                               # (incl. the vascod service's PATH) and logged in (run `claude`, then /login);
+#                               # the adapter strips ANTHROPIC_API_KEY so it bills the subscription, not the API.
+#                               # quick single-provider override (replaces the whole chain):
+#                               #   VASCO_ANSWER_PROVIDER=claude_cli VASCO_ANSWER_MODEL=sonnet
 
 # service:                      # vascod (`vasco serve`) coordination knobs
 #   single_flight: true        # collapse concurrent identical fetches into one

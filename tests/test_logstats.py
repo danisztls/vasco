@@ -253,3 +253,53 @@ def test_summarize_tolerates_malformed_lines(tmp_path: Path) -> None:
     cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
     summary = logstats.summarize(cfg)
     assert summary["total_events"] == 2
+
+
+def test_answer_usage_rolls_up_per_provider(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / f"{_today()}.jsonl",
+        [
+            {
+                "tool": "answer",
+                "outcome": "ok",
+                "provider": "claude_cli",
+                "input_tokens": 2000,
+                "output_tokens": 50,
+                "cost_usd": 0.02,
+            },
+            {
+                "tool": "answer",
+                "outcome": "ok",
+                "provider": "claude_cli",
+                "input_tokens": 1000,
+                "output_tokens": 30,
+                "cost_usd": 0.01,
+            },
+            {  # HTTP provider: tokens but no cost
+                "tool": "answer",
+                "outcome": "ok",
+                "provider": "deepseek",
+                "input_tokens": 500,
+                "output_tokens": 20,
+            },
+        ],
+    )
+    cfg = Config(logging=LoggingCfg(enabled=True, path=str(log_dir)))
+    summary = logstats.summarize(cfg)
+    assert summary["answer_usage"] == {
+        "claude_cli": {
+            "calls": 2,
+            "input_tokens": 3000,
+            "output_tokens": 80,
+            "cost_usd": 0.03,
+        },
+        "deepseek": {
+            "calls": 1,
+            "input_tokens": 500,
+            "output_tokens": 20,
+            "cost_usd": 0.0,
+        },
+    }
+    # The answer providers must NOT leak into the content-adapter rollup.
+    assert summary["adapters"] == {}

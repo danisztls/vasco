@@ -9,6 +9,9 @@ from vasco.config import AnswerCfg, Config
 
 
 def _cfg(**kw: Any) -> Config:
+    # Default the helper to a ready deepseek backend; individual tests override.
+    kw.setdefault("provider", "deepseek")
+    kw.setdefault("model", "deepseek-v4-flash")
     return Config(answer=AnswerCfg(api_key="k", **kw))
 
 
@@ -23,7 +26,27 @@ class _FakeClient:
     async def complete(self, *, system: str, user: str, timeout: float = 30.0) -> str:
         _FakeClient.last["system"] = system
         _FakeClient.last["user"] = user
+        # HTTP providers report tokens but no dollar cost.
+        self.last_usage = {"input_tokens": 3, "output_tokens": 2, "cost_usd": None}
         return "THE ANSWER"
+
+
+class _FakeCliClient:
+    """Stand-in for ClaudeCliClient with the same .complete surface."""
+
+    last: dict[str, Any] = {}
+
+    def __init__(self, **kw: Any) -> None:
+        _FakeCliClient.last["init"] = kw
+
+    async def complete(
+        self, *, system: str, user: str, timeout: float | None = None
+    ) -> str:
+        _FakeCliClient.last["system"] = system
+        _FakeCliClient.last["user"] = user
+        # claude_cli reports a native cost.
+        self.last_usage = {"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01}
+        return "CLI ANSWER"
 
 
 @pytest.fixture(autouse=True)
@@ -67,7 +90,7 @@ async def test_api_failure_returns_none(monkeypatch: pytest.MonkeyPatch) -> None
 
 async def test_no_api_key_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_sum, "DeepSeekClient", _FakeClient)
-    cfg = Config(answer=AnswerCfg(api_key=""))
+    cfg = Config(answer=AnswerCfg(provider="deepseek", model="m", api_key=""))
     assert await _sum.summarize("body", cfg=cfg) is None
 
 
@@ -131,10 +154,94 @@ async def test_answer_propagates_fetch_failure(
 
 async def test_answer_no_key_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
-    cfg = Config(answer=AnswerCfg(api_key=""))
+    cfg = Config(answer=AnswerCfg(provider="deepseek", model="m", api_key=""))
     out = await _sum.answer("https://x", cfg=cfg)
     assert out["error"] == "no_api_key"
     assert out["answer"] is None
+
+
+# --- provider selection: claude_cli + unconfigured ---
+
+
+async def test_claude_cli_provider_needs_no_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "ClaudeCliClient", _FakeCliClient)
+    monkeypatch.setattr(_sum, "binary_available", lambda _b: True)
+    cfg = Config(answer=AnswerCfg(provider="claude_cli", model="opus"))
+    out = await _sum.summarize("page body", question="q?", cfg=cfg)
+    assert out == "CLI ANSWER"
+    assert _sum._QUESTION_SYSTEM == _FakeCliClient.last["system"]
+    assert "page body" in _FakeCliClient.last["user"]
+
+
+async def test_answer_claude_cli_reports_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "ClaudeCliClient", _FakeCliClient)
+    monkeypatch.setattr(_sum, "binary_available", lambda _b: True)
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    cfg = Config(answer=AnswerCfg(provider="claude_cli", model="opus"))
+    out = await _sum.answer("https://x", cfg=cfg)
+    assert out["answer"] == "CLI ANSWER"
+    assert out["model"] == "opus"
+
+
+async def test_answer_claude_cli_missing_binary_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "binary_available", lambda _b: False)
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    cfg = Config(answer=AnswerCfg(provider="claude_cli", model="opus"))
+    out = await _sum.answer("https://x", cfg=cfg)
+    assert out["error"] == "claude_cli_unavailable"
+    assert out["answer"] is None
+
+
+async def test_answer_unconfigured_provider_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    cfg = Config(answer=AnswerCfg())  # provider unset → capability disabled
+    out = await _sum.answer("https://x", cfg=cfg)
+    assert out["error"] == "answer_not_configured"
+    assert out["answer"] is None
+
+
+async def test_answer_deepseek_missing_model_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    cfg = Config(answer=AnswerCfg(provider="deepseek", api_key="k", model=""))
+    out = await _sum.answer("https://x", cfg=cfg)
+    assert out["error"] == "answer_not_configured"
+
+
+# --- usage/cost surfaced in the envelope ---
+
+
+async def test_answer_claude_cli_envelope_carries_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "ClaudeCliClient", _FakeCliClient)
+    monkeypatch.setattr(_sum, "binary_available", lambda _b: True)
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    cfg = Config(answer=AnswerCfg(provider="claude_cli", model="opus"))
+    out = await _sum.answer("https://x", cfg=cfg)
+    assert out["provider"] == "claude_cli"
+    assert out["usage"]["input_tokens"] == 10
+    assert out["usage"]["cost_usd"] == 0.01  # native cost from the CLI
+
+
+async def test_answer_deepseek_envelope_usage_has_no_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "DeepSeekClient", _FakeClient)
+    monkeypatch.setattr(_sum._fetch, "fetch_one", _stub_fetch_one({"markdown": "body"}))
+    out = await _sum.answer("https://x", cfg=_cfg())
+    assert out["provider"] == "deepseek"
+    assert out["usage"]["output_tokens"] == 2
+    assert out["usage"]["cost_usd"] is None  # tokens-only for HTTP providers
 
 
 async def test_answer_llm_failure_returns_error(

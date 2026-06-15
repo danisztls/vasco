@@ -120,11 +120,19 @@ class QualityCfg:
 
 @dataclass(frozen=True)
 class AnswerCfg:
-    """LLM endpoint used by the `answer` command (fetch + LLM answer over a page)."""
+    """Backend for the `answer` command (fetch + LLM answer over a page).
 
-    model: str = "deepseek-v4-flash"
-    base_url: str = "https://api.deepseek.com/v1"  # any OpenAI-compatible endpoint
-    api_key: str = ""  # or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+    There is **no default provider**: the capability stays disabled until
+    `provider` is set to either ``"deepseek"`` (an OpenAI-compatible HTTP endpoint,
+    resolved from the built-in ``deepseek.PROVIDER_ENDPOINTS`` registry) or
+    ``"claude_cli"`` (shell out to ``claude -p``, billed against the user's Claude
+    Code subscription via OAuth — no API key; ``claude`` must be on PATH). `model`
+    is the model for whichever provider is active and is required.
+    """
+
+    provider: str = ""  # "" = disabled | "deepseek" | "claude_cli"
+    model: str = ""  # model for the active provider (deepseek id, or claude alias/id)
+    api_key: str = ""  # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
 
 
 @dataclass(frozen=True)

@@ -456,7 +456,11 @@ def answer(
     human: HumanOpt = False,
     json_: JsonOpt = False,
 ) -> None:
-    """Fetch a URL and print an LLM answer/summary over its content."""
+    """Fetch a URL and print an LLM answer/summary over its content.
+
+    Needs `answer.provider` configured: `deepseek` (OpenAI-compatible, API key) or
+    `claude_cli` (runs `claude -p` on your Claude Code subscription, no API key).
+    """
     from vasco import config as _config
     from vasco import summarize as _summarize
     from vasco import telemetry as _telemetry
@@ -506,6 +510,7 @@ def answer(
                 question=question,
                 from_cache=result.get("from_cache"),
                 duration_ms=duration_ms,
+                **_telemetry.answer_usage_fields(result),
             )
         if is_human:
             from vasco import render as _render

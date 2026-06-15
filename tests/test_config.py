@@ -105,8 +105,9 @@ def test_unknown_section_is_ignored(tmp_path: Path) -> None:
 
 def test_answer_defaults() -> None:
     cfg = load_config()
-    assert cfg.answer.model == "deepseek-v4-flash"
-    assert cfg.answer.base_url == "https://api.deepseek.com/v1"
+    # No default provider/model — the capability is disabled until configured.
+    assert cfg.answer.provider == ""
+    assert cfg.answer.model == ""
     assert cfg.answer.api_key == ""
 
 

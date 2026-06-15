@@ -118,6 +118,24 @@ def record_exception(
     )
 
 
+def answer_usage_fields(result: dict[str, Any]) -> dict[str, Any]:
+    """Provider + token/cost fields for an `answer` success event.
+
+    Pulled from the result dict's `provider` and `usage` block. `None` values are
+    dropped by `record_success`, so DeepSeek's null `cost_usd` simply isn't logged
+    while its token counts are. Lets `vasco logs stats` roll up per-provider usage.
+    """
+    usage = result.get("usage") if isinstance(result, dict) else None
+    usage = usage if isinstance(usage, dict) else {}
+    return {
+        "provider": result.get("provider") if isinstance(result, dict) else None,
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+        "cost_usd": usage.get("cost_usd"),
+    }
+
+
 def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
     """Standard success-event payload for fetch-shaped envelopes.
 

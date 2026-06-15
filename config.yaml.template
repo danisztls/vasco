@@ -61,10 +61,15 @@
 #   detect_paywall: true       # flag pages served by known paywall/metering vendors
 #   paywall_vendor_paths: []   # vendor fingerprint lists (local/remote); [] = bundled default
 
-# answer:                       # LLM endpoint for the `answer` command (fetch + LLM answer over a page)
-#   model: deepseek-v4-flash   # any model id available on the endpoint
-#   base_url: https://api.deepseek.com/v1   # any OpenAI-compatible chat endpoint
-#   api_key: ""                # or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+# answer:                       # backend for the `answer` command (fetch + LLM answer over a page)
+#                               # no default: the capability is OFF until `provider` is set
+#   provider: ""               # set to "deepseek" (OpenAI-compatible HTTP) or "claude_cli" (`claude -p`)
+#   model: ""                  # model for the active provider: a deepseek id (e.g. deepseek-v4-flash)
+#                               # or a claude alias/id (e.g. opus, sonnet, fable). required.
+#   api_key: ""                # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+#                               # NOTE (claude_cli): `claude` must be on PATH (incl. the vascod service's PATH)
+#                               # and logged in to your subscription (run `claude`, then /login); the adapter
+#                               # strips ANTHROPIC_API_KEY so it bills the subscription, not the API.
 
 # service:                      # vascod (`vasco serve`) coordination knobs
 #   single_flight: true        # collapse concurrent identical fetches into one

@@ -116,6 +116,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
     fetch_ok_total: dict[str, int] = {}
     adapter_ok: dict[str, int] = {}
     adapter_zero: dict[str, int] = {}
+    answer_usage: dict[str, dict[str, float]] = {}
     total = 0
 
     for rec in _iter_records(files):
@@ -166,13 +167,37 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
                     phase_values.setdefault(tool, {}).setdefault(field_name, []).append(
                         int(val)
                     )
-            # Content-adapter rollup: a success carrying provider/result_count.
-            # result_count == 0 is the silent-scraper-rot fingerprint.
-            provider = rec.get("provider")
-            if isinstance(provider, str):
-                adapter_ok[provider] = adapter_ok.get(provider, 0) + 1
-                if rec.get("result_count") == 0:
-                    adapter_zero[provider] = adapter_zero.get(provider, 0) + 1
+            # Content-adapter rollup: a fetch success carrying provider/result_count.
+            # result_count == 0 is the silent-scraper-rot fingerprint. Gated to
+            # fetch tools so the `answer` backend's provider doesn't leak in here.
+            if tool in _FETCH_TOOLS:
+                provider = rec.get("provider")
+                if isinstance(provider, str):
+                    adapter_ok[provider] = adapter_ok.get(provider, 0) + 1
+                    if rec.get("result_count") == 0:
+                        adapter_zero[provider] = adapter_zero.get(provider, 0) + 1
+            # Answer-backend usage rollup: per-provider tokens + cost (cost only
+            # present for claude_cli; DeepSeek logs tokens with no cost).
+            elif tool == "answer":
+                provider = rec.get("provider")
+                if isinstance(provider, str):
+                    entry = answer_usage.setdefault(
+                        provider,
+                        {
+                            "calls": 0,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cost_usd": 0.0,
+                        },
+                    )
+                    entry["calls"] += 1
+                    for key in ("input_tokens", "output_tokens"):
+                        val = rec.get(key)
+                        if isinstance(val, (int, float)):
+                            entry[key] += int(val)
+                    cost = rec.get("cost_usd")
+                    if isinstance(cost, (int, float)):
+                        entry["cost_usd"] += float(cost)
 
     duration_stats: dict[str, dict[str, int]] = {}
     for tool, vals in durations.items():
@@ -208,6 +233,16 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             "zero_result_rate": round(zero / ok_count, 4) if ok_count else 0.0,
         }
 
+    # Per-provider answer usage: call count + token sums (+ cost for claude_cli).
+    answer_usage_out: dict[str, dict[str, Any]] = {}
+    for provider, entry in sorted(answer_usage.items()):
+        answer_usage_out[provider] = {
+            "calls": int(entry["calls"]),
+            "input_tokens": int(entry["input_tokens"]),
+            "output_tokens": int(entry["output_tokens"]),
+            "cost_usd": round(entry["cost_usd"], 6),
+        }
+
     today = datetime.now(timezone.utc).date()
     since = (today - timedelta(days=days - 1)).isoformat()
 
@@ -236,6 +271,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
         },
         "failures": dict(failures.most_common()),
         "adapters": adapters,
+        "answer_usage": answer_usage_out,
         "duration_ms": duration_stats,
         "phase_percentiles": phase_percentiles,
     }

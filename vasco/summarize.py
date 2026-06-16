@@ -92,7 +92,9 @@ async def _run_backend(
     provider = (getattr(pcfg, "provider", "") or "").strip()
     try:
         if provider == "claude_cli":
-            client: Any = ClaudeCliClient(model=pcfg.model)
+            client: Any = ClaudeCliClient(
+                model=pcfg.model, effort=getattr(pcfg, "effort", "") or ""
+            )
         else:
             client = DeepSeekClient(
                 api_key=resolve_api_key(pcfg),

@@ -86,6 +86,7 @@ class ClaudeCliClient:
         *,
         binary: str = DEFAULT_BINARY,
         model: str = "",
+        effort: str = "",
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         if not binary_available(binary):
@@ -95,6 +96,12 @@ class ClaudeCliClient:
             )
         self._binary = binary
         self._model = model
+        # Effort level (low|medium|high|xhigh|max). The CLI has no thinking-off
+        # switch — unset means it applies its own default (high/xhigh in Claude
+        # Code) and the model thinks adaptively. answer/summarize is a grounded
+        # extraction task that needs no reasoning, so we pin `low` (the floor)
+        # to clamp that default down rather than enabling reasoning.
+        self._effort = effort
         self._timeout = timeout
         self.last_usage: dict[str, Any] | None = None
 
@@ -112,6 +119,8 @@ class ClaudeCliClient:
         ]
         if self._model:
             args += ["--model", self._model]
+        if self._effort:
+            args += ["--effort", self._effort]
 
         env = {k: v for k, v in os.environ.items() if k not in _AUTH_ENV_STRIP}
 

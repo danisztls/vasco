@@ -82,6 +82,26 @@ async def test_success_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
     assert proc.stdin_input == b"USER"  # full prompt on stdin, no prompt arg
 
 
+async def test_effort_flag_emitted_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(stdout=_result_json("ok"))
+    captured = _patch_exec(monkeypatch, proc)
+    client = cc.ClaudeCliClient(binary="claude", model="sonnet", effort="low")
+    await client.complete(system="S", user="U")
+
+    args = captured["args"]
+    assert args[args.index("--effort") + 1] == "low"
+
+
+async def test_effort_flag_absent_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No effort → no --effort flag, so the CLI applies its own default.
+    proc = _FakeProc(stdout=_result_json("ok"))
+    captured = _patch_exec(monkeypatch, proc)
+    client = cc.ClaudeCliClient(binary="claude", model="sonnet")
+    await client.complete(system="S", user="U")
+
+    assert "--effort" not in captured["args"]
+
+
 async def test_success_populates_last_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _FakeProc(
         stdout=json.dumps(

@@ -65,8 +65,11 @@
 #                               # `providers` is an ordered chain: first = primary, the rest are fallbacks
 #                               # tried in order when an entry is unavailable or fails. empty = disabled.
 #   providers: []              # e.g. (uncomment and fill — first entry is primary):
-#                               #   - {provider: claude_cli, model: sonnet}
+#                               #   - {provider: claude_cli, model: sonnet, effort: low}
 #                               #   - {provider: deepseek, model: deepseek-v4-flash, api_key: sk-...}
+#                               # effort (claude_cli only): low|medium|high|xhigh|max — the CLI has no
+#                               # thinking-off switch, so `low` clamps its high/xhigh default for the
+#                               # grounded answer/summarize task; unset = CLI's own default.
 #                               # claude_cli runs `claude -p` on your subscription: `claude` must be on PATH
 #                               # (incl. the vascod service's PATH) and logged in (run `claude`, then /login);
 #                               # the adapter strips ANTHROPIC_API_KEY so it bills the subscription, not the API.

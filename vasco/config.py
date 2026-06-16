@@ -131,6 +131,9 @@ class ProviderCfg:
     provider: str = ""  # "deepseek" | "claude_cli"
     model: str = ""  # model id/alias for the provider
     api_key: str = ""  # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+    effort: str = (
+        ""  # claude_cli only: --effort low|medium|high|xhigh|max (default = CLI's own)
+    )
 
 
 @dataclass(frozen=True)
@@ -479,8 +482,8 @@ def _load_answer(raw: Any) -> AnswerCfg:
     ``VASCO_ANSWER_PROVIDER`` is set, the whole chain becomes that one entry
     (with ``VASCO_ANSWER_MODEL`` / ``VASCO_ANSWER_API_KEY``). Otherwise the
     chain comes from ``answer.providers`` (a list of ``{provider, model,
-    api_key}`` maps; malformed entries are skipped). YAML-only for the list —
-    there is no per-field env override for a chain.
+    api_key, effort}`` maps; malformed entries are skipped). YAML-only for the
+    list — there is no per-field env override for a chain.
     """
     env_provider = os.environ.get("VASCO_ANSWER_PROVIDER")
     if env_provider:
@@ -490,6 +493,7 @@ def _load_answer(raw: Any) -> AnswerCfg:
                     provider=env_provider.strip(),
                     model=os.environ.get("VASCO_ANSWER_MODEL", ""),
                     api_key=os.environ.get("VASCO_ANSWER_API_KEY", ""),
+                    effort=os.environ.get("VASCO_ANSWER_EFFORT", ""),
                 ),
             )
         )
@@ -507,6 +511,7 @@ def _load_answer(raw: Any) -> AnswerCfg:
                 provider=str(entry.get("provider", "")).strip(),
                 model=str(entry.get("model", "")),
                 api_key=str(entry.get("api_key", "")),
+                effort=str(entry.get("effort", "")).strip(),
             )
         )
     return AnswerCfg(providers=tuple(providers))

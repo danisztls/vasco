@@ -46,6 +46,7 @@ from vasco.adapters import (
     google_shopping,
     mercadolivre,
     olx,
+    petlove,
     phabricator,
     realestate,
     shopee,
@@ -202,6 +203,7 @@ def _adapter_routes() -> tuple[_AdapterRoute, ...]:
                 "aliexpress", aliexpress.is_aliexpress_url, aliexpress.fetch_aliexpress
             ),
             _AdapterRoute("shopee", shopee.is_shopee_url, shopee.fetch_shopee),
+            _AdapterRoute("petlove", petlove.is_petlove_url, petlove.fetch_petlove),
             _AdapterRoute("steam", steam.is_steam_url, steam.fetch_steam),
         )
     return _ADAPTER_ROUTES

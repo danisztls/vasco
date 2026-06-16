@@ -105,6 +105,10 @@
 #   shopee:                     # Shopee BR (product pages via Product JSON-LD)
 #     currency: BRL            # label stamped on the envelope
 #     language: pt-BR          # label stamped on the envelope
+#   petlove:                    # Petlove BR (search + product pages via JSON-LD)
+#     currency: BRL            # label stamped on the envelope
+#     language: pt-BR          # label stamped on the envelope
+#     max_reviews: 10          # cap embedded customer reviews parsed per product page
 #   steam:                      # Steam store (app pages + search via store JSON APIs)
 #     country: US              # Steam storefront cc — sets the price currency (US -> USD)
 #     language: english        # Steam storefront l — locale of descriptions/genres

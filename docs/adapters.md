@@ -32,6 +32,15 @@ AliExpress (`aliexpress.com` global + `pt.`/`www.`/`m.` subdomains, and `aliexpr
 
 Shopee BR marketplace (`shopee.com.br`; other-country Shopee out of scope). **Product pages only** — `is_shopee_url` matches just the canonical `…-i.<shopId>.<itemId>` tail, so search/category/home URLs fall through to a normal fetch (Shopee's search results load via an anti-bot-signed internal API — `/api/v4/search/search_items` returns `error 90309999` even from a logged-in browser — and the category SPA embeds no listing JSON, so there's nothing structured to parse). HTML via the shared escalation chain (injected `fetch_html`); bot-challenged on the http tier so `shopee.com.br` is seeded to the browser tier in `vasco/strategy.py`. **schema.org `Product` JSON-LD is the spine** (embedded server-side for SEO, survives Shopee's CSS rotation): name, productID, image, brand, description, `offers` (price — **en-format dot-decimal, not BR comma** — priceCurrency, itemCondition, availability, nested `seller` Organization with the shop's aggregateRating) + a product-level aggregateRating; `ratingValue`/`ratingCount` come as **strings**. `shopId`/`itemId` are lifted from the URL tail; the category path is recovered from the page's `BreadcrumbList`. One product per page in `quality.products` (`page_type="product"`, `currency`, `result_count`); own envelope shape (`mode_used="shopee"`, `content_type="application/x-shopee"`).
 
+## `vasco/adapters/petlove.py`
+
+Petlove BR pet-supplies marketplace (`petlove.com.br`; other hosts out of scope). **Two page types** — **search** (`/busca?q=`) and **product** (`/<slug>/p`); category/brand/editorial URLs are deliberately **not** matched by `is_petlove_url` (the URL alone can't tell a listing category from an article, and a non-listing page must not become an adapter failure), so they fall through to a normal fetch. HTML via the shared escalation chain (injected `fetch_html`); Petlove sits behind Cloudflare's "Just a moment…" interstitial (the http tier gets a 403 challenge) so `petlove.com.br` is seeded to the **browser** tier in `vasco/strategy.py` (like OLX). **schema.org JSON-LD is the spine** (server-rendered for SEO, survives Nuxt's CSS rotation):
+
+- **Search** (`/busca`): the `ItemList` is the anchor — its `itemListElement` is the list of result `Product` objects (title, url, sku, price — **en-format dot-decimal, not BR comma** — currency, brand, availability, image), and its `description` carries the catalogue `total_count` ("… com 69 produtos disponíveis."). The same Products are also emitted as standalone blocks, used as a fallback when the `ItemList` wrapper is absent.
+- **Product** (`/<slug>/p`): the `ProductGroup` is the anchor (Petlove sells one product in several sizes) → one product carrying `product_id` (`productGroupID`), brand, `aggregateRating` (`reviewCount`, not `ratingCount`; the full-precision mean is rounded to 2 dp), category (from `BreadcrumbList`, "Home" crumb dropped), HTML-stripped description, a `variants` list (the **multiple size/price pairs** — per-size `sku`/`size`/`price`/`in_stock`/`url`/`image` from `hasVariant`), `price`/`price_max` (the variant range), and embedded `reviews` (author/rating/title/text/date, capped at `adapters.petlove.max_reviews`, default 10). A single-size item with no group falls back to a plain `Product`. Two fields the JSON-LD doesn't carry are lifted **best-effort from the rendered DOM** (never fatal if the markup moves): `specs` (the `section.product-specifications` `.properties__list` name/value table) and `list_price` (the struck "preço cheio" for the selected variant — the regular price is already the JSON-LD `price`).
+
+Products in `quality.products` (`page_type` search/product, `currency`, `result_count`, plus `total_count` on search); own envelope shape (`mode_used="petlove"`, `content_type="application/x-petlove"`). Rot contract: no `ItemList`/`Product` (search) or no `ProductGroup`/`Product` (product) → `AdapterParseError` → `PARSE_FAILED`; an `ItemList` present but holding zero items → `success` + `["no_results"]`.
+
 ## `vasco/adapters/steam.py`
 
 Steam store (`store.steampowered.com`; other Steam hosts — `steamcommunity.com`, `steamdb.info` — are out of scope and fall through). Unlike the marketplace adapters it doesn't scrape page HTML: it fetches Steam's **public JSON APIs directly** through the injected `fetch_html` (like Shopify), so it serves on the plain http tier — **no strategy seed, no probe** (fixed domain, no bot challenge on the data path). Two page types: **app** (`/app/<id>`) and **search** (`/search/?term=`); bundle/sub/dlc/community URLs aren't claimed (`_claim` → `None`). Region (`cc`/`l`) comes from `SteamCfg` (`country`/`language`, default US/english), setting the price currency + description locale.
@@ -114,6 +123,15 @@ uv run vasco fetch "https://shopee.com.br/<slug>-i.<shopId>.<itemId>" \
   | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,condition,brand,rating,review_count,seller,category,shop_id,item_id})'
 # Shopee BR adapter: Product JSON-LD spine (price is dot-decimal; rating/count are strings). Product pages
 # only — search/category URLs fall through to a normal fetch. Bot-challenged → browser tier (seeded).
+
+uv run vasco fetch "https://www.petlove.com.br/busca?q=racao+golden" \
+  | jq '.mode_used, .quality.result_count, .quality.total_count, (.quality.products[0] | {title,price,brand,sku})'
+uv run vasco fetch "https://www.petlove.com.br/<slug>/p" \
+  | jq '(.quality.products[0] | {title,product_id,price,price_max,list_price,rating,review_count,category,
+        variants: [.variants[] | {size,price,in_stock}], specs, n_reviews: (.reviews|length)})'
+# Petlove BR adapter: JSON-LD spine (ItemList → search products; ProductGroup → one product with the
+# multiple size/price pairs in .variants + reviews); specs + struck list_price come best-effort from the
+# rendered DOM. Search + product pages only. Cloudflare-walled → browser tier (seeded).
 
 uv run vasco fetch "https://store.steampowered.com/app/1145360/Hades/" \
   | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,metacritic,review_score_desc,total_reviews,player_count,genres})'

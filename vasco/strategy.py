@@ -50,6 +50,11 @@ SEED_STRATEGIES: dict[str, str] = {
     # JSON-LD spine only lands once the browser tier renders the page. The
     # bare-domain key prefix-matches every product route under shopee.com.br.
     "shopee.com.br": "browser",
+    # Petlove sits behind Cloudflare's "Just a moment…" interstitial — the http
+    # tier reliably gets a 403 challenge — so start at the browser, where the
+    # JSON-LD (ItemList / ProductGroup) renders. The bare-domain key covers both
+    # /busca search and /<slug>/p product routes.
+    "petlove.com.br": "browser",
     # NOT seeded on purpose: sites the browser tier *also* fails on (by default).
     # Seeding only helps where the browser succeeds — spending the expensive tier
     # on a doomed fetch and skipping the cheap http fail-fast is a net loss. Leave

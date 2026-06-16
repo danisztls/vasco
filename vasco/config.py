@@ -208,6 +208,20 @@ class ShopeeCfg:
 
 
 @dataclass(frozen=True)
+class PetloveCfg:
+    """Petlove (BR pet marketplace) adapter knobs. `currency`/`language` only
+    label the envelope; the parser reads the page's own schema.org JSON-LD
+    (`ItemList` on search, `ProductGroup` on product pages). `max_reviews` caps
+    how many embedded customer reviews a product page carries. Scope is search +
+    product pages only (category/brand/content URLs fall through to normal
+    fetch)."""
+
+    currency: str = "BRL"
+    language: str = "pt-BR"
+    max_reviews: int = 10
+
+
+@dataclass(frozen=True)
 class SteamCfg:
     """Steam store adapter knobs. `country`/`language` are Steam's storefront
     region selectors (`cc`/`l`): they set the price currency and the locale of
@@ -258,6 +272,7 @@ class AdaptersCfg:
     mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
+    petlove: PetloveCfg = field(default_factory=PetloveCfg)
     steam: SteamCfg = field(default_factory=SteamCfg)
     phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
     gitlab: GitLabCfg = field(default_factory=GitLabCfg)
@@ -329,6 +344,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
     "shopee": ShopeeCfg,
+    "petlove": PetloveCfg,
     "steam": SteamCfg,
     "phabricator": PhabricatorCfg,
     "gitlab": GitLabCfg,

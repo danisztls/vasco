@@ -521,6 +521,22 @@ def _render_search(products: list[dict[str, Any]], *, currency: str) -> str:
     return "\n".join(parts)
 
 
+def _render_review(r: dict[str, Any]) -> str:
+    """One review as a Markdown bullet: ``- ★★★★ Author — "Title": text``."""
+    rating = r.get("rating")
+    stars = "★" * int(round(rating)) if isinstance(rating, (int, float)) else ""
+    head = " ".join(x for x in (stars, r.get("author") or "Anônimo") if x)
+    line = f"- **{head}**"
+    if r.get("title"):
+        line += f" — {r['title']}"
+    text = r.get("text") or ""
+    if len(text) > 280:
+        text = text[:279].rstrip() + "…"
+    if text:
+        line += f": {text}"
+    return line
+
+
 def _render_product(products: list[dict[str, Any]], *, currency: str) -> str:
     if not products:
         return "# Petlove\n\nNenhum produto encontrado."
@@ -529,36 +545,48 @@ def _render_product(products: list[dict[str, Any]], *, currency: str) -> str:
     price_line = f"**{_price_label(p, currency)}**"
     if p.get("list_price") is not None:
         price_line += f" (de {_fmt_price(p['list_price'], cur)})"
-    parts = [f"# {p.get('title', '?')}", "", price_line]
-    extras: list[str] = []
+    parts = [f"# {p.get('title', '?')}", price_line]
+
+    meta: list[str] = []
     if p.get("rating") is not None:
         rb = f"{round(p['rating'], 2)}/5"
         if p.get("review_count"):
             rb += f" ({p['review_count']} avaliações)"
-        extras.append(rb)
+        meta.append(rb)
     if p.get("brand"):
-        extras.append(f"Marca: {p['brand']}")
+        meta.append(f"Marca: {p['brand']}")
     if p.get("category"):
-        extras.append(p["category"])
-    if extras:
-        parts.append(" · ".join(extras))
+        meta.append(p["category"])
+    if meta:
+        parts.append(" · ".join(meta))
+
+    # The multiple size/price pairs, one per line so each is legible.
     variants = p.get("variants") or []
     if variants:
-        sizes = " · ".join(
-            f"{v.get('size', '?')} ({_fmt_price(v.get('price'), v.get('currency') or currency)}"
-            + ("" if v.get("in_stock", True) else ", esgotado")
-            + ")"
-            for v in variants
-        )
-        parts.append(f"Tamanhos: {sizes}")
+        lines = ["## Tamanhos e preços"]
+        for v in variants:
+            line = f"- {v.get('size', '?')} — {_fmt_price(v.get('price'), v.get('currency') or cur)}"
+            if v.get("in_stock") is False:
+                line += " (esgotado)"
+            lines.append(line)
+        parts.append("\n".join(lines))
+
     if p.get("description"):
-        parts.append(p["description"])
+        parts.append("## Descrição\n\n" + p["description"])
+
     specs = p.get("specs") or {}
     if specs:
         parts.append(
-            "**Especificações**\n\n"
-            + "\n".join(f"- {k}: {v}" for k, v in specs.items())
+            "## Especificações\n\n" + "\n".join(f"- {k}: {v}" for k, v in specs.items())
         )
+
+    reviews = p.get("reviews") or []
+    if reviews:
+        head = "## Avaliações"
+        if p.get("review_count"):
+            head += f" ({len(reviews)} de {p['review_count']})"
+        parts.append(head + "\n\n" + "\n".join(_render_review(r) for r in reviews))
+
     return "\n\n".join(parts)
 
 

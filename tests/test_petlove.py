@@ -258,16 +258,21 @@ def test_parse_product_raises_without_jsonld() -> None:
 def test_render_product_markdown() -> None:
     products = P._parse_product(_fx("product.html"), PRODUCT_URL, max_reviews=3)
     md = P._render_product(products, currency="BRL")
-    assert "Areia Sanitária Meau" in md
+    assert "# Areia Sanitária Meau" in md
     assert "R$ 16,11 – R$ 132,21" in md  # the size/price range
     assert "de R$ 17,90" in md  # struck list price
     assert "274 avaliações" in md
-    # the multiple size/price pairs are all rendered
-    assert "4 Kg (R$ 16,11)" in md
-    assert "12 Kg (R$ 41,31)" in md
+    # each size/price pair is its own bullet under a clear heading
+    assert "## Tamanhos e preços" in md
+    assert "- 4 Kg — R$ 16,11" in md
+    assert "- 12 Kg — R$ 41,31" in md
     # specs section
-    assert "Especificações" in md
-    assert "TIPO DE AREIA: Bentonita" in md
+    assert "## Especificações" in md
+    assert "- TIPO DE AREIA: Bentonita" in md
+    # reviews section (the markdown previously dropped these)
+    assert "## Avaliações" in md
+    assert "★" in md
+    assert "Claudia" in md
 
 
 def test_render_search_markdown() -> None:

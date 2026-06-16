@@ -20,18 +20,26 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-# Flags that turn `claude -p` into a clean, single-shot completion:
-#   --safe-mode             strips CLAUDE.md/memory, MCP servers, hooks, skills and
-#                           plugins **while keeping OAuth** (unlike --bare, which
-#                           forces an API key). Collapses per-call overhead from
-#                           ~28K to ~260 tokens.
+# Flags that turn `claude -p` into a clean, single-shot completion. All three
+# are independent and all required — none subsumes another:
+#   --safe-mode             strips CLAUDE.md/memory, MCP servers, hooks, skills
+#                           and plugins **while keeping OAuth** (unlike --bare,
+#                           which forces an API key). Does NOT strip tool
+#                           definitions or slash commands.
 #   --no-session-persistence  don't write the session to disk.
-#   --allowedTools ""       documented form for "disable all tools" (no web fetch/search).
+#   --tools ""              removes the ~29 built-in tool DEFINITIONS. This is the
+#                           real lever: --allowedTools "" only denies *permission*
+#                           to call tools — their schemas still ship (~11.7K input
+#                           tokens of agentic-coding context the answer/summarize
+#                           task never needs, framing the model as a shell-running
+#                           coder). --tools "" drops the per-call overhead to ~160.
+#   --disable-slash-commands  removes the ~27 slash-command descriptions.
 _HERMETIC_FLAGS: tuple[str, ...] = (
     "--safe-mode",
     "--no-session-persistence",
-    "--allowedTools",
+    "--tools",
     "",
+    "--disable-slash-commands",
 )
 
 # Removed from the child environment so `claude` authenticates via the Max

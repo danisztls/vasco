@@ -73,7 +73,11 @@ async def test_success_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--safe-mode" in args
     assert "--no-session-persistence" in args
     assert args[args.index("--system-prompt") + 1] == "SYS"
-    assert args[args.index("--allowedTools") + 1] == ""  # disable all tools
+    assert args[args.index("--tools") + 1] == ""  # remove tool DEFINITIONS
+    assert "--disable-slash-commands" in args  # remove slash-command descriptions
+    assert (
+        "--allowedTools" not in args
+    )  # the wrong lever: permission only, schemas ship
     assert args[args.index("--model") + 1] == "opus"
     assert proc.stdin_input == b"USER"  # full prompt on stdin, no prompt arg
 

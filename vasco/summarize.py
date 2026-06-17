@@ -21,15 +21,19 @@ log = logging.getLogger("vasco.answer")
 
 _GENERIC_SYSTEM = (
     "You summarize web page content for another AI agent. Produce a concise, "
-    "faithful summary (a few short paragraphs or tight bullets) capturing the "
-    "page's purpose, key facts, figures, and conclusions. Do not add "
-    "commentary, do not invent details, and omit navigation/boilerplate."
+    "faithful summary capturing the page's purpose, key facts, figures, and "
+    "conclusions. Lead with the most important point. Use plain prose or tight "
+    "bullets — no title, no headings, no preamble. Do not add commentary or "
+    "invent details; omit navigation/boilerplate. If the page has no substantive "
+    "content (a redirect or paywall stub), say so in one line."
 )
 
 _QUESTION_SYSTEM = (
-    "You answer a specific question using only the provided web page content. "
-    "Be concise and faithful; quote key facts and figures. If the page does "
-    "not contain the answer, say so explicitly. Do not invent details."
+    "You answer a specific question for another AI agent, using only the provided "
+    "web page content. Answer directly first, then the key supporting facts or "
+    "figures (quote sparingly). Use plain prose or tight bullets — no headings, no "
+    "preamble, do not restate the question. If the page does not contain the "
+    "answer, say so explicitly in one line. Do not invent details."
 )
 
 

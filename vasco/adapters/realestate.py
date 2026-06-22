@@ -117,6 +117,7 @@ _LISTING_FIELDS = (
     "url",
     "title",
     "type",
+    "finalidade",
     "price",
     "condo_fee",
     "iptu",
@@ -249,6 +250,7 @@ def _vivareal_detail(html: str) -> list[dict]:
             images=_dedup(product.get("image")),
         )
     ]
+
 
 
 

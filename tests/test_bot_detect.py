@@ -118,6 +118,24 @@ def test_aliexpress_punish_at_403_is_blocked_captcha() -> None:
     assert classify(403, html, {}) == FailureReason.BLOCKED_CAPTCHA
 
 
+def test_amazon_robot_check_is_blocked_captcha() -> None:
+    """Amazon's homegrown robot check (not h-captcha/recaptcha/turnstile) must
+    classify as BLOCKED_CAPTCHA so the chain escalates http → browser and the
+    Amazon adapter surfaces an honest block, not a misleading PARSE_FAILED."""
+    html = (FIXTURES / "amazon_robot.html").read_text()
+    assert classify(200, html, {}) == FailureReason.BLOCKED_CAPTCHA
+    # Amazon may serve it as a 503 too — the markers fire regardless of status.
+    assert classify(503, html, {}) == FailureReason.BLOCKED_CAPTCHA
+
+
+def test_amazon_robot_markers_fire_regardless_of_size() -> None:
+    """The validateCaptcha/support-email/opfcaptcha markers are specific to the
+    interstitial, so they fire size-independently (like Alibaba's punish page)."""
+    big = "<div>" + ("filler text " * 5000) + "</div>"
+    stub = '<form action="/errors/validateCaptcha"></form>'
+    assert classify(200, stub + big, {}) == FailureReason.BLOCKED_CAPTCHA
+
+
 def test_mercadolivre_account_wall_at_200_is_login_required() -> None:
     """MercadoLivre serves its `/gz/account-verification` interstitial as a 200
     once it flags the session. It must classify as LOGIN_REQUIRED so the adapter

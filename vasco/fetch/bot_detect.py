@@ -47,6 +47,22 @@ _ALIBABA_PUNISH_MARKERS: tuple[str, ...] = (
     "nc-lang-cnt",
     "captcha interception",
 )
+
+# Amazon's homegrown robot check ("Insira os caracteres que você vê na imagem" /
+# "Type the characters you see in this image"), served when its anti-bot flags a
+# request. It is NOT one of the generic captcha widgets (h-captcha/recaptcha/
+# turnstile), so the markers below are what identify it. They are extremely
+# specific to the interstitial — the captcha form posts to /errors/validateCaptcha,
+# the page footer carries the api-services-support@amazon contact line, and the
+# puzzle image lives in the opfcaptcha-prod bucket — so none appear on a real
+# product/search page. Like Alibaba's punish page this is checked size-independently
+# (Amazon may serve it 200 or 503) so the chain escalates http → browser (which,
+# with a warm profile, is often served real content).
+_AMAZON_ROBOT_MARKERS: tuple[str, ...] = (
+    "/errors/validatecaptcha",
+    "api-services-support@amazon",
+    "opfcaptcha-prod",
+)
 # Loading recaptcha/hcaptcha api.js alone is NOT a captcha challenge: tons of
 # normal sites embed these libraries for contact-form anti-spam, with the
 # widget rendered only after submit. The class markers above plus a Turnstile
@@ -194,6 +210,13 @@ def classify(
     # but the markers mean "challenge" under any status, so classify on the body
     # regardless. Size-independent on purpose (see marker-set comment).
     if _has_any(body_lc, _ALIBABA_PUNISH_MARKERS):
+        return FailureReason.BLOCKED_CAPTCHA
+
+    # --- Amazon "robot check" captcha interstitial ---------------------------
+    # Checked before the status branches (Amazon serves it 200 or 503) and
+    # size-independently: the markers are specific to the interstitial, never a
+    # real page (see marker-set comment).
+    if _has_any(body_lc, _AMAZON_ROBOT_MARKERS):
         return FailureReason.BLOCKED_CAPTCHA
 
     # --- Hard HTTP statuses ---------------------------------------------------

@@ -42,6 +42,7 @@ from vasco.envelope import (
 from vasco.errors import FailureReason
 from vasco.adapters import (
     aliexpress,
+    amazon,
     gitlab,
     google_shopping,
     mercadolivre,
@@ -204,6 +205,7 @@ def _adapter_routes() -> tuple[_AdapterRoute, ...]:
             ),
             _AdapterRoute("shopee", shopee.is_shopee_url, shopee.fetch_shopee),
             _AdapterRoute("petlove", petlove.is_petlove_url, petlove.fetch_petlove),
+            _AdapterRoute("amazon", amazon.is_amazon_url, amazon.fetch_amazon),
             _AdapterRoute("steam", steam.is_steam_url, steam.fetch_steam),
         )
     return _ADAPTER_ROUTES

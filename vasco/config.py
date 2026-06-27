@@ -211,6 +211,17 @@ class ShopeeCfg:
 
 
 @dataclass(frozen=True)
+class AmazonCfg:
+    """Amazon BR adapter knobs. `currency`/`language` only label the envelope; the
+    parser reads the page's own rendered DOM (Amazon embeds no schema.org JSON-LD).
+    Scope is search + product pages on amazon.com.br (other-country domains and
+    non-listing URLs fall through to normal fetch)."""
+
+    currency: str = "BRL"
+    language: str = "pt-BR"
+
+
+@dataclass(frozen=True)
 class PetloveCfg:
     """Petlove (BR pet marketplace) adapter knobs. `currency`/`language` only
     label the envelope; the parser reads the page's own schema.org JSON-LD
@@ -275,6 +286,7 @@ class AdaptersCfg:
     mercadolivre: MercadolivreCfg = field(default_factory=MercadolivreCfg)
     shopify: ShopifyCfg = field(default_factory=ShopifyCfg)
     shopee: ShopeeCfg = field(default_factory=ShopeeCfg)
+    amazon: AmazonCfg = field(default_factory=AmazonCfg)
     petlove: PetloveCfg = field(default_factory=PetloveCfg)
     steam: SteamCfg = field(default_factory=SteamCfg)
     phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
@@ -347,6 +359,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "mercadolivre": MercadolivreCfg,
     "shopify": ShopifyCfg,
     "shopee": ShopeeCfg,
+    "amazon": AmazonCfg,
     "petlove": PetloveCfg,
     "steam": SteamCfg,
     "phabricator": PhabricatorCfg,

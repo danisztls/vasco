@@ -108,6 +108,9 @@
 #   shopee:                     # Shopee BR (product pages via Product JSON-LD)
 #     currency: BRL            # label stamped on the envelope
 #     language: pt-BR          # label stamped on the envelope
+#   amazon:                     # Amazon BR (search + product pages via rendered DOM)
+#     currency: BRL            # label stamped on the envelope
+#     language: pt-BR          # label stamped on the envelope
 #   petlove:                    # Petlove BR (search + product pages via JSON-LD)
 #     currency: BRL            # label stamped on the envelope
 #     language: pt-BR          # label stamped on the envelope

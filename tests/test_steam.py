@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -113,10 +114,62 @@ def test_parse_app_fixture() -> None:
     assert p["publishers"] == ["Supergiant Games"]
     assert p["release_date"] == "17 set. 2020"
     assert p["coming_soon"] is False
+    assert p["early_access"] is False
     assert p["required_age"] == 10
     assert p["dlc_count"] == 1
     assert p["url"] == "https://store.steampowered.com/app/1145360/"
     assert p["image"].startswith("https://")
+
+
+def test_parse_app_early_access() -> None:
+    # Steam tags Early Access as genre id 70 (localized description varies).
+    body = (
+        '{"%s": {"success": true, "data": {"name": "Manor Lords", '
+        '"genres": [{"id": "28", "description": "Simulation"}, '
+        '{"id": "70", "description": "Early Access"}]}}}' % APP_ID
+    )
+    p = S._parse_app(body, APP_ID, "x")
+    assert p is not None
+    assert p["early_access"] is True
+    assert "Early Access" in p["genres"]
+
+
+def test_epoch_to_date() -> None:
+    assert S._epoch_to_date(1599999600) == "2020-09-13"
+    assert S._epoch_to_date(0) is None
+    assert S._epoch_to_date(None) is None
+    assert S._epoch_to_date("nope") is None
+
+
+def test_parse_review_list() -> None:
+    reviews = S._parse_review_list(
+        json.loads(_fx("appreviews_1145360.json"))["reviews"], 10
+    )
+    assert len(reviews) == 3
+    first = reviews[0]
+    assert first["author"] == "Zagreus"
+    assert first["recommended"] is True
+    assert first["text"].startswith("One more run")
+    assert first["language"] == "english"
+    assert first["playtime_hours"] == 90.0  # 5400 min at review
+    assert first["votes_up"] == 1284
+    assert first["early_access"] is True
+    assert first["date"] == "2020-09-13"
+    # negative review keeps recommended=False (not dropped by compact)
+    assert reviews[2]["recommended"] is False
+    assert "early_access" not in reviews[2]
+
+
+def test_parse_review_list_cap_and_skips_empty() -> None:
+    raw = [
+        {"review": "  ", "voted_up": True},  # blank → skipped
+        {"review": "good", "voted_up": True, "author": {"personaname": "A"}},
+        {"review": "also good", "voted_up": True, "author": {"personaname": "B"}},
+    ]
+    out = S._parse_review_list(raw, 1)
+    assert len(out) == 1
+    assert out[0]["author"] == "A"
+    assert S._parse_review_list("not a list", 10) == []
 
 
 def test_parse_search_fixture() -> None:
@@ -211,11 +264,42 @@ def test_fetch_app_success_merges_enrichment() -> None:
     p = q["products"][0]
     assert p["price"] == 73.99
     assert p["metacritic"] == 93
-    # reviews enrichment
+    assert p["early_access"] is False
+    # reviews enrichment (summary + bodies)
     assert p["review_score_desc"] == "Overwhelmingly Positive"
     assert p["total_reviews"] == 304159
+    assert len(p["reviews"]) == 3
+    assert p["reviews"][0]["author"] == "Zagreus"
+    assert p["reviews"][2]["recommended"] is False
+    assert "## Reviews (3)" in env["markdown"]
+    assert "👎" in env["markdown"]  # the negative review rendered
     # players enrichment
     assert p["player_count"] == 3632
+
+
+def test_fetch_app_max_reviews_zero_disables_bodies() -> None:
+    cfg = Config(adapters=AdaptersCfg(steam=SteamCfg(max_reviews=0)))
+    captured: list[str] = []
+
+    async def _fetch(target: str):
+        captured.append(target)
+        if "/api/appdetails" in target:
+            return (_fx("appdetails_1145360.json"), 200, {}, FailureReason.OK, "http")
+        if "/appreviews/" in target:
+            return (_fx("appreviews_1145360.json"), 200, {}, FailureReason.OK, "http")
+        return (_fx("players_1145360.json"), 200, {}, FailureReason.OK, "http")
+
+    env = asyncio.run(
+        S.fetch_steam(
+            "https://store.steampowered.com/app/1145360/", cfg=cfg, fetch_html=_fetch
+        )
+    )
+    p = env["quality"]["products"][0]
+    # summary still folds; individual bodies suppressed and not requested
+    assert p["total_reviews"] == 304159
+    assert "reviews" not in p
+    reviews_url = next(t for t in captured if "/appreviews/" in t)
+    assert "num_per_page=0" in reviews_url
 
 
 def test_fetch_app_enrichment_failure_is_best_effort() -> None:

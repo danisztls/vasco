@@ -56,7 +56,7 @@ Products in `quality.products` (`page_type` search/product, `currency`, `result_
 
 Steam store (`store.steampowered.com`; other Steam hosts — `steamcommunity.com`, `steamdb.info` — are out of scope and fall through). Unlike the marketplace adapters it doesn't scrape page HTML: it fetches Steam's **public JSON APIs directly** through the injected `fetch_html` (like Shopify), so it serves on the plain http tier — **no strategy seed, no probe** (fixed domain, no bot challenge on the data path). Two page types: **app** (`/app/<id>`) and **search** (`/search/?term=`); bundle/sub/dlc/community URLs aren't claimed (`_claim` → `None`). Region (`cc`/`l`) comes from `SteamCfg` (`country`/`language`, default US/english), setting the price currency + description locale.
 
-- **App** (`/app/<id>`): the storefront `appdetails` API (`/api/appdetails?appids=<id>`) is the **spine/anchor** — price (integer cents → float), genres, metacritic, release date, platforms, developers/publishers, dlc count, recommendations. Enriched **best-effort** (concurrent `asyncio.gather`, failures swallowed) by the public `appreviews` summary (`review_score_desc`, `total_reviews`/positive/negative), the live `GetNumberOfCurrentPlayers` count (`api.steampowered.com`, on by API design, no key), and — when an ITAD key is configured — IsThereAnyDeal historical pricing (`historical_low` + recent `price_history` + `itad_url`; see below). Only `appdetails` can fail the fetch.
+- **App** (`/app/<id>`): the storefront `appdetails` API (`/api/appdetails?appids=<id>`) is the **spine/anchor** — price (integer cents → float), genres, `early_access` (a boolean from Steam's "Early Access" **genre id 70** — stable across locales, unlike the localized description), metacritic, release date, platforms, developers/publishers, dlc count, recommendations. Enriched **best-effort** (concurrent `asyncio.gather`, failures swallowed) by the public `appreviews` endpoint — the summary (`review_score_desc`, `total_reviews`/positive/negative) **plus up to `adapters.steam.max_reviews` individual review bodies** (default 10; `reviews[]` = `author`, `recommended` (the `voted_up` thumb), `text`, `language`, `playtime_hours` at review time, `votes_up`/`votes_funny`, `early_access` (written during EA), `date`; `language=all` so the summary totals stay full, `max_reviews: 0` keeps summary-only) — the live `GetNumberOfCurrentPlayers` count (`api.steampowered.com`, on by API design, no key), and — when an ITAD key is configured — IsThereAnyDeal historical pricing (`historical_low` + recent `price_history` + `itad_url`; see below). Only `appdetails` can fail the fetch.
 
 ### ITAD price-history enrichment (`vasco/adapters/itad.py`)
 
@@ -153,7 +153,8 @@ uv run vasco fetch "https://www.petlove.com.br/<slug>/p" \
 # rendered DOM. Search + product pages only. Cloudflare-walled → browser tier (seeded).
 
 uv run vasco fetch "https://store.steampowered.com/app/1145360/Hades/" \
-  | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,metacritic,review_score_desc,total_reviews,player_count,genres})'
+  | jq '.mode_used, .quality.page_type, (.quality.products[0] | {title,price,currency,early_access,metacritic,review_score_desc,total_reviews,player_count,genres,reviews:(.reviews[0])})'
+# early_access (genre id 70) + up to adapters.steam.max_reviews review bodies (author/recommended/text/playtime_hours/date).
 uv run vasco fetch "https://store.steampowered.com/search/?term=hades" \
   | jq '.mode_used, .quality.result_count, (.quality.products[0] | {title,app_id,price,metacritic})'
 # Steam adapter: fetches Steam's public JSON APIs directly (appdetails spine + best-effort appreviews +

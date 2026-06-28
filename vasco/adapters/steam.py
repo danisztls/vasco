@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
@@ -48,6 +49,11 @@ log = logging.getLogger(__name__)
 _STORE = "https://store.steampowered.com"
 _API = "https://api.steampowered.com"
 _HOST = "store.steampowered.com"
+
+# Steam tags "Early Access" as a *genre* (id 70) on the appdetails node — a
+# stable numeric anchor, unlike the localized description ("Acesso Antecipado").
+_EARLY_ACCESS_GENRE_ID = "70"
+_DEFAULT_MAX_REVIEWS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -96,13 +102,26 @@ def _region(cfg: Any | None) -> tuple[str, str]:
     return cc, lang
 
 
+def _max_reviews(cfg: Any | None) -> int:
+    """How many user review bodies an app page pulls (``adapters.steam.max_reviews``)."""
+    steam = getattr(getattr(cfg, "adapters", None), "steam", None)
+    try:
+        return max(0, int(getattr(steam, "max_reviews", _DEFAULT_MAX_REVIEWS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_REVIEWS
+
+
 def _appdetails_url(app_id: str, cc: str, lang: str) -> str:
     return f"{_STORE}/api/appdetails?appids={app_id}&cc={cc}&l={lang}"
 
 
-def _appreviews_url(app_id: str) -> str:
+def _appreviews_url(app_id: str, num_per_page: int = 0) -> str:
+    # `num_per_page` controls how many review bodies come back; the
+    # `query_summary` totals are over all languages regardless, so `language=all`
+    # keeps the displayed review_score/total_reviews consistent. Default filter
+    # (helpfulness) returns the store page's representative reviews.
     return (
-        f"{_STORE}/appreviews/{app_id}?json=1&num_per_page=0"
+        f"{_STORE}/appreviews/{app_id}?json=1&num_per_page={num_per_page}"
         "&language=all&purchase_type=all&review_type=all"
     )
 
@@ -196,11 +215,16 @@ def _parse_app(body: str, app_id: str, url: str) -> dict[str, Any] | None:
     final = _money_cents(price.get("final"))
     initial = _money_cents(price.get("initial"))
     discount = _int(price.get("discount_percent")) or 0
+    raw_genres = d.get("genres") or []
     genres = [
         g["description"]
-        for g in (d.get("genres") or [])
+        for g in raw_genres
         if isinstance(g, dict) and isinstance(g.get("description"), str)
     ]
+    early_access = any(
+        isinstance(g, dict) and str(g.get("id")) == _EARLY_ACCESS_GENRE_ID
+        for g in raw_genres
+    )
     categories = [
         c["description"]
         for c in (d.get("categories") or [])
@@ -238,6 +262,7 @@ def _parse_app(body: str, app_id: str, url: str) -> dict[str, Any] | None:
             if isinstance(release.get("date"), str) and release["date"]
             else None,
             "coming_soon": bool(release.get("coming_soon")) if release else None,
+            "early_access": early_access,
             "metacritic": _int(meta.get("score")),
             "platforms": _platforms(d.get("platforms")),
             "developers": _str_list(d.get("developers")),
@@ -255,24 +280,31 @@ def _parse_app(body: str, app_id: str, url: str) -> dict[str, Any] | None:
     )
 
 
-def _merge_reviews(product: dict[str, Any], result: Any) -> None:
-    """Fold the ``appreviews`` summary into ``product`` (best-effort, never
-    raises — ``result`` is a fetch tuple or an Exception from ``gather``)."""
-    summary = _summary_from_fetch(result, key="query_summary")
-    if not isinstance(summary, dict):
+def _merge_reviews(product: dict[str, Any], result: Any, cap: int = 0) -> None:
+    """Fold the ``appreviews`` response into ``product`` (best-effort, never
+    raises — ``result`` is a fetch tuple or an Exception from ``gather``): the
+    ``query_summary`` totals plus up to ``cap`` individual review bodies."""
+    data = _json_from_fetch(result)
+    if not isinstance(data, dict):
         return
-    desc = summary.get("review_score_desc")
-    if isinstance(desc, str) and desc:
-        product["review_score_desc"] = desc
-    for src, dst in (
-        ("review_score", "review_score"),
-        ("total_reviews", "total_reviews"),
-        ("total_positive", "total_positive"),
-        ("total_negative", "total_negative"),
-    ):
-        val = _int(summary.get(src))
-        if val is not None:
-            product[dst] = val
+    summary = data.get("query_summary")
+    if isinstance(summary, dict):
+        desc = summary.get("review_score_desc")
+        if isinstance(desc, str) and desc:
+            product["review_score_desc"] = desc
+        for src, dst in (
+            ("review_score", "review_score"),
+            ("total_reviews", "total_reviews"),
+            ("total_positive", "total_positive"),
+            ("total_negative", "total_negative"),
+        ):
+            val = _int(summary.get(src))
+            if val is not None:
+                product[dst] = val
+    if cap > 0:
+        reviews = _parse_review_list(data.get("reviews"), cap)
+        if reviews:
+            product["reviews"] = reviews
 
 
 def _merge_players(product: dict[str, Any], result: Any) -> None:
@@ -303,9 +335,10 @@ def _merge_itad(product: dict[str, Any], result: Any) -> None:
         product["itad_url"] = result["itad_url"]
 
 
-def _summary_from_fetch(result: Any, *, key: str) -> Any:
-    """Extract ``json(body)[key]`` from a ``gather`` result, swallowing every
-    failure (exception, non-OK fetch, bad JSON) — enrichment is optional."""
+def _json_from_fetch(result: Any) -> dict[str, Any] | None:
+    """Parse the JSON object body from a ``gather`` result tuple, swallowing every
+    failure (exception, non-OK fetch, bad/non-object JSON) — enrichment is
+    optional, so any miss simply yields ``None``."""
     if isinstance(result, Exception) or not isinstance(result, tuple):
         return None
     try:
@@ -315,9 +348,69 @@ def _summary_from_fetch(result: Any, *, key: str) -> Any:
     if reason != FailureReason.OK or not body:
         return None
     try:
-        return json.loads(body).get(key)
-    except (json.JSONDecodeError, AttributeError, TypeError):
+        data = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
         return None
+    return data if isinstance(data, dict) else None
+
+
+def _summary_from_fetch(result: Any, *, key: str) -> Any:
+    """Extract ``json(body)[key]`` from a ``gather`` result (best-effort)."""
+    data = _json_from_fetch(result)
+    return data.get(key) if isinstance(data, dict) else None
+
+
+def _epoch_to_date(value: Any) -> str | None:
+    """Steam review timestamps are unix epoch seconds → an ISO ``YYYY-MM-DD``."""
+    ts = _int(value)
+    if ts is None or ts <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _parse_review_list(value: Any, cap: int) -> list[dict[str, Any]]:
+    """Normalize the ``appreviews`` ``reviews`` array into compact review dicts,
+    capped at ``cap``. Skips entries with no review text; ``recommended`` is the
+    thumbs up/down (``voted_up``), ``playtime_hours`` is playtime at review time."""
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for r in value:
+        if not isinstance(r, dict):
+            continue
+        text = r.get("review")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        author = r.get("author") if isinstance(r.get("author"), dict) else {}
+        name = author.get("personaname")
+        playtime = _int(author.get("playtime_at_review"))
+        out.append(
+            _compact(
+                {
+                    "author": name.strip()
+                    if isinstance(name, str) and name.strip()
+                    else None,
+                    "recommended": bool(r["voted_up"]) if "voted_up" in r else None,
+                    "text": text.strip(),
+                    "language": r.get("language")
+                    if isinstance(r.get("language"), str)
+                    else None,
+                    "playtime_hours": round(playtime / 60, 1) if playtime else None,
+                    "votes_up": _int(r.get("votes_up")) or None,
+                    "votes_funny": _int(r.get("votes_funny")) or None,
+                    "early_access": True
+                    if r.get("written_during_early_access")
+                    else None,
+                    "date": _epoch_to_date(r.get("timestamp_created")),
+                }
+            )
+        )
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _parse_search(body: str) -> list[dict[str, Any]]:
@@ -411,8 +504,18 @@ def _render_app(p: dict[str, Any]) -> str:
         if low.get("date"):
             s += f" ({low['date']})"
         facts.append(s)
+    if p.get("early_access"):
+        facts.append("Early Access")
     if p.get("genres"):
-        facts.append(", ".join(p["genres"]))
+        # "Early Access" is also a Steam genre; drop it from the genre line when
+        # already shown as its own badge (English storefront).
+        shown = [
+            g
+            for g in p["genres"]
+            if not (p.get("early_access") and g.lower() == "early access")
+        ]
+        if shown:
+            facts.append(", ".join(shown))
     if p.get("release_date"):
         facts.append(f"Released {p['release_date']}")
     if facts:
@@ -421,7 +524,35 @@ def _render_app(p: dict[str, Any]) -> str:
     if p.get("short_description"):
         parts.append("")
         parts.append(p["short_description"])
+    reviews = p.get("reviews") or []
+    if reviews:
+        parts.append("")
+        parts.append(f"## Reviews ({len(reviews)})")
+        for r in reviews:
+            parts.append("")
+            parts.append(_render_review(r))
     return "\n".join(parts)
+
+
+def _render_review(r: dict[str, Any]) -> str:
+    verdict = "👍" if r.get("recommended") else "👎"
+    bits = [verdict]
+    if r.get("author"):
+        bits.append(f"**{r['author']}**")
+    meta: list[str] = []
+    if r.get("playtime_hours"):
+        meta.append(f"{r['playtime_hours']:,g}h played")
+    if r.get("early_access"):
+        meta.append("early access")
+    if r.get("votes_up"):
+        meta.append(f"{r['votes_up']:,} helpful")
+    if r.get("date"):
+        meta.append(r["date"])
+    head = " ".join(bits)
+    if meta:
+        head += f" · {' · '.join(meta)}"
+    text = (r.get("text") or "").strip()
+    return f"{head}\n\n{text}" if text else head
 
 
 def _render_search(products: list[dict[str, Any]], term: str) -> str:
@@ -502,9 +633,10 @@ async def _fetch_app(
     # best-effort. Run them concurrently — only the spine can fail the fetch.
     # `steam_price_history` returns None with no network when no ITAD key is set,
     # so it's free to schedule unconditionally.
+    max_reviews = _max_reviews(cfg)
     details, reviews, players, itad_res = await asyncio.gather(
         fetch_html(_appdetails_url(app_id, cc, lang)),
-        fetch_html(_appreviews_url(app_id)),
+        fetch_html(_appreviews_url(app_id, num_per_page=max_reviews)),
         fetch_html(_players_url(app_id)),
         itad.steam_price_history(app_id, cfg=cfg),
         return_exceptions=True,
@@ -550,7 +682,7 @@ async def _fetch_app(
             http_status=status,
         )
 
-    _merge_reviews(product, reviews)
+    _merge_reviews(product, reviews, cap=max_reviews)
     _merge_players(product, players)
     _merge_itad(product, itad_res)
 

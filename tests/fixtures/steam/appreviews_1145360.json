@@ -1,1 +1,86 @@
-{"success":1,"query_summary":{"num_reviews":0,"review_score":9,"review_score_desc":"Overwhelmingly Positive","total_positive":298205,"total_negative":5954,"total_reviews":304159},"reviews":[],"cursor":"*"}
+{
+  "success": 1,
+  "query_summary": {
+    "num_reviews": 3,
+    "review_score": 9,
+    "review_score_desc": "Overwhelmingly Positive",
+    "total_positive": 298205,
+    "total_negative": 5954,
+    "total_reviews": 304159
+  },
+  "reviews": [
+    {
+      "recommendationid": "100000001",
+      "author": {
+        "steamid": "76561190000000001",
+        "num_games_owned": 220,
+        "num_reviews": 14,
+        "personaname": "Zagreus",
+        "playtime_forever": 7320,
+        "playtime_at_review": 5400,
+        "last_played": 1700000000
+      },
+      "language": "english",
+      "review": "One more run. The combat loop is flawless and the writing keeps pulling you back.",
+      "timestamp_created": 1599999600,
+      "timestamp_updated": 1599999600,
+      "voted_up": true,
+      "votes_up": 1284,
+      "votes_funny": 31,
+      "weighted_vote_score": 0.98,
+      "comment_count": 5,
+      "steam_purchase": true,
+      "received_for_free": false,
+      "written_during_early_access": true
+    },
+    {
+      "recommendationid": "100000002",
+      "author": {
+        "steamid": "76561190000000002",
+        "num_games_owned": 88,
+        "num_reviews": 4,
+        "personaname": "Melinoe",
+        "playtime_forever": 540,
+        "playtime_at_review": 480,
+        "last_played": 1699000000
+      },
+      "language": "english",
+      "review": "Gorgeous art and music. Lost dozens of hours without noticing.",
+      "timestamp_created": 1601510400,
+      "timestamp_updated": 1601510400,
+      "voted_up": true,
+      "votes_up": 412,
+      "votes_funny": 2,
+      "weighted_vote_score": 0.91,
+      "comment_count": 1,
+      "steam_purchase": true,
+      "received_for_free": false,
+      "written_during_early_access": false
+    },
+    {
+      "recommendationid": "100000003",
+      "author": {
+        "steamid": "76561190000000003",
+        "num_games_owned": 30,
+        "num_reviews": 9,
+        "personaname": "Thanatos",
+        "playtime_forever": 120,
+        "playtime_at_review": 90,
+        "last_played": 1698000000
+      },
+      "language": "english",
+      "review": "Not for me — the run-based structure got repetitive fast.",
+      "timestamp_created": 1602720000,
+      "timestamp_updated": 1602720000,
+      "voted_up": false,
+      "votes_up": 7,
+      "votes_funny": 0,
+      "weighted_vote_score": 0.42,
+      "comment_count": 0,
+      "steam_purchase": true,
+      "received_for_free": false,
+      "written_during_early_access": false
+    }
+  ],
+  "cursor": "AoJ4..."
+}

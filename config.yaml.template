@@ -119,6 +119,7 @@
 #     country: US              # Steam storefront cc — sets the price currency (US -> USD)
 #     language: english        # Steam storefront l — locale of descriptions/genres
 #     itad_api_key: ""         # IsThereAnyDeal key (or VASCO_ITAD_API_KEY); "" = off. Currency follows `country`
+#     max_reviews: 10          # cap user reviews pulled from the appreviews API (0 = summary only)
 #   phabricator:                # Phabricator/Phorge tasks + task search (HTML scrape, public data only)
 #     domains: []              # extra Phorge instance hosts (phabricator.wikimedia.org built in)
 #     max_comments: 50         # cap timeline comments parsed per task page

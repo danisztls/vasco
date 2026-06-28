@@ -243,11 +243,13 @@ class SteamCfg:
     so the defaults are US/English. `itad_api_key` (or `VASCO_ITAD_API_KEY`) is
     the **only** switch for IsThereAnyDeal historical-price enrichment on app
     pages — set it to enable, leave empty to disable (the currency follows
-    `country`)."""
+    `country`). `max_reviews` caps how many individual user reviews an app page
+    pulls from the `appreviews` API (0 = summary only, no review bodies)."""
 
     country: str = "US"
     language: str = "english"
     itad_api_key: str = ""
+    max_reviews: int = 10
 
 
 @dataclass(frozen=True)

@@ -29,7 +29,7 @@ import logging
 import re
 from functools import partial
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
@@ -37,10 +37,8 @@ from . import _common
 from ._common import (
     HtmlFetcher,
     as_int as _as_int,
-    brl_int as _brl_int,
     host as _host,
     jsonld_objects as _jsonld_objects,
-    soup as _soup,
 )
 
 log = logging.getLogger(__name__)
@@ -252,26 +250,6 @@ def _vivareal_detail(html: str) -> list[dict]:
     ]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 _PARSERS = {
     ("vivareal", "list"): lambda html, base, url: _vivareal_list(html),
     ("vivareal", "detail"): lambda html, base, url: _vivareal_detail(html),
@@ -331,9 +309,8 @@ async def fetch_realestate(
 
     HTML is obtained via ``fetch_html`` — the main flow injects the shared
     ``http → browser → mobile`` escalation (no wayback tail — an archived listing
-    would be stale) so server-rendered portals resolve
-    at the cheap http tier and never depend on the browser. Without an injected
-    fetcher it falls back to a browser-only fetch.
+    would be stale), sharing the strategy/seed/tier-learning system. Without an
+    injected fetcher it falls back to a browser-only fetch.
     """
     info = _provider_for(url)
     if info is None:  # pragma: no cover - routing guards this

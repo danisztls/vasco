@@ -37,6 +37,11 @@ from vasco.urls import route_key
         # homepage / empty path → bare domain
         ("https://www.vivareal.com.br/", "vivareal.com.br"),
         ("https://www.vivareal.com.br", "vivareal.com.br"),
+        # single structural segment keeps the segment literal (no trailing /*)
+        (
+            "https://www.example.com/imoveis/",
+            "example.com/imoveis",
+        ),
         # digit-leading first segment is variable → wildcarded
         ("https://news.example.co.uk/2024/07/some-story", "example.co.uk/*"),
         # eTLD+1 with secondary suffix is preserved

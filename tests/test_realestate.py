@@ -45,14 +45,6 @@ def test_page_type(provider: str, url: str, expected: str) -> None:
 # --- numeric helpers -------------------------------------------------------
 
 
-def test_brl_int() -> None:
-    assert R._brl_int("R$ 1.278,00") == 1278
-    assert R._brl_int("R$ 900") == 900
-    assert R._brl_int(1278) == 1278
-    assert R._brl_int("Sob consulta") is None
-    assert R._brl_int(None) is None
-
-
 def test_as_int() -> None:
     assert R._as_int("2 quartos") == 2
     assert R._as_int("45M²m2") == 45
@@ -139,34 +131,102 @@ def test_vivareal_list_raises_without_itemlist() -> None:
         R._vivareal_list(_fx("vivareal_detail.html"))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --- markdown rendering ----------------------------------------------------
 
 
+def test_render_markdown() -> None:
+    html = _vivareal_itemlist_html(
+        [
+            {
+                "@type": "Apartment",
+                "url": "https://www.vivareal.com.br/imovel/id-1/",
+                "name": "Apartamento em Centro, São Carlos",
+                "offers": {"price": 1667},
+                "floorSize": {"value": 45},
+            }
+        ]
+    )
+    md = R._render_markdown(R._vivareal_list(html))
+    assert "Apartamento em Centro" in md  # leads with title when present
+    assert "45m²" in md
+    assert "São Carlos" in md
 
 
 # --- fetch via injected escalating fetcher ---------------------------------
 
+VIVAREAL_LIST_URL = "https://www.vivareal.com.br/aluguel/sp/sao-carlos/"
 
 
+async def test_fetch_uses_injected_fetcher_and_records_tier() -> None:
+    """An injected fetcher (the shared escalation chain) supplies the HTML;
+    the adapter parses it into the realestate envelope."""
+    html = _vivareal_itemlist_html(
+        [
+            {
+                "@type": "Apartment",
+                "url": "https://www.vivareal.com.br/imovel/id-1/",
+                "name": "Apartamento em Centro, São Carlos",
+                "offers": {"price": 1667},
+            }
+        ]
+    )
+    calls: list[str] = []
+
+    async def fake_fetch_html(url: str):
+        calls.append(url)
+        return html, 200, {}, R.FailureReason.OK, "http"
+
+    env = await R.fetch_realestate(VIVAREAL_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert calls == [VIVAREAL_LIST_URL]
+    assert env["mode_used"] == "realestate"  # envelope contract is preserved
+    assert env["http_status"] == 200
+    assert "failure" not in env
+    assert env["quality"]["result_count"] > 0
 
 
+async def test_fetch_passes_through_escalation_failure() -> None:
+    """When every tier fails, the adapter surfaces that reason/tier verbatim."""
+
+    async def failing_fetch_html(url: str):
+        return "", 0, {}, R.FailureReason.TIMEOUT, "wayback"
+
+    env = await R.fetch_realestate(VIVAREAL_LIST_URL, fetch_html=failing_fetch_html)
+
+    assert env["failure"]["reason"] == R.FailureReason.TIMEOUT.value
+    assert "wayback" in env["failure"]["message"]
 
 
+async def test_fetch_list_rot_returns_parse_failed() -> None:
+    """200 OK but the provider's list anchor is gone → PARSE_FAILED, not a silent
+    empty success."""
+
+    async def fake_fetch_html(_url: str):
+        return (
+            "<html><body>no cards</body></html>",
+            200,
+            {},
+            R.FailureReason.OK,
+            "http",
+        )
+
+    env = await R.fetch_realestate(VIVAREAL_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" in env
+    assert env["failure"]["reason"] == R.FailureReason.PARSE_FAILED.value
+    assert "ItemList" in env["failure"]["message"]
 
 
+async def test_fetch_list_genuine_empty_warns_no_results() -> None:
+    """Anchor present but the ItemList is empty → a real empty result:
+    success with a `no_results` warning."""
+    html = _vivareal_itemlist_html([])
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, R.FailureReason.OK, "http"
+
+    env = await R.fetch_realestate(VIVAREAL_LIST_URL, fetch_html=fake_fetch_html)
+
+    assert "failure" not in env
+    assert env["quality"]["result_count"] == 0
+    assert "no_results" in env["warnings"]

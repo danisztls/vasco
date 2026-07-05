@@ -6,7 +6,7 @@ Every adapter here fetches HTML via the shared escalation chain (an injected `fe
 
 ## `vasco/adapters/realestate.py`
 
-Brazilian real-estate portals (vivareal) — HTML fetched via the shared escalation chain (injected `fetch_html`) then parsed per-provider into normalized listings (`url`, `title`, `type`, `price`, `condo_fee`, `area`, `bedrooms`, `bathrooms`, `parking`, `neighborhood`, `city`, `street`, `description`, `amenities`, `image`, `images`; `title`/`description` carry free-text when a provider lacks clean structured fields) in `quality.listings`; `list` pages (many, thumbnail) vs `detail` pages (one, full gallery); own envelope shape (`mode_used="realestate"`, `content_type="application/x-realestate"`).
+Brazilian real-estate portals (vivareal) — HTML fetched via the shared escalation chain (injected `fetch_html`) then parsed from JSON-LD (`ItemList` on list pages, `Product` on detail pages) into normalized listings (`url`, `title`, `type`, `price`, `condo_fee`, `area`, `bedrooms`, `bathrooms`, `parking`, `neighborhood`, `city`, `street`, `description`, `amenities`, `image`, `images`) in `quality.listings`; `list` pages (many, thumbnail) vs `detail` pages (one, full gallery); own envelope shape (`mode_used="realestate"`, `content_type="application/x-realestate"`).
 
 ## `vasco/adapters/google_shopping.py`
 

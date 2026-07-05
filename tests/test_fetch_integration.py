@@ -90,6 +90,34 @@ def test_fetch_one_round_trips_through_real_cache(
         cache.close()
 
 
+def test_adapter_rot_returns_parse_failed_with_short_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adapter URL that 200s but has lost its parse anchor surfaces
+    PARSE_FAILED end-to-end (through the real cache + escalation chain), and is
+    negative-cached on the short transient TTL — not pinned ~24h like the
+    UNSUPPORTED_CONTENT_TYPE the adapters used to return."""
+    # vivareal *list* pages aren't browser-seeded (only /imovel/ detail is), so
+    # they resolve at the http tier and stubbing _http_fetch drives the whole path.
+    monkeypatch.setattr(
+        core_mod, "_http_fetch", _stub_http("<html><body>no cards</body></html>", 200)
+    )
+    _disable_browser(monkeypatch)
+
+    url = "https://www.vivareal.com.br/aluguel/sp/sao-carlos/"
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert env["mode_used"] == "realestate"
+        assert env["failure"]["reason"] == "parse_failed"
+        # Short, self-healing negative TTL (0.33× base), not 96× (~24h).
+        assert fetch_mod._ttl_for(env, None) == int(900 * 0.33)
+
+        # The failure is negative-cached and re-served.
+        again = asyncio.run(fetch_mod.fetch_one(url, cache=cache, deadline=10.0))
+        assert again["failure"]["reason"] == "parse_failed"
+    finally:
+        cache.close()
 
 
 def test_cache_hit_preserves_caller_url_casing(

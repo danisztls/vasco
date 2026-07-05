@@ -179,6 +179,23 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     objects = _jsonld_objects(html)
     item = _find(objects, "Product")
     if item is None:
+        # Shopee's product page is a client-side SPA that only hydrates the
+        # Product JSON-LD for a *recognized* session. To a logged-out/unknown
+        # browser it soft-blocks with a generic shell carrying only the
+        # site-level `WebSite` JSON-LD (no `Product`). Surface that honestly and
+        # actionably instead of the misleading "markup may have changed" — the
+        # fix is to re-login the browser profile's Shopee session, not to chase
+        # a scraper-rot regression. Kept adapter-local (not in bot_detect) so it
+        # never trips the browser server's cookie-clear recovery, which would be
+        # counterproductive here (the problem is too little session, not too
+        # much). Reason stays PARSE_FAILED — its short transient TTL lets the
+        # fetch heal fast once the session is restored.
+        if _find(objects, "WebSite") is not None:
+            raise AdapterParseError(
+                "product page: Shopee served a logged-out/degraded shell (only "
+                "site-level WebSite JSON-LD, no Product) — the browser profile's "
+                "Shopee session likely expired; re-login to restore it"
+            )
         raise AdapterParseError(
             "product page: no schema.org Product JSON-LD found — site structure "
             "may have changed or the page was walled"

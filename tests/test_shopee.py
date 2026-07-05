@@ -120,6 +120,20 @@ def test_parse_product_raises_without_jsonld() -> None:
         S._parse_product("<html><body>no jsonld</body></html>", PRODUCT_URL)
 
 
+def test_parse_product_logged_out_shell_message() -> None:
+    # Shopee's logged-out shell carries only a site-level `WebSite` JSON-LD (no
+    # Product): the message must name the expired session, not "markup changed".
+    with pytest.raises(AdapterParseError, match="session likely expired"):
+        S._parse_product(_fx("logged_out_shell.html"), PRODUCT_URL)
+
+
+def test_parse_product_no_website_keeps_generic_message() -> None:
+    # A page with neither Product nor WebSite JSON-LD is real scraper-rot / wall
+    # — keep the generic message, don't misattribute it to a session expiry.
+    with pytest.raises(AdapterParseError, match="site structure"):
+        S._parse_product("<html><body>no jsonld</body></html>", PRODUCT_URL)
+
+
 # --- markdown rendering ----------------------------------------------------
 
 

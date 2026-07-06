@@ -127,6 +127,12 @@
 #     domains: []              # extra known GitLab hosts (gitlab.com built in); skips the probe
 #     autodetect: true         # probe unknown hosts on claimable URLs (falls through on a miss)
 #     max_comments: 20         # cap issue/MR notes (comments) parsed
+#   scholar:                    # scientific articles via open scholarly APIs (doi.org / ScienceDirect PII / pubmed / arxiv)
+#     email: ""                # powers Unpaywall (requires one) + Crossref/OpenAlex polite pools; "" = skip Unpaywall (OA falls back to OpenAlex)
+#     elsevier_api_key: ""     # optional opt-in: Elsevier PII fallback + entitled full text
+#     s2_api_key: ""           # optional opt-in: Semantic Scholar higher rate limits
+#     fetch_full_text: true    # auto-download the best open-access PDF into the envelope markdown
+#     max_authors: 30          # cap the author list on a paper
 #   youtube:                    # video transcripts + channel/playlist/search video listings
 #     cookies_from_browser: "" # "" = off | firefox | chrome | brave | ...
 #     remote_components: ""    # "" = off (opt-in) | "ejs:github" enables yt-dlp's JS

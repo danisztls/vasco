@@ -50,6 +50,7 @@ from vasco.adapters import (
     petlove,
     phabricator,
     realestate,
+    scholar,
     shopee,
     shopify,
     steam,
@@ -411,6 +412,14 @@ async def _dispatch_adapters(
     if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
         envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
         return finalize(envelope, "wikimedia"), False
+
+    # Scholar (scientific articles via open scholarly APIs): a closed, deterministic
+    # host set (doi.org / sciencedirect PII / pubmed / arxiv / europepmc), so no
+    # probe. Owns its own minimal-header httpx client (the metadata APIs are plain
+    # JSON GETs), so it takes no `fetch_html` and never touches the browser pool.
+    if scholar.is_scholar_url(url):
+        envelope = await scholar.fetch_scholar(url, deadline=deadline, cfg=cfg)
+        return finalize(envelope, "scholar"), False
 
     # Content adapters: each parses provider HTML/JSON into its own envelope
     # shape but shares the tier chain + per-route strategy via the injected

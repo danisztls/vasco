@@ -277,6 +277,24 @@ class GitLabCfg:
 
 
 @dataclass(frozen=True)
+class ScholarCfg:
+    """Scholar adapter knobs (scientific articles via open scholarly APIs, no
+    auth). `email` powers Unpaywall (which requires one) and the Crossref/OpenAlex
+    polite pools — leave empty to skip Unpaywall (OA data then falls back to
+    OpenAlex). `elsevier_api_key` / `s2_api_key` are optional opt-ins (Elsevier
+    PII fallback + entitled full text; Semantic Scholar higher rate limits).
+    `fetch_full_text` auto-downloads the best open-access PDF into the envelope
+    markdown when one exists; `max_authors` caps the author list. Like the ITAD
+    key, keys must live in config (not env) to reach vascod."""
+
+    email: str = ""
+    elsevier_api_key: str = ""
+    s2_api_key: str = ""
+    fetch_full_text: bool = True
+    max_authors: int = 30
+
+
+@dataclass(frozen=True)
 class AdaptersCfg:
     """Per-source content-adapter knobs, grouped so site-scraping config stays
     separate from the global infrastructure sections. Each sub-section is the
@@ -293,6 +311,7 @@ class AdaptersCfg:
     steam: SteamCfg = field(default_factory=SteamCfg)
     phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
     gitlab: GitLabCfg = field(default_factory=GitLabCfg)
+    scholar: ScholarCfg = field(default_factory=ScholarCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
 
@@ -366,6 +385,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "steam": SteamCfg,
     "phabricator": PhabricatorCfg,
     "gitlab": GitLabCfg,
+    "scholar": ScholarCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,
 }

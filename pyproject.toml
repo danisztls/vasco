@@ -18,7 +18,7 @@ dependencies = [
     "beautifulsoup4>=4.12",  # CSS-selector parsing for the realestate adapter
     "rank-bm25>=0.2.2",
     "tiktoken>=0.7",
-    "yt-dlp>=2024.10",
+    "yt-dlp>=2026.7.4",
     # yt-dlp needs secretstorage to decrypt Chromium-family (e.g. Brave) cookies
     # via the Secret Service API when youtube.cookies_from_browser is set; Linux-only.
     "secretstorage>=3.3; sys_platform == 'linux'",

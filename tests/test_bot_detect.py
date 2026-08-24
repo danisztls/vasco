@@ -10,9 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from vasco.fetch.bot_detect import classify
 from vasco.errors import FailureReason
-
+from vasco.fetch.bot_detect import classify
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

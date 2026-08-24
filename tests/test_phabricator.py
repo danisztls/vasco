@@ -311,10 +311,9 @@ async def test_fetch_non_ok_empty_body_propagates_reason() -> None:
 
 
 async def test_fetch_timeout() -> None:
-    import asyncio
 
     async def fetch_html(target: str):
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     env = await P.fetch_phabricator(f"{HOST}/T5", fetch_html=fetch_html)
     assert env["failure"]["reason"] == FailureReason.TIMEOUT

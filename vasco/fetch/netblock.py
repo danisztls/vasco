@@ -23,8 +23,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from ..urls import registered_domain
 from ..quality.blocklist import is_blocked, load_blocklist
+from ..urls import registered_domain
 
 # Separate consolidation file from the quality list's "blocklist.txt".
 _NETBLOCK_CONSOLIDATED = "netblock.txt"

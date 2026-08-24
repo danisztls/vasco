@@ -15,7 +15,6 @@ from vasco import extract as extract_mod
 from vasco import fetch as fetch_mod
 from vasco import semantic
 
-
 HAS_SENTENCE_TRANSFORMERS = (
     importlib.util.find_spec("sentence_transformers") is not None
 )
@@ -41,7 +40,7 @@ class _StubModel:
 
         return zlib.adler32(token.encode()) % _StubModel._DIM
 
-    def encode(self, texts: list[str], normalize_embeddings: bool = True) -> Any:  # noqa: ARG002
+    def encode(self, texts: list[str], normalize_embeddings: bool = True) -> Any:
         import numpy as np
 
         out = np.zeros((len(texts), self._DIM), dtype=float)

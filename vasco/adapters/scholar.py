@@ -123,8 +123,7 @@ def _claim(url: str) -> tuple[str, str] | None:
     if parts.scheme not in ("http", "https"):
         return None
     host = (parts.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
     path = parts.path or "/"
     segs = _segments(url)
 
@@ -287,9 +286,7 @@ def _reconstruct_abstract(inverted: Any) -> str | None:
     for word, idxs in inverted.items():
         if not isinstance(idxs, list):
             continue
-        for i in idxs:
-            if isinstance(i, int):
-                positioned.append((i, word))
+        positioned.extend((i, word) for i in idxs if isinstance(i, int))
     if not positioned:
         return None
     positioned.sort(key=lambda t: t[0])
@@ -699,18 +696,18 @@ def _from_europepmc(data: Any) -> dict[str, Any]:
     full_text_urls = []
     ftl = r.get("fullTextUrlList")
     if isinstance(ftl, dict):
-        for u in ftl.get("fullTextUrl") or []:
-            if isinstance(u, dict) and _clean(u.get("url")):
-                full_text_urls.append(
-                    _compact(
-                        {
-                            "url": _clean(u.get("url")),
-                            "style": _clean(u.get("documentStyle")),
-                            "site": _clean(u.get("site")),
-                            "availability": _clean(u.get("availability")),
-                        }
-                    )
-                )
+        full_text_urls.extend(
+            _compact(
+                {
+                    "url": _clean(u.get("url")),
+                    "style": _clean(u.get("documentStyle")),
+                    "site": _clean(u.get("site")),
+                    "availability": _clean(u.get("availability")),
+                }
+            )
+            for u in ftl.get("fullTextUrl") or []
+            if isinstance(u, dict) and _clean(u.get("url"))
+        )
     return _compact(
         {
             "title": _clean(r.get("title")),
@@ -1127,7 +1124,9 @@ async def fetch_scholar(
         targets.insert(2, ("unpaywall", f"{_UNPAYWALL}/{enc}?email={quote(email)}"))
 
     results = await asyncio.gather(*(_safe_get(get, t) for _name, t in targets))
-    by_name = {name: _json_body(res) for (name, _t), res in zip(targets, results)}
+    by_name = {
+        name: _json_body(res) for (name, _t), res in zip(targets, results, strict=True)
+    }
 
     crossref = _from_crossref(by_name.get("crossref"))
     openalex = _from_openalex(by_name.get("openalex"))

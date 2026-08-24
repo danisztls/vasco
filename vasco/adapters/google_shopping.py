@@ -27,11 +27,12 @@ Implementation notes:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import statistics
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
+from urllib.parse import parse_qs, unquote_plus, urlencode, urlsplit, urlunsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
@@ -200,10 +201,8 @@ def _parse_product(label: str) -> dict[str, Any] | None:
     # signals; hoisted to the product group during _group_by_product.
     rating_match = re.search(r"Avaliado com (\d[,.]\d)\s+de\s+5", label)
     if rating_match:
-        try:
+        with contextlib.suppress(ValueError):
             product["product_rating"] = float(rating_match.group(1).replace(",", "."))
-        except ValueError:
-            pass
 
     review_match = re.search(r"([\d.,]+)\s*(mil)?\s*avaliações", label)
     if review_match:

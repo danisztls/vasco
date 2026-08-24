@@ -10,7 +10,6 @@ returns a `_HtmlOutcome` and never builds an envelope (the dispatcher does that)
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,18 +19,27 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
+import contextlib
+
 from vasco import strategy as seed_strategies
 from vasco.adapters import wayback
 from vasco.errors import BrowserServerUnavailable, FailureReason
 from vasco.urls import registered_domain
 
 from . import bot_detect, browser
-from .phases import _HtmlOutcome, _Phases, _convert_html, _convert_text, _ms_since
+from .phases import _convert_html, _convert_text, _HtmlOutcome, _ms_since, _Phases
 from .urlutils import (
     _ACCEPT_ENCODING,
     _HTTP_TIMEOUT_FLOOR,
     _RECOVERABLE_REASONS,
     _SNIFF_BYTES,
+    BROWSER_MAX_BUDGET,
+    BROWSER_MIN_BUDGET,
+    HTTP_MAX_BUDGET,
+    MOBILE_MAX_BUDGET,
+    MOBILE_MIN_BUDGET,
+    WAYBACK_MAX_BUDGET,
+    WAYBACK_MIN_BUDGET,
     _binary_type_skips_body,
     _content_type,
     _is_binary_unsupported,
@@ -41,15 +49,7 @@ from .urlutils import (
     _pandoc_format,
     _route_key,
     _tier_deadline,
-    BROWSER_MAX_BUDGET,
-    BROWSER_MIN_BUDGET,
-    HTTP_MAX_BUDGET,
-    MOBILE_MAX_BUDGET,
-    MOBILE_MIN_BUDGET,
-    WAYBACK_MAX_BUDGET,
-    WAYBACK_MIN_BUDGET,
 )
-
 
 # ---------------------------------------------------------------------------
 # Network seam (module-level so tests can monkeypatch them)
@@ -77,10 +77,8 @@ def _build_request_headers(profile: str, cfg: Any | None) -> dict[str, str]:
         return {"User-Agent": _HONEST_USER_AGENT, "Accept": "*/*"}
     user_agent = _HONEST_USER_AGENT
     if cfg is not None:
-        try:
+        with contextlib.suppress(Exception):
             user_agent = cfg.fetch.user_agent or user_agent
-        except Exception:
-            pass
     return {
         "User-Agent": user_agent,
         "Accept": (
@@ -131,41 +129,43 @@ async def _http_fetch(
     timeout = max(_HTTP_TIMEOUT_FLOOR, remaining)
     headers_out = _build_request_headers(profile, cfg)
     try:
-        async with httpx.AsyncClient(
-            http2=True,
-            follow_redirects=True,
-            timeout=timeout,
-            headers=headers_out,
-        ) as client:
-            async with client.stream("GET", url) as resp:
-                hdrs = {str(k): str(v) for k, v in resp.headers.items()}
-                hdrs.setdefault("_url_final", str(resp.url))
-                status = int(resp.status_code)
-                ct = _content_type(hdrs, "")
+        async with (
+            httpx.AsyncClient(
+                http2=True,
+                follow_redirects=True,
+                timeout=timeout,
+                headers=headers_out,
+            ) as client,
+            client.stream("GET", url) as resp,
+        ):
+            hdrs = {str(k): str(v) for k, v in resp.headers.items()}
+            hdrs.setdefault("_url_final", str(resp.url))
+            status = int(resp.status_code)
+            ct = _content_type(hdrs, "")
 
-                # Definite binary from the header: don't download the body at all.
-                if _binary_type_skips_body(ct):
-                    return "", status, hdrs
+            # Definite binary from the header: don't download the body at all.
+            if _binary_type_skips_body(ct):
+                return "", status, hdrs
 
-                # Ambiguous octet-stream: sniff a small prefix, then either stop
-                # (binary) or read the rest (mislabeled text).
-                if ct == "application/octet-stream":
-                    buf = bytearray()
-                    async for chunk in resp.aiter_bytes():
-                        buf += chunk
-                        if len(buf) >= _SNIFF_BYTES:
-                            break
-                    sniff = bytes(buf).decode("utf-8", "replace")
-                    if _looks_binary(sniff):
-                        return sniff, status, hdrs
-                    async for chunk in resp.aiter_bytes():
-                        buf += chunk
-                    return bytes(buf).decode("utf-8", "replace"), status, hdrs
+            # Ambiguous octet-stream: sniff a small prefix, then either stop
+            # (binary) or read the rest (mislabeled text).
+            if ct == "application/octet-stream":
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    buf += chunk
+                    if len(buf) >= _SNIFF_BYTES:
+                        break
+                sniff = bytes(buf).decode("utf-8", "replace")
+                if _looks_binary(sniff):
+                    return sniff, status, hdrs
+                async for chunk in resp.aiter_bytes():
+                    buf += chunk
+                return bytes(buf).decode("utf-8", "replace"), status, hdrs
 
-                # Text-ish: read the full body and decode via httpx's charset.
-                await resp.aread()
-                return resp.text, status, hdrs
-    except asyncio.TimeoutError:
+            # Text-ish: read the full body and decode via httpx's charset.
+            await resp.aread()
+            return resp.text, status, hdrs
+    except TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
     except Exception as exc:
         name = type(exc).__name__.lower()
@@ -222,7 +222,7 @@ async def _browser_fetch(
         return await pool.fetch(
             url, deadline_monotonic=deadline_monotonic, mobile=mobile
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "", 0, {"_failure_hint": "timeout"}
     except BrowserServerUnavailable:
         # The browser tier is a separate peer service that isn't running. Don't
@@ -322,10 +322,8 @@ async def _run_browser_tier(
     phases.attempts += 1
     reason = bot_detect.classify(status, html, headers)
     if bump and not mobile and cache is not None and hasattr(cache, "bump"):
-        try:
+        with contextlib.suppress(Exception):
             cache.bump(route, mode="browser", success=(reason == FailureReason.OK))
-        except Exception:
-            pass
     return html, status, headers, reason
 
 
@@ -508,10 +506,8 @@ async def _do_fetch_html(
                     FailureReason.OK,
                 )
                 if cache is not None and hasattr(cache, "set_header_profile"):
-                    try:
+                    with contextlib.suppress(Exception):
                         cache.set_header_profile(route, "honest")
-                    except Exception:
-                        pass
 
         if reason == FailureReason.OK:
             # Content-sufficiency check: a 200 that converts to zero words is an
@@ -563,10 +559,8 @@ async def _do_fetch_html(
                     )
             if not escalate_empty:
                 if cache is not None and hasattr(cache, "bump"):
-                    try:
+                    with contextlib.suppress(Exception):
                         cache.bump(route, mode="http", success=True)
-                    except Exception:
-                        pass
                 return _HtmlOutcome(
                     html,
                     status,
@@ -585,10 +579,8 @@ async def _do_fetch_html(
         if mode == "http" and reason != FailureReason.OK:
             # Caller-explicit http: terminal.
             if cache is not None and hasattr(cache, "bump"):
-                try:
+                with contextlib.suppress(Exception):
                     cache.bump(route, mode="http", success=False)
-                except Exception:
-                    pass
             return _HtmlOutcome(html, status, headers, reason, "http", browser_started)
 
         # The server gave a definitive "this URL doesn't exist" answer; no
@@ -601,10 +593,8 @@ async def _do_fetch_html(
             and (deadline_monotonic - time.monotonic()) < BROWSER_MIN_BUDGET
         ):
             if cache is not None and hasattr(cache, "bump"):
-                try:
+                with contextlib.suppress(Exception):
                     cache.bump(route, mode="http", success=False)
-                except Exception:
-                    pass
             return _HtmlOutcome(
                 html,
                 status,

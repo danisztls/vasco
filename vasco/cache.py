@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -91,18 +92,13 @@ def _default_cache_path() -> Path:
 
 class Cache:
     def __init__(self, path: str | None = None) -> None:
-        if path is None:
-            db_path = _default_cache_path()
-        else:
-            db_path = Path(path)
+        db_path = _default_cache_path() if path is None else Path(path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = db_path
         self._conn = sqlite3.connect(str(db_path), timeout=5.0)
         self._conn.row_factory = sqlite3.Row
-        try:
+        with contextlib.suppress(sqlite3.DatabaseError):
             self._conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:
-            pass
         self._conn.executescript(_SCHEMA)
         self._ensure_columns()
         self._conn.commit()
@@ -394,7 +390,5 @@ class Cache:
             }
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(sqlite3.Error):
             self._conn.close()
-        except sqlite3.Error:
-            pass

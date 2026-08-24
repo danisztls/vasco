@@ -6,14 +6,14 @@ import asyncio
 import subprocess
 from pathlib import Path
 from typing import Any
+
 import pytest
 
-from vasco.fetch import browser as browser_mod
-from vasco.fetch import core as core_mod
 from vasco import fetch as fetch_mod
 from vasco.cache import Cache
 from vasco.converters import pandoc
-
+from vasco.fetch import browser as browser_mod
+from vasco.fetch import core as core_mod
 
 # ---------------------------------------------------------------------------
 # Unit tests for pandoc.pandoc_to_markdown
@@ -51,7 +51,7 @@ def test_pandoc_nonzero_exit_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/pandoc")
     monkeypatch.setattr("subprocess.run", fake_run)
 
-    text, meta = pandoc.pandoc_to_markdown(b"body", fmt="epub")
+    _text, meta = pandoc.pandoc_to_markdown(b"body", fmt="epub")
     assert "pandoc_nonzero_exit" in meta["warnings"]
     assert "short_content" in meta["warnings"]
 

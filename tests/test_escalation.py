@@ -15,9 +15,8 @@ from typing import Any
 import pytest
 
 from vasco import fetch as fetch_mod
-from vasco.fetch import core as core_mod
 from vasco.errors import FailureReason
-
+from vasco.fetch import core as core_mod
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -30,7 +29,7 @@ CLEAN_HTML = ""  # filled below by a fixture-loader at module import
 CF_HTML = ""
 
 
-def setup_module(module: Any) -> None:  # noqa: ARG001
+def setup_module(module: Any) -> None:
     global CLEAN_HTML, CF_HTML
     CLEAN_HTML = _load("article_clean.html")
     CF_HTML = _load("cloudflare_challenge.html")
@@ -58,7 +57,7 @@ class FakeCache:
         from urllib.parse import urlparse
 
         host = (urlparse(url).hostname or "").lower()
-        return host[4:] if host.startswith("www.") else host
+        return host.removeprefix("www.")
 
     def get(self, url: str) -> dict | None:
         return self.store.get(url)

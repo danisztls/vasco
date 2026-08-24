@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -23,7 +23,7 @@ def _cfg(**kw: Any) -> Config:
 class _FakeClient:
     """Captures the prompts passed to .complete and returns a canned answer."""
 
-    last: dict[str, Any] = {}
+    last: ClassVar[dict[str, Any]] = {}
 
     def __init__(self, **kw: Any) -> None:
         _FakeClient.last["init"] = kw
@@ -39,7 +39,7 @@ class _FakeClient:
 class _FakeCliClient:
     """Stand-in for ClaudeCliClient with the same .complete surface."""
 
-    last: dict[str, Any] = {}
+    last: ClassVar[dict[str, Any]] = {}
 
     def __init__(self, **kw: Any) -> None:
         _FakeCliClient.last["init"] = kw
@@ -78,7 +78,7 @@ async def test_generic_summary_uses_generic_prompt(
     monkeypatch.setattr(_sum, "DeepSeekClient", _FakeClient)
     out = await _sum.summarize("page body", question=None, cfg=_cfg())
     assert out == "THE ANSWER"
-    assert _sum._GENERIC_SYSTEM == _FakeClient.last["system"]
+    assert _FakeClient.last["system"] == _sum._GENERIC_SYSTEM
     assert "page body" in _FakeClient.last["user"]
 
 
@@ -88,7 +88,7 @@ async def test_question_uses_question_prompt(
     monkeypatch.setattr(_sum, "DeepSeekClient", _FakeClient)
     out = await _sum.summarize("page body", question="what is the price?", cfg=_cfg())
     assert out == "THE ANSWER"
-    assert _sum._QUESTION_SYSTEM == _FakeClient.last["system"]
+    assert _FakeClient.last["system"] == _sum._QUESTION_SYSTEM
     assert "what is the price?" in _FakeClient.last["user"]
 
 
@@ -181,7 +181,7 @@ async def test_claude_cli_provider_needs_no_api_key(
     cfg = _chain(ProviderCfg(provider="claude_cli", model="opus"))
     out = await _sum.summarize("page body", question="q?", cfg=cfg)
     assert out == "CLI ANSWER"
-    assert _sum._QUESTION_SYSTEM == _FakeCliClient.last["system"]
+    assert _FakeCliClient.last["system"] == _sum._QUESTION_SYSTEM
     assert "page body" in _FakeCliClient.last["user"]
 
 

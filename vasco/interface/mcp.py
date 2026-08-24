@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from time import monotonic as _monotonic
@@ -73,10 +73,8 @@ async def _lifespan(_server: MCPServer):  # type: ignore[no-untyped-def]
         yield {"cfg": _cfg, "cache": _cache}
     finally:
         log.info("vasco MCP server stopping")
-        try:
+        with suppress(Exception):
             await _browser.get_browser(_cfg).close()
-        except Exception:
-            pass
         if _cache is not None:
             _cache.close()
         _cache = None
@@ -263,18 +261,18 @@ async def fetch_many(
     metadata_only: bool = True,
 ) -> list[dict[str, Any]]:
     async def _local() -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        async for env in _fetch.fetch_many(
-            urls,
-            workers=workers,
-            mode=mode,
-            deadline=deadline,
-            refresh=refresh,
-            cache=_cache,
-            cfg=_cfg,
-        ):
-            out.append(_strip_markdown(env) if metadata_only else env)
-        return out
+        return [
+            _strip_markdown(env) if metadata_only else env
+            async for env in _fetch.fetch_many(
+                urls,
+                workers=workers,
+                mode=mode,
+                deadline=deadline,
+                refresh=refresh,
+                cache=_cache,
+                cfg=_cfg,
+            )
+        ]
 
     results = await _service_client.request_or(
         _proto.OP_FETCH_MANY,

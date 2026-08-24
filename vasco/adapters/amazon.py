@@ -51,11 +51,23 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     as_int as _as_int,
+)
+from ._common import (
     brl_to_num as _brl_to_num,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     fmt_price_brl as _fmt_price,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     soup as _soup,
 )
 
@@ -329,10 +341,13 @@ def _brand(soup: BeautifulSoup) -> str | None:
         return None
     txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()
     txt = re.sub(
-        r"^(marca:|brand:|visite a loja\s*|visit the\s*|loja:)\s*", "", txt, flags=re.I
+        r"^(marca:|brand:|visite a loja\s*|visit the\s*|loja:)\s*",
+        "",
+        txt,
+        flags=re.IGNORECASE,
     ).strip()
     # "Marca X Loja" trailing "Loja"/"Store" suffix that some bylines append.
-    txt = re.sub(r"\s+(loja|store)$", "", txt, flags=re.I).strip()
+    txt = re.sub(r"\s+(loja|store)$", "", txt, flags=re.IGNORECASE).strip()
     return txt or None
 
 
@@ -412,8 +427,9 @@ def _gallery(soup: BeautifulSoup, landing: str | None) -> list[str]:
     urls: list[str] = []
     if landing:
         urls.append(landing)
-    for img in soup.select("#altImages img, #imageBlock img"):
-        urls.append(img.get("src") or "")
+    urls.extend(
+        img.get("src") or "" for img in soup.select("#altImages img, #imageBlock img")
+    )
     out: list[str] = []
     seen: set[str] = set()
     for u in urls:
@@ -559,8 +575,7 @@ def _render_markdown(
         extras.append(p["availability"])
     if extras:
         parts.append(" · ".join(extras))
-    for feat in p.get("features", []):
-        parts.append(f"- {feat}")
+    parts.extend(f"- {feat}" for feat in p.get("features", []))
     specs = p.get("specs") or {}
     if specs:
         parts.append("")

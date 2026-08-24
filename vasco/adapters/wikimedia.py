@@ -22,8 +22,8 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .. import envelope
-from ..urls import WIKIMEDIA_PROJECTS
 from ..errors import FailureReason
+from ..urls import WIKIMEDIA_PROJECTS
 from . import _common
 
 log = logging.getLogger(__name__)

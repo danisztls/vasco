@@ -51,7 +51,7 @@ def test_fetch_serves_from_disk_when_fresh(monkeypatch: pytest.MonkeyPatch, tmp_
     (tmp_path / "example.com.txt").write_text(cached)
 
     mock = _patch_httpx(monkeypatch, _FakeResponse(text="# Network version"))
-    content, url = _map._fetch_llmstxt("https://example.com/page")
+    content, _url = _map._fetch_llmstxt("https://example.com/page")
     assert content == cached
     mock.assert_not_called()
 
@@ -91,7 +91,7 @@ def test_fetch_network_error_returns_none(
         "vasco.map.httpx.get", MagicMock(side_effect=httpx.ConnectTimeout("timeout"))
     )
 
-    content, url = _map._fetch_llmstxt("https://example.com/")
+    content, _url = _map._fetch_llmstxt("https://example.com/")
     assert content is None
     assert "timeout" in capsys.readouterr().err
 
@@ -103,7 +103,7 @@ def test_fetch_oversized_returns_none(
     big_content = "x" * (512 * 1024 + 1)
     _patch_httpx(monkeypatch, _FakeResponse(text=big_content))
 
-    content, url = _map._fetch_llmstxt("https://example.com/")
+    content, _url = _map._fetch_llmstxt("https://example.com/")
     assert content is None
     assert "too large" in capsys.readouterr().err
 
@@ -114,7 +114,7 @@ def test_fetch_empty_body_returns_none(
     monkeypatch.setattr(_map, "_llmstxt_dir", lambda: tmp_path)
     _patch_httpx(monkeypatch, _FakeResponse(text="   \n  "))
 
-    content, url = _map._fetch_llmstxt("https://example.com/")
+    content, _url = _map._fetch_llmstxt("https://example.com/")
     assert content is None
     assert "empty" in capsys.readouterr().err
 

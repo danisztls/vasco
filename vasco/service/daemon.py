@@ -18,6 +18,7 @@ size-capped in ``protocol.read_msg``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -165,10 +166,8 @@ async def _handle_client(
             await protocol.write_msg(writer, resp)
     finally:
         writer.close()
-        try:
+        with contextlib.suppress(Exception):
             await writer.wait_closed()
-        except Exception:
-            pass
 
 
 async def run_daemon(
@@ -200,10 +199,8 @@ async def run_daemon(
     except asyncio.CancelledError:
         pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             cache.close()
-        except Exception:
-            pass
         if sock_path.exists():
             sock_path.unlink()
         log.info("vascod stopped")

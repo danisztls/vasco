@@ -10,12 +10,12 @@ maps this to UNSUPPORTED_CONTENT_TYPE, same contract as pdf.py.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
 import tempfile
 from typing import Any
-
 
 _PANDOC = "pandoc"
 
@@ -61,10 +61,8 @@ def pandoc_to_markdown(body: bytes, *, fmt: str) -> tuple[str, dict[str, Any]]:
         if proc.returncode != 0:
             warnings.append("pandoc_nonzero_exit")
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
 
     word_count = len(text.split()) if text else 0
     if len(text.strip()) < 200:

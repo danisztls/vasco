@@ -87,9 +87,10 @@ def seed_strategy(route_key: str) -> str | None:
         return None
     best: tuple[int, str] | None = None
     for key, tier in SEED_STRATEGIES.items():
-        if route_key == key or route_key.startswith(key + "/"):
-            if best is None or len(key) > best[0]:
-                best = (len(key), tier)
+        if route_key != key and not route_key.startswith(key + "/"):
+            continue
+        if best is None or len(key) > best[0]:
+            best = (len(key), tier)
     return best[1] if best else None
 
 

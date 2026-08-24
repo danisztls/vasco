@@ -51,15 +51,35 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     as_float as _as_float,
+)
+from ._common import (
     as_int as _as_int,
+)
+from ._common import (
     brand_name as _brand_name,
+)
+from ._common import (
     brl_to_num as _brl_to_num,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     dedup as _dedup,
+)
+from ._common import (
     fmt_price_brl as _fmt_price,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     jsonld_objects as _jsonld_objects,
+)
+from ._common import (
     soup as _soup,
 )
 
@@ -242,7 +262,7 @@ def _parse_search(html: str) -> tuple[list[dict[str, Any]], int | None]:
         raw = standalone
 
     out: list[dict[str, Any]] = []
-    for i, item in enumerate(raw, 1):
+    for _i, item in enumerate(raw, 1):
         parsed = _search_product(item, len(out) + 1)
         if parsed is not None:
             out.append(parsed)
@@ -524,7 +544,7 @@ def _render_search(products: list[dict[str, Any]], *, currency: str) -> str:
 def _render_review(r: dict[str, Any]) -> str:
     """One review as a Markdown bullet: ``- ★★★★ Author — "Title": text``."""
     rating = r.get("rating")
-    stars = "★" * int(round(rating)) if isinstance(rating, (int, float)) else ""
+    stars = "★" * round(rating) if isinstance(rating, (int, float)) else ""
     head = " ".join(x for x in (stars, r.get("author") or "Anônimo") if x)
     line = f"- **{head}**"
     if r.get("title"):

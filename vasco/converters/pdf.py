@@ -18,7 +18,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-
 _PDFTOTEXT = "pdftotext"
 _PDFINFO = "pdfinfo"
 _PDFTOPPM = "pdftoppm"
@@ -191,7 +190,7 @@ def pdf_to_text(
         )
 
     warnings: list[str] = []
-    rc, stdout, stderr = _run(
+    rc, stdout, _stderr = _run(
         [_PDFTOTEXT, "-layout", "-enc", "UTF-8", "-", "-"], stdin=pdf_bytes
     )
     text = stdout.decode("utf-8", errors="replace") if stdout else ""

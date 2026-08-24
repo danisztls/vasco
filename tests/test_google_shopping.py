@@ -7,7 +7,6 @@ import pytest
 from vasco.adapters import _common, google_shopping
 from vasco.errors import FailureReason
 
-
 FIXTURE_PATH = (
     pathlib.Path(__file__).parent / "fixtures" / "google_shopping_kindle.html"
 )
@@ -427,10 +426,9 @@ async def test_fetch_google_shopping_rewrites_shopping_search(
 async def test_fetch_google_shopping_rewrite_survives_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import asyncio
 
     async def fake_browser(url, *, deadline_monotonic, cfg):
-        raise asyncio.TimeoutError("simulated")
+        raise TimeoutError("simulated")
 
     monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 
@@ -493,10 +491,9 @@ async def test_fetch_google_shopping_currency_from_cfg(
 async def test_fetch_google_shopping_browser_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import asyncio
 
     async def fake_browser(url, *, deadline_monotonic, cfg):
-        raise asyncio.TimeoutError("simulated")
+        raise TimeoutError("simulated")
 
     monkeypatch.setattr(_common, "browser_fetch_html", fake_browser)
 

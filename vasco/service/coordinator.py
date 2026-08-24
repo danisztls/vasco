@@ -137,9 +137,13 @@ class Coordinator:
         refresh: bool = False,
         raw: bool = False,
     ) -> dict[str, Any]:
-        kw = dict(
-            mode=mode, deadline=deadline, use_cache=use_cache, refresh=refresh, raw=raw
-        )
+        kw = {
+            "mode": mode,
+            "deadline": deadline,
+            "use_cache": use_cache,
+            "refresh": refresh,
+            "raw": raw,
+        }
         if not self._single_flight:
             return await self._run(url, **kw)
 
@@ -170,9 +174,13 @@ class Coordinator:
         refresh: bool,
         raw: bool,
     ) -> dict[str, Any]:
-        kw = dict(
-            mode=mode, deadline=deadline, use_cache=use_cache, refresh=refresh, raw=raw
-        )
+        kw = {
+            "mode": mode,
+            "deadline": deadline,
+            "use_cache": use_cache,
+            "refresh": refresh,
+            "raw": raw,
+        }
         # Pacing only matters for fetches that will hit the network — a cache hit
         # does no I/O, so it skips the queue entirely.
         pace = (self._limiter.enabled or self._concurrency.enabled) and not (

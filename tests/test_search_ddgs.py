@@ -16,7 +16,7 @@ def test_no_results_yields_empty_not_exception(
     from ddgs.exceptions import DDGSException
 
     class _DDGS:
-        def __enter__(self) -> "_DDGS":
+        def __enter__(self) -> _DDGS:
             return self
 
         def __exit__(self, *a: Any) -> None: ...
@@ -33,7 +33,7 @@ def test_other_ddgs_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     from ddgs.exceptions import DDGSException
 
     class _DDGS:
-        def __enter__(self) -> "_DDGS":
+        def __enter__(self) -> _DDGS:
             return self
 
         def __exit__(self, *a: Any) -> None: ...

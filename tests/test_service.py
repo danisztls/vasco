@@ -6,7 +6,7 @@ entry points directly so the tests are hermetic (no real network)."""
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -74,10 +74,8 @@ async def _running(cfg: Config, sock: Path):
         yield
     finally:
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
 
 async def _request(sock: Path, op: str, **params: Any) -> dict:

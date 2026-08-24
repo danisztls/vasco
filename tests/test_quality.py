@@ -7,7 +7,6 @@ from pathlib import Path
 from vasco.quality import blocklist, heuristics, score
 from vasco.quality.heuristics import HeuristicSignals
 
-
 # ── Heuristics ──────────────────────────────────────────────────────
 
 

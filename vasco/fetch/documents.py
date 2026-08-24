@@ -21,11 +21,13 @@ from vasco import io as io_mod
 from vasco.converters import pandoc, pdf
 from vasco.envelope import (
     failure_envelope as _failure_envelope,
+)
+from vasco.envelope import (
     success_envelope as _success_envelope,
 )
 from vasco.errors import FailureReason
 
-from .phases import _Phases, _ms_since
+from .phases import _ms_since, _Phases
 from .urlutils import _HTTP_TIMEOUT_FLOOR
 
 

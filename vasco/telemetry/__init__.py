@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,7 @@ def _resolve_dir(cfg: Any | None) -> Path:
 
 
 def _today_file(cfg: Any | None) -> Path:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     return _resolve_dir(cfg) / f"{today}.jsonl"
 
 
@@ -52,7 +52,7 @@ def log_event(cfg: Any | None, event: dict[str, Any]) -> None:
             pass
 
     record = dict(event)
-    record.setdefault("ts", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    record.setdefault("ts", datetime.now(UTC).isoformat(timespec="seconds"))
 
     try:
         path = _today_file(cfg)

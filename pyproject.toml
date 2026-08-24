@@ -51,6 +51,10 @@ browser = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Pinned so `.git/hooks/pre-commit` (which runs `uv run ruff`) lints against
+    # one known version. Unpinned it fell through to whatever ruff was on PATH,
+    # and 0.16 widening its default rule set from ~40 to 413 rules broke commits.
+    "ruff>=0.16",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -59,3 +63,33 @@ packages = ["vasco"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Explicit rule set: ruff's defaults are a moving target across releases, and
+# this project's lint contract should not change under it.
+select = [
+    "E4", "E7", "E9", "F",  # pycodestyle subset + pyflakes (ruff's old default)
+    "I",                    # import sorting
+    "UP",                   # pyupgrade — this is a py3.12+ project
+    "B",                    # bugbear
+    "SIM",                  # flake8-simplify
+    "C4",                   # comprehensions
+    "PIE",
+    "PERF",
+    "FURB",
+    "RUF",
+]
+ignore = [
+    # Swallowing exceptions is a documented invariant here, not an oversight:
+    # `fetch_one` never raises (failures are envelopes), telemetry writes never
+    # block a tool call, and browser route-interception errors must never kill a
+    # fetch. Flagging ~180 deliberate sites would train us to ignore the linter.
+    "BLE001",  # blind `except Exception`
+    "S110",    # try-except-pass
+    "S112",    # try-except-continue
+    # Deliberate non-ASCII: `×` for dimensions (1280×720), `∪` for set union in
+    # design notes, en-dashes in prose, and pt-BR data in adapter fixtures.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]

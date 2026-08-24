@@ -31,15 +31,10 @@ try:  # pragma: no cover - httpx is an optional dep at import time.
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
-from vasco import io as io_mod, quality as quality_mod
-from vasco.config import QualityCfg
-from vasco.converters import convert
-from vasco.envelope import (
-    base_envelope as _base_envelope,
-    failure_envelope as _failure_envelope,
-    success_envelope as _success_envelope,
-)
-from vasco.errors import FailureReason
+import contextlib
+
+from vasco import io as io_mod
+from vasco import quality as quality_mod
 from vasco.adapters import (
     aliexpress,
     amazon,
@@ -57,6 +52,18 @@ from vasco.adapters import (
     wikimedia,
     youtube,
 )
+from vasco.config import QualityCfg
+from vasco.converters import convert
+from vasco.envelope import (
+    base_envelope as _base_envelope,
+)
+from vasco.envelope import (
+    failure_envelope as _failure_envelope,
+)
+from vasco.envelope import (
+    success_envelope as _success_envelope,
+)
+from vasco.errors import FailureReason
 
 from . import browser
 from .caching import (
@@ -66,8 +73,19 @@ from .caching import (
     _ttl_for,
 )
 from .core import _do_fetch_html
+
+# Re-exported so tests/adapters resolve them as `vasco.fetch.<name>`: the chain's
+# monkeypatch seam lives in `core`, but `_http_fetch` is also called directly in
+# unit tests, and the encoding/budget helpers are read straight off the package.
+from .core import _http_fetch as _http_fetch
 from .documents import _fetch_pandoc_doc, _fetch_pdf
-from .phases import _Phases, _convert_html, _ms_since, _stamp_phases
+from .phases import _convert_html, _ms_since, _Phases, _stamp_phases
+from .urlutils import (
+    _ACCEPT_ENCODING as _ACCEPT_ENCODING,
+)
+from .urlutils import (
+    BROWSER_MIN_BUDGET as BROWSER_MIN_BUDGET,
+)
 from .urlutils import (
     _content_length,
     _content_type,
@@ -76,17 +94,9 @@ from .urlutils import (
     _pandoc_format,
     _parse_retry_after,
 )
-
-# Re-exported so tests/adapters resolve them as `vasco.fetch.<name>`: the chain's
-# monkeypatch seam lives in `core`, but `_http_fetch` is also called directly in
-# unit tests, and the encoding/budget helpers are read straight off the package.
-from .core import _http_fetch as _http_fetch
 from .urlutils import (
-    BROWSER_MIN_BUDGET as BROWSER_MIN_BUDGET,
-    _ACCEPT_ENCODING as _ACCEPT_ENCODING,
     _supported_accept_encoding as _supported_accept_encoding,
 )
-
 
 # ---------------------------------------------------------------------------
 # Adapter fetcher plumbing
@@ -730,10 +740,8 @@ async def fetch_one(
         cfg=cfg,
     )
     if browser_started:
-        try:
+        with contextlib.suppress(Exception):
             await browser.get_browser(cfg).close()
-        except Exception:
-            pass
     return envelope
 
 
@@ -787,7 +795,5 @@ async def fetch_many(
             if not t.done():
                 t.cancel()
         if any_browser:
-            try:
+            with contextlib.suppress(Exception):
                 await browser.get_browser(cfg).close()
-            except Exception:
-                pass

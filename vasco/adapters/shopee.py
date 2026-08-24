@@ -48,12 +48,26 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     brand_name as _brand_name,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     condition as _condition,
+)
+from ._common import (
     fmt_price_brl as _fmt_price,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     jsonld_objects as _jsonld_objects,
+)
+from ._common import (
     rating as _rating,
 )
 
@@ -204,7 +218,7 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     offers = item.get("offers") if isinstance(item.get("offers"), dict) else {}
     rating, review_count = _rating(item)
     ids = _product_ids(url)
-    shop_id, item_id = ids if ids else (None, None)
+    shop_id, item_id = ids or (None, None)
     image = item.get("image") if isinstance(item.get("image"), str) else None
 
     product = _compact(

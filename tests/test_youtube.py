@@ -5,7 +5,6 @@ import pytest
 from vasco.adapters import youtube
 from vasco.errors import FailureReason
 
-
 # ---------------------------------------------------------------------------
 # URL detection + ID parsing
 # ---------------------------------------------------------------------------

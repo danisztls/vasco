@@ -200,7 +200,10 @@ def test_detail_falls_back_to_jsonld_without_initial_data() -> None:
     """When the initial-data blob is absent, the schema.org JSON-LD carries
     enough (title, price, images) for a thin listing."""
     html = re.sub(
-        r'<script id="initial-data".*?</script>', "", _fx("car_detail.html"), flags=re.S
+        r'<script id="initial-data".*?</script>',
+        "",
+        _fx("car_detail.html"),
+        flags=re.DOTALL,
     )
     assert O._extract_detail_ad(html) is None
     ln = O._jsonld_detail(html, "https://sp.olx.com.br/x-1483248894", "vehicles")

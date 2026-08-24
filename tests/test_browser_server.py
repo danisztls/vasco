@@ -573,10 +573,10 @@ def test_looks_challenged_detects_cf_and_passes_real_content() -> None:
 class _CFFrame:
     """frame_locator(...).locator(...) stand-in whose click clears the page."""
 
-    def __init__(self, page: "_CFChallengePage") -> None:
+    def __init__(self, page: _CFChallengePage) -> None:
         self._page = page
 
-    def locator(self, _sel: str) -> "_CFFrame":
+    def locator(self, _sel: str) -> _CFFrame:
         return self
 
     async def click(self, timeout: int | None = None) -> None:
@@ -736,7 +736,7 @@ async def test_fetch_page_solves_challenge_when_enabled() -> None:
 
 async def test_fetch_page_skips_solve_when_disabled() -> None:
     page = _CFFetchPage(status=200)
-    html, status, _ = await bs.fetch_page(
+    html, _status, _ = await bs.fetch_page(
         _CFBrowser(page),
         "https://poder360.com.br",
         deadline_monotonic=time.monotonic() + 5,

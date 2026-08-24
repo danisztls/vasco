@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from vasco.telemetry import logstats
 from vasco.config import Config, LoggingCfg
+from vasco.telemetry import logstats
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _yesterday() -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    return (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -101,7 +101,7 @@ def test_summarize_filters_by_day_window(tmp_path: Path) -> None:
         log_dir / f"{_yesterday()}.jsonl",
         [{"tool": "search", "outcome": "ok"}],
     )
-    older = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+    older = (datetime.now(UTC) - timedelta(days=10)).strftime("%Y-%m-%d")
     _write_jsonl(
         log_dir / f"{older}.jsonl",
         [{"tool": "map", "outcome": "ok"}],

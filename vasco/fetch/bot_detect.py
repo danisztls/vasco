@@ -260,9 +260,10 @@ def classify(
         # monitoring JS (challenge-platform, cf_chl_opt) also appears on
         # legitimate pages. Only classify as blocked if the page is thin —
         # real challenge pages are <20KB with minimal visible text.
-        if _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc:
-            if visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
-                return FailureReason.BLOCKED_CLOUDFLARE
+        if (
+            _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc
+        ) and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
+            return FailureReason.BLOCKED_CLOUDFLARE
 
         # A captcha *challenge* page is thin — its body IS the widget. A
         # content-rich page that merely EMBEDS a captcha (a login/comment form's

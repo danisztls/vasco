@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urlparse
-
 
 _FETCH_TOOLS = {"fetch", "fetch_many"}
 
@@ -49,7 +49,7 @@ def _log_dir(cfg: Any | None) -> Path:
 def _files_for_window(directory: Path, days: int) -> list[Path]:
     if not directory.is_dir():
         return []
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     wanted = {(today - timedelta(days=offset)).isoformat() for offset in range(days)}
     return sorted(p for p in directory.glob("*.jsonl") if p.stem in wanted)
 
@@ -78,7 +78,7 @@ def _percentiles(values: list[int], ps: tuple[float, ...]) -> dict[str, int]:
     out: dict[str, int] = {}
     for p in ps:
         # Nearest-rank percentile — sufficient at our scale; avoids numpy.
-        idx = max(0, min(n - 1, int(round(p * (n - 1)))))
+        idx = max(0, min(n - 1, round(p * (n - 1))))
         out[f"p{int(p * 100)}"] = int(ordered[idx])
     return out
 
@@ -247,7 +247,7 @@ def summarize(cfg: Any | None, *, days: int = 1) -> dict[str, Any]:
             "fell_back": int(entry["fell_back"]),
         }
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     since = (today - timedelta(days=days - 1)).isoformat()
 
     return {

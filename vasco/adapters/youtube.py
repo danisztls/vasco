@@ -29,8 +29,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from .. import envelope
-from ..urls import YT_VIDEO_ID_RE
 from ..errors import FailureReason
+from ..urls import YT_VIDEO_ID_RE
 from . import _common
 
 log = logging.getLogger(__name__)
@@ -528,7 +528,7 @@ async def _fetch_video(
         info = await asyncio.wait_for(
             asyncio.to_thread(_extract_info, url, cfg), timeout=remaining
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "yt-dlp metadata timeout")
     except Exception as exc:
         return _ytdlp_failure(url, exc)
@@ -565,7 +565,7 @@ async def _fetch_video(
             ),
             timeout=remaining,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "caption download timeout")
     except Exception as exc:
         return _ytdlp_failure(url, exc, prefix="caption download failed")
@@ -691,7 +691,7 @@ async def _fetch_collection(
         info = await asyncio.wait_for(
             asyncio.to_thread(_extract_flat_info, target, cfg, limit), timeout=remaining
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "yt-dlp listing timeout")
     except Exception as exc:
         return _ytdlp_failure(url, exc)

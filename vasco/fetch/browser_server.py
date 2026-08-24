@@ -15,6 +15,7 @@ Error:    {"error": "message"}
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -26,8 +27,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..urls import registered_domain
 from ..errors import FailureReason
+from ..urls import registered_domain
 from . import bot_detect
 from .netblock import load_netblock, should_block
 
@@ -354,10 +355,8 @@ async def _install_route(
                 return
             await route.continue_()
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 await route.continue_()
-            except Exception:
-                pass
 
     await page.route("**/*", _route)
 
@@ -370,10 +369,8 @@ async def _enable_images_for_solve(
     `block_images`'s route-handler design — engine-level blocking couldn't be
     undone at runtime. Best-effort; never raises (a failed reload just leaves the
     image-less page for the human, no worse than before)."""
-    try:
+    with contextlib.suppress(Exception):
         await page.unroute("**/*")
-    except Exception:
-        pass
     try:
         # Generous floor: this is the human-solve path (budget-suspended), and a
         # near-exhausted caller deadline shouldn't starve the reload.
@@ -559,10 +556,8 @@ async def _maybe_recover_login_wall(
             _remaining_ms(deadline_monotonic), int(_NETWORKIDLE_SETTLE_CAP * 1000)
         )
         if settle_ms > 0:
-            try:
+            with contextlib.suppress(Exception):
                 await page.wait_for_load_state("networkidle", timeout=settle_ms)
-            except Exception:
-                pass
         new_html = await page.content()
         new_status = int(response.status) if response is not None else status
         new_headers = await _extract_headers(response)
@@ -621,7 +616,7 @@ async def fetch_page(
             await _install_route(page, url, netblock, block_images)
         remaining_ms = int(max(0.0, deadline_monotonic - time.monotonic()) * 1000)
         if remaining_ms <= 0:
-            raise asyncio.TimeoutError("deadline elapsed before page.goto could start")
+            raise TimeoutError("deadline elapsed before page.goto could start")
         response = await page.goto(
             url, wait_until="domcontentloaded", timeout=remaining_ms
         )
@@ -636,10 +631,8 @@ async def fetch_page(
             # the settle times out — so a non-settling page returns its
             # domcontentloaded HTML at the cap instead of at the tier deadline.
             settle_ms = min(remaining_ms, int(_NETWORKIDLE_SETTLE_CAP * 1000))
-            try:
+            with contextlib.suppress(Exception):
                 await page.wait_for_load_state("networkidle", timeout=settle_ms)
-            except Exception:
-                pass
 
         html = await page.content()
         status = int(response.status) if response is not None else 0
@@ -677,15 +670,11 @@ async def fetch_page(
                 html, status, headers = recovered
         return html, status, headers
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await page.close()
-        except Exception:
-            pass
         if context is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await context.close()
-            except Exception:
-                pass
 
 
 async def _fetch_page(
@@ -988,10 +977,8 @@ def _kill_browser_processes() -> None:
         queue.extend(children.get(pid, []))
 
     for pid in descendants:
-        try:
+        with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
     if descendants:
         log.warning("force-killed %d wedged browser process(es)", len(descendants))
 
@@ -1145,10 +1132,8 @@ class _BrowserSupervisor:
                 await page.goto("about:blank", timeout=int(_PROBE_TIMEOUT * 1000))
                 return True
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     await page.close()
-                except Exception:
-                    pass
 
         try:
             # Outer guard slightly larger than the goto timeout, in case the
@@ -1282,10 +1267,8 @@ async def run_server(cfg: Any | None = None) -> None:
         if managed:
             for proc in managed:
                 if proc is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         proc.terminate()
-                    except Exception:
-                        pass
         if sock.exists():
             sock.unlink()
         log.info("browser server stopped")

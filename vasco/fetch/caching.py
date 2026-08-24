@@ -8,14 +8,14 @@ onto adapter-built envelopes before persisting them.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
 from vasco.envelope import now_epoch as _now_epoch
 from vasco.errors import FailureReason
 
-from .phases import _Phases, _ms_since
-
+from .phases import _ms_since, _Phases
 
 # Negative-cache TTL multipliers, keyed by failure reason. Some failures
 # (NOT_FOUND, ROBOTS_DISALLOW, INVALID_URL) won't change for a long time and
@@ -102,10 +102,8 @@ def _cache_put(
 ) -> None:
     """Time and execute a cache write. Failures are swallowed (best-effort)."""
     t0 = time.monotonic()
-    try:
+    with contextlib.suppress(Exception):
         cache.put(envelope, ttl_seconds=ttl_seconds)
-    except Exception:
-        pass
     phases.cache_write_ms += _ms_since(t0)
 
 

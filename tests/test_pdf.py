@@ -16,7 +16,6 @@ import pytest
 from vasco.converters import pdf
 from vasco.converters.pdf import OcrOptions
 
-
 # ---------------------------------------------------------------------------
 # Stub helpers
 # ---------------------------------------------------------------------------
@@ -187,7 +186,7 @@ def test_deadline_already_passed_truncates(monkeypatch: pytest.MonkeyPatch) -> N
         "subprocess.run", _run_factory(pdftotext_out=b"", pages=3, calls=calls)
     )
 
-    text, meta = pdf.pdf_to_text(
+    _text, meta = pdf.pdf_to_text(
         b"%PDF", ocr=OcrOptions(), deadline_monotonic=time.monotonic() - 1
     )
     assert "ocr_truncated" in meta["warnings"]

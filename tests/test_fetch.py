@@ -29,7 +29,7 @@ async def test_http_fetch_sends_browser_shaped_headers(
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.update({k: v for k, v in request.headers.items()})
+        seen.update(dict(request.headers.items()))
         return httpx.Response(200, text="ok")
 
     transport = httpx.MockTransport(handler)
@@ -93,7 +93,7 @@ async def test_http_fetch_user_agent_from_cfg(monkeypatch: pytest.MonkeyPatch) -
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.update({k: v for k, v in request.headers.items()})
+        seen.update(dict(request.headers.items()))
         return httpx.Response(200, text="ok")
 
     transport = httpx.MockTransport(handler)
@@ -106,7 +106,7 @@ async def test_http_fetch_user_agent_from_cfg(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(fetch_mod.httpx, "AsyncClient", patched_client)
 
     class _Cfg:
-        class fetch:  # noqa: N801 — matches dataclass attribute name
+        class fetch:
             user_agent = "MyCustomUA/9.9"
 
     deadline = time.monotonic() + 5.0

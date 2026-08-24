@@ -469,7 +469,7 @@ def load_config() -> Config:
             data = loaded
 
     sections: dict[str, Any] = {}
-    for name, _ in _SECTIONS.items():
+    for name in _SECTIONS:
         current = getattr(cfg, name)
         section_data = data.get(name, {})
         if isinstance(section_data, dict) and section_data:

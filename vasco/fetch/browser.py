@@ -105,9 +105,7 @@ class BrowserPool:
         """
         remaining = deadline_monotonic - time.monotonic()
         if remaining <= 0:
-            raise asyncio.TimeoutError(
-                "deadline elapsed before browser fetch could start"
-            )
+            raise TimeoutError("deadline elapsed before browser fetch could start")
 
         await self._ensure_started()
         resp = await _send_request(

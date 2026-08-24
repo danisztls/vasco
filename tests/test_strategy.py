@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from vasco.urls import route_key
 from vasco.strategy import SEED_STRATEGIES, seed_strategy
+from vasco.urls import route_key
 
 
 @pytest.mark.parametrize(

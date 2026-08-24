@@ -167,8 +167,7 @@ def test_template_shows_real_defaults(tmp_path: Path) -> None:
         if not raw.startswith("#"):
             continue  # blank separator lines
         body = raw[1:]
-        if body.startswith(" "):
-            body = body[1:]
+        body = body.removeprefix(" ")
         if not cfg_line.match(body):  # prose, not a config line
             continue
         if not body.startswith(" "):  # a top-level section header

@@ -27,7 +27,7 @@ def _text(con: Console) -> str:
 
 
 class _FakeTTY(io.StringIO):
-    def isatty(self) -> bool:  # noqa: D401 - tiny shim
+    def isatty(self) -> bool:
         return True
 
 

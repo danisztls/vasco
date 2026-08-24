@@ -136,10 +136,10 @@ class ClaudeCliClient:
             out, err = await asyncio.wait_for(
                 proc.communicate(input=user.encode("utf-8")), timeout=deadline
             )
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise TimeoutError(f"claude -p timed out after {deadline}s")
+            raise TimeoutError(f"claude -p timed out after {deadline}s") from None
 
         if proc.returncode != 0:
             detail = (err or b"").decode("utf-8", "replace").strip()[:500]

@@ -42,6 +42,7 @@ parsed object → ``success``. The adapter never raises except :class:`NotGitLab
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -162,10 +163,8 @@ def _set_probe(host: str, value: bool, cache: Any | None) -> None:
     """Record a probe verdict in the memo and the persistent table (best-effort)."""
     _probe_memo[host] = value
     if cache is not None and hasattr(cache, "set_probe"):
-        try:
+        with contextlib.suppress(Exception):
             cache.set_probe(_PROVIDER, host, value)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +668,7 @@ def _resolve_main(
         obj = parser(data)
     except AdapterParseError as exc:
         if probe:  # JSON but not a GitLab object (incl. 404 message) → ambiguous
-            raise NotGitLab()
+            raise NotGitLab() from exc
         if status == 404 or (
             isinstance(data, dict) and isinstance(data.get("message"), str)
         ):
@@ -677,12 +676,12 @@ def _resolve_main(
                 _failure_envelope(
                     url, FailureReason.NOT_FOUND, f"gitlab: {exc}", http_status=status
                 )
-            )
+            ) from exc
         raise _Failure(
             _failure_envelope(
                 url, FailureReason.PARSE_FAILED, f"gitlab: {exc}", http_status=status
             )
-        )
+        ) from exc
 
     if probe:
         _set_probe(host, True, cache)

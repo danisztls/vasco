@@ -55,16 +55,38 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     brand_name as _brand_name,
+)
+from ._common import (
     brl_to_num as _brl_to_num,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     condition as _condition,
+)
+from ._common import (
     dedup as _dedup,
+)
+from ._common import (
     fmt_price_brl as _fmt_price,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     num as _num,
+)
+from ._common import (
     rating as _rating,
+)
+from ._common import (
     soup as _soup,
+)
+from ._common import (
     text as _text,
 )
 
@@ -224,9 +246,7 @@ def _parse_search(html: str) -> list[dict[str, Any]]:
             "may have changed"
         )
     out: list[dict[str, Any]] = []
-    position = 0
-    for item in items:
-        position += 1
+    for position, item in enumerate(items, start=1):
         parsed = _search_product(item, position)
         if parsed is not None:
             out.append(parsed)

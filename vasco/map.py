@@ -132,10 +132,7 @@ def _iter_spider(url: str, *, limit: int) -> Iterator[dict[str, Any]]:
 
     # focused_crawler returns (to_visit, known). Be defensive against shape drift.
     known: Any
-    if isinstance(result, tuple) and len(result) >= 2:
-        known = result[1]
-    else:
-        known = result
+    known = result[1] if isinstance(result, tuple) and len(result) >= 2 else result
 
     if known is None:
         return

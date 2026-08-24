@@ -35,7 +35,6 @@ Public surface mirrors the other adapters:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -46,11 +45,23 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     brl_to_num as _brl_to_num,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     fmt_price_brl as _fmt_price,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     soup as _soup,
+)
+from ._common import (
     text as _text,
 )
 
@@ -527,7 +538,7 @@ async def fetch_aliexpress(
         ) = await _common.fetch_with_fallback(
             url, fetch_html=fetch_html, deadline=deadline, cfg=cfg
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         return _failure_envelope(

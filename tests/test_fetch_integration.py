@@ -12,12 +12,11 @@ from typing import Any
 
 import pytest
 
-from vasco.fetch import browser as browser_mod
-from vasco.fetch import core as core_mod
 from vasco import fetch as fetch_mod
 from vasco.adapters import youtube as youtube_mod
 from vasco.cache import Cache
-
+from vasco.fetch import browser as browser_mod
+from vasco.fetch import core as core_mod
 
 # A year-2100 epoch second — used as fetched_at in faked envelopes so the
 # cache's TTL (current_time + 86400) is always far in the future, making

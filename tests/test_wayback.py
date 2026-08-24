@@ -14,7 +14,6 @@ import pytest
 
 from vasco.adapters import wayback
 
-
 # -----------------------------------------------------------------------------
 # Pure helpers (no I/O)
 # -----------------------------------------------------------------------------
@@ -75,7 +74,7 @@ class _FakeClient:
         self._raises = raises
         self.calls: list[tuple[str, dict]] = []
 
-    async def __aenter__(self) -> "_FakeClient":
+    async def __aenter__(self) -> _FakeClient:
         return self
 
     async def __aexit__(self, *exc_info: Any) -> None:
@@ -216,7 +215,7 @@ def test_find_snapshot_retries_on_transient_failure(
             self.calls: list[tuple[str, dict]] = []
             self._first = True
 
-        async def __aenter__(self) -> "_FlakyClient":
+        async def __aenter__(self) -> _FlakyClient:
             return self
 
         async def __aexit__(self, *a: Any) -> None: ...

@@ -18,12 +18,12 @@ Failure model:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any
 
 from . import protocol
-
-T = TypeVar("T")
 
 _CONNECT_TIMEOUT = 2.0
 # Generous backstop: the server-side per-op deadline (default 30s, full
@@ -47,16 +47,14 @@ class DaemonClient:
     async def available(self) -> bool:
         """True if the daemon socket accepts a connection right now."""
         try:
-            reader, writer = await asyncio.wait_for(
+            _reader, writer = await asyncio.wait_for(
                 asyncio.open_unix_connection(self._sock), _CONNECT_TIMEOUT
             )
-        except (OSError, asyncio.TimeoutError):
+        except (TimeoutError, OSError):
             return False
         writer.close()
-        try:
+        with contextlib.suppress(Exception):
             await writer.wait_closed()
-        except Exception:
-            pass
         return True
 
     async def request(self, op: str, **params: Any) -> Any:
@@ -69,9 +67,9 @@ class DaemonClient:
                 # back to in-process without a latency penalty.
                 raise DaemonUnavailable(str(exc)) from exc
             except (
+                TimeoutError,
                 asyncio.IncompleteReadError,
                 ConnectionResetError,
-                asyncio.TimeoutError,
             ) as exc:
                 # Connection dropped mid-request (e.g. a redeploy) — reconnect once.
                 last_exc = exc
@@ -90,10 +88,8 @@ class DaemonClient:
             resp = await asyncio.wait_for(protocol.read_msg(reader), _READ_TIMEOUT)
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(Exception):
                 await writer.wait_closed()
-            except Exception:
-                pass
         if resp is None:
             raise DaemonUnavailable("oversized or truncated response frame")
         pv = resp.get("protocol_version")
@@ -108,7 +104,7 @@ class DaemonClient:
         return resp.get("result")
 
 
-async def request_or(
+async def request_or[T](
     op: str, params: dict[str, Any], *, local: Callable[[], Awaitable[T]]
 ) -> T:
     """Run ``op`` on vascod if reachable; otherwise await ``local()`` in-process.

@@ -18,13 +18,11 @@ Two import styles, on purpose:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
-
 from urllib.parse import urlsplit
 
 from .. import envelope
@@ -356,7 +354,7 @@ async def acquire_html(
         html_src, status, _headers, reason, mode_used = await fetch_with_fallback(
             url, fetch_html=fetch_html, deadline=deadline, cfg=cfg
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return fail(FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         return fail(

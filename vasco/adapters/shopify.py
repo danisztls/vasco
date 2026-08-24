@@ -38,7 +38,7 @@ probe mode, ``NotShopify``).
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import html as html_mod
 import json
 import logging
@@ -46,11 +46,13 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .. import urls as urls_mod
 from .. import envelope
+from .. import urls as urls_mod
 from ..errors import AdapterParseError, FailureReason
 from . import _common
-from ._common import HtmlFetcher, compact as _compact, host as _host
+from ._common import HtmlFetcher
+from ._common import compact as _compact
+from ._common import host as _host
 
 log = logging.getLogger(__name__)
 
@@ -115,10 +117,8 @@ def _set_probe(domain: str, value: bool, cache: Any | None) -> None:
     ``adapter_probe`` table (best-effort — a cache write failure is swallowed)."""
     _probe_memo[domain] = value
     if cache is not None and hasattr(cache, "set_probe"):
-        try:
+        with contextlib.suppress(Exception):
             cache.set_probe(_PROVIDER, domain, value)
-        except Exception:
-            pass
 
 
 class NotShopify(Exception):
@@ -542,8 +542,8 @@ def _parse(body: str, kind: str, url: str) -> tuple[str, list[dict[str, Any]]]:
     """
     try:
         data = json.loads(body)
-    except (json.JSONDecodeError, TypeError):
-        raise AdapterParseError(f"{kind}: response was not JSON")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AdapterParseError(f"{kind}: response was not JSON") from exc
     origin = _origin(url)
 
     if kind in (_PRODUCT_JS, _PRODUCT_JSON):
@@ -710,13 +710,13 @@ async def fetch_shopify(
     # --- fetch the endpoint -------------------------------------------------
     try:
         body, status, _headers, reason, mode_used = await fetch_html(endpoint)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         if probe:
-            raise NotShopify("shopify probe timed out")
+            raise NotShopify("shopify probe timed out") from None
         return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         if probe:
-            raise NotShopify(f"shopify probe fetch failed: {exc}")
+            raise NotShopify(f"shopify probe fetch failed: {exc}") from exc
         return _failure_envelope(
             url,
             FailureReason.SERVER_ERROR,
@@ -740,14 +740,14 @@ async def fetch_shopify(
             # A 200 that isn't Shopify-shaped is a definitive "not Shopify" →
             # negative-memo (persisted) so we never re-probe this domain.
             _set_probe(dom, False, cache)
-            raise NotShopify(str(exc))
+            raise NotShopify(str(exc)) from exc
         log.warning("shopify parse anchor missing (%s): %s", kind, exc)
         return _failure_envelope(
             url, FailureReason.PARSE_FAILED, f"shopify {exc}", http_status=status
         )
     except Exception as exc:
         if probe:
-            raise NotShopify(f"shopify probe parse error: {exc}")
+            raise NotShopify(f"shopify probe parse error: {exc}") from exc
         log.warning("shopify parse failed (%s): %s", kind, exc)
         return _failure_envelope(
             url,

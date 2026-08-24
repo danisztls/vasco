@@ -51,11 +51,23 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     as_int as _as_int,
+)
+from ._common import (
     brl_int as _brl_int,
+)
+from ._common import (
     dedup as _dedup,
+)
+from ._common import (
     host as _host,
+)
+from ._common import (
     jsonld_objects as _jsonld_objects,
+)
+from ._common import (
     soup as _soup,
 )
 
@@ -150,7 +162,7 @@ _LISTING_FIELDS = (
 
 
 def _listing(**kw: Any) -> dict[str, Any]:
-    out: dict[str, Any] = {k: None for k in _LISTING_FIELDS}
+    out: dict[str, Any] = dict.fromkeys(_LISTING_FIELDS)
     out["images"] = []
     out["attributes"] = {}
     out.update({k: v for k, v in kw.items() if k in _LISTING_FIELDS})

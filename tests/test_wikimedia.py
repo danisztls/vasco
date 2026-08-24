@@ -5,7 +5,6 @@ import pytest
 from vasco.adapters import wikimedia
 from vasco.errors import FailureReason
 
-
 # ---------------------------------------------------------------------------
 # URL detection + article info parsing
 # ---------------------------------------------------------------------------

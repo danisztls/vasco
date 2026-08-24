@@ -44,7 +44,6 @@ is absent and which is *not* an auth wall → :class:`AdapterParseError` →
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -55,7 +54,11 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
+)
+from ._common import (
     compact as _compact,
+)
+from ._common import (
     soup as _soup,
 )
 
@@ -678,7 +681,7 @@ async def fetch_phabricator(
         html, status, _headers, reason, mode_used = await _common.fetch_with_fallback(
             target, fetch_html=fetch_html, deadline=deadline, cfg=cfg
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(url, FailureReason.TIMEOUT, "fetch deadline elapsed")
     except Exception as exc:
         return _failure_envelope(

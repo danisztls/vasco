@@ -34,14 +34,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from .. import envelope
 from ..errors import AdapterParseError, FailureReason
 from . import _common, itad
-from ._common import HtmlFetcher, compact as _compact
+from ._common import HtmlFetcher
+from ._common import compact as _compact
 
 log = logging.getLogger(__name__)
 
@@ -196,8 +197,8 @@ def _parse_app(body: str, app_id: str, url: str) -> dict[str, Any] | None:
     """
     try:
         data = json.loads(body)
-    except (json.JSONDecodeError, TypeError):
-        raise AdapterParseError("appdetails: response was not JSON")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AdapterParseError("appdetails: response was not JSON") from exc
     node = data.get(str(app_id)) if isinstance(data, dict) else None
     if not isinstance(node, dict):
         raise AdapterParseError(
@@ -366,7 +367,7 @@ def _epoch_to_date(value: Any) -> str | None:
     if ts is None or ts <= 0:
         return None
     try:
-        return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+        return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -419,8 +420,8 @@ def _parse_search(body: str) -> list[dict[str, Any]]:
     ``items`` list is a legitimate no-results, returns ``[]``)."""
     try:
         data = json.loads(body)
-    except (json.JSONDecodeError, TypeError):
-        raise AdapterParseError("storesearch: response was not JSON")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AdapterParseError("storesearch: response was not JSON") from exc
     items = data.get("items") if isinstance(data, dict) else None
     if not isinstance(items, list):
         raise AdapterParseError(
@@ -703,7 +704,7 @@ async def _fetch_search(
         body, status, _headers, reason, mode_used = await fetch_html(
             _storesearch_url(term, cc, lang)
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return _failure_envelope(
             url, FailureReason.TIMEOUT, "storesearch deadline elapsed"
         )

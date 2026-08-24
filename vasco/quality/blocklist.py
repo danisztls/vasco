@@ -68,7 +68,7 @@ def _parse_line(line: str) -> str | None:
 
 
 def _is_url(source: str) -> bool:
-    return source.startswith("http://") or source.startswith("https://")
+    return source.startswith(("http://", "https://"))
 
 
 def _fetch_remote(url: str) -> str:

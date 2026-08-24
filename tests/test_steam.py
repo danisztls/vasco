@@ -124,9 +124,9 @@ def test_parse_app_fixture() -> None:
 def test_parse_app_early_access() -> None:
     # Steam tags Early Access as genre id 70 (localized description varies).
     body = (
-        '{"%s": {"success": true, "data": {"name": "Manor Lords", '
+        f'{{"{APP_ID}": {{"success": true, "data": {{"name": "Manor Lords", '
         '"genres": [{"id": "28", "description": "Simulation"}, '
-        '{"id": "70", "description": "Early Access"}]}}}' % APP_ID
+        '{"id": "70", "description": "Early Access"}]}}}'
     )
     p = S._parse_app(body, APP_ID, "x")
     assert p is not None

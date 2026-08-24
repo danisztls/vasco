@@ -32,7 +32,7 @@ def score(
     markdown: str,
     *,
     url: str | None = None,
-    cfg: "QualityCfg | None" = None,
+    cfg: QualityCfg | None = None,
     existing_quality: dict | None = None,
     metadata: dict | None = None,
     raw_html: str | None = None,

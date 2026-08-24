@@ -382,9 +382,10 @@ def normalize_url(url: str) -> str:
     host = host.lower()
 
     port = parts.port
-    if port is not None:
-        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
-            port = None
+    if port is not None and (
+        (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    ):
+        port = None
 
     userinfo = ""
     if parts.username is not None:
@@ -468,7 +469,7 @@ def registered_domain(url: str) -> str:
     if ext.domain and ext.suffix:
         return f"{ext.domain}.{ext.suffix}".lower()
     host = (urlsplit(raw).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
+    return host.removeprefix("www.")
 
 
 # An id-ish slug: has a hyphen and at least one digit (e.g. "apto-2q-id-12345").

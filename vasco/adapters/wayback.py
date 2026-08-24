@@ -12,6 +12,7 @@ prior failure envelope.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -51,10 +52,8 @@ async def find_snapshot(
     timeout = min(5.0, max(1.0, remaining))
     user_agent = "Mozilla/5.0 (compatible; Vasco/0.1)"
     if cfg is not None:
-        try:
+        with contextlib.suppress(Exception):
             user_agent = cfg.fetch.user_agent or user_agent
-        except Exception:
-            pass
 
     try:
         async with httpx.AsyncClient(

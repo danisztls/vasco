@@ -173,9 +173,7 @@ def _is_plaintext_response(content_type: str | None, body: str) -> bool:
     if content_type.split(";", 1)[0].strip().lower() not in _PLAINTEXT_TYPES:
         return False
     head = (body or "").lstrip()[:256].lower()
-    if head.startswith("<!doctype html") or head.startswith("<html"):
-        return False
-    return True
+    return not (head.startswith(("<!doctype html", "<html")))
 
 
 # Binary major types vasco can't turn into text (no extractor / converter).
@@ -304,8 +302,7 @@ def _registered_domain(url: str) -> str:
         from urllib.parse import urlparse
 
         host = (urlparse(url).hostname or "").lower()
-        if host.startswith("www."):
-            host = host[4:]
+        host = host.removeprefix("www.")
         return host
 
 

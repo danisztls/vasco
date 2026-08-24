@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Iterable, Iterator, TextIO
+from collections.abc import Iterable, Iterator
+from typing import Any, TextIO
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -147,10 +148,11 @@ def _render_page_header(env: dict[str, Any], con: Console) -> None:
 
 
 def _render_quality_header(quality: dict[str, Any], con: Console) -> None:
-    bits: list[str] = []
-    for key in ("provider", "vertical", "page_type"):
-        if quality.get(key):
-            bits.append(str(quality[key]))
+    bits: list[str] = [
+        str(quality[key])
+        for key in ("provider", "vertical", "page_type")
+        if quality.get(key)
+    ]
     if quality.get("result_count") is not None:
         bits.append(f"{quality['result_count']} results")
     if bits:

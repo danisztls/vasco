@@ -21,6 +21,7 @@ files or remote URLs to extend it.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
@@ -69,10 +70,8 @@ def get_paywall_vendors(quality_cfg: Any | None = None) -> frozenset[str]:
     if _vendors is None:
         paths: tuple[str, ...] = ()
         if quality_cfg is not None:
-            try:
+            with contextlib.suppress(Exception):
                 paths = tuple(quality_cfg.paywall_vendor_paths)
-            except Exception:
-                pass
         _vendors = load_paywall_vendors(paths)
     return _vendors
 

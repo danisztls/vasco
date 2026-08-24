@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for `vasco.map._fetch_llmstxt` — network fetch + on-disk persistence."""
 
 from __future__ import annotations

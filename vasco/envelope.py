@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The fetch envelope: the single contract every fetch path returns.
 
 `fetch_one`, `extract`, `cache.get`, and every source adapter

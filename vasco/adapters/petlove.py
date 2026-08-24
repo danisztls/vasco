@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Petlove marketplace adapter (Brazil).
 
 Petlove (``petlove.com.br``) is Brazil's largest pet-supplies marketplace. Like

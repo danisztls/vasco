@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Focused tests for vasco.fetch internals.
 
 Cross-module behavior lives in test_fetch_integration.py — this file is for

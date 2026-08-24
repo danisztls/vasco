@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Unit tests for the http-200 content-type routing seam.
 
 `_is_plaintext_response` (verbatim text passthrough), `convert.text_to_markdown`

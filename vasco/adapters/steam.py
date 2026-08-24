@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Steam store adapter.
 
 Steam exposes clean **public JSON endpoints** that return structured store data

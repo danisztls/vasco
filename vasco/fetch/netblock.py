@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Network request blocklist for the browser tier.
 
 Third-party tracker/ad request interception. When the browser tier loads a page,

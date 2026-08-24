@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Wayback Machine snapshot discovery for the fetch recovery chain.
 
 Used by `fetch._do_fetch_html` as a last-resort tier when both the http and

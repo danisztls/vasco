@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Unit tests for the Wayback snapshot discovery helpers.
 
 `find_snapshot` is exercised against stubbed httpx clients so no real

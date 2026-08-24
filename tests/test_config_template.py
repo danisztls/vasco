@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Guard test: config.yaml.template must not reference config keys that don't
 exist. The template is hand-maintained (CLAUDE.md asks contributors to keep it
 in sync with the *Cfg dataclasses); this fails CI if a section or field is

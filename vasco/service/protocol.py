@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Wire protocol for vascod — the single home for the socket contract.
 
 Both ends (the daemon and every thin client) read against this one module so the

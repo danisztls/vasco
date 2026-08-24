@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Thin async client for vascod, used by the CLI and MCP.
 
 One-shot per call: connect, send one request, read one response, close. Callers

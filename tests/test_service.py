@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """vascod daemon tests: start the daemon on a tmp socket and exercise the wire
 protocol. The network seam (`_http_fetch`) is stubbed exactly as in
 test_fetch_integration; failure/search/fetch_many paths monkeypatch the daemon's

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Document → Markdown via pandoc shell adapter.
 
 Handles DOCX, EPUB, ODT, RTF. Binary container formats (DOCX, EPUB, ODT)

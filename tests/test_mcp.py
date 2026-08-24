@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """MCP server tests: verify tool registration and that each adapter routes
 through to the underlying v0.1 core module with the right arguments.
 

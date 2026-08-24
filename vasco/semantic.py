@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Semantic passage ranker for ``vasco extract --rank semantic``.
 
 Wraps ``sentence-transformers`` (optional dep — install with the ``semantic``

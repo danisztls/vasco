@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Shopee marketplace adapter (Brazil).
 
 Shopee is one of Brazil's largest marketplaces, and like the other

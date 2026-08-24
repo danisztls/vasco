@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Rich human-readable rendering for the Vasco CLI.
 
 This module is the single home for the *pretty* (terminal) output path. It is

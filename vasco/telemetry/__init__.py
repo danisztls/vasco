@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Structured event log for the MCP server.
 
 Appends JSONL records to `$VASCO_LOGGING_PATH` or

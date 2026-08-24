@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for `vasco.map.map_site` — the dedupe + limit + exclude logic.
 
 The trafilatura helpers (`sitemap_search`, `find_feed_urls`, `focused_crawler`)

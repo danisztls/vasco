@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Phase-timing primitives for the fetch path.
 
 `_Phases` is an accumulator threaded through a single fetch to break its

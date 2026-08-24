@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for the browser-tier client (`BrowserPool` proxying to the server).
 
 The client holds no browser of its own — it connects to the browser server's

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for the PDF converter and its per-page Tesseract OCR fallback.
 
 The network is never touched: `subprocess.run` and `shutil.which` are stubbed so

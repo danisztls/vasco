@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Wikimedia article fetcher via Wikimedia Enterprise On-demand API.
 
 Covers Wikipedia, Wiktionary, Wikibooks, Wikiquote, Wikisource, Wikivoyage,

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """GitLab adapter (public REST API, no auth).
 
 GitLab's web UI is a Vue SPA, so trafilatura gets little from a project / issue /

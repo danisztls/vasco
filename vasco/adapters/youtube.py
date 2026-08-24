@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """YouTube adapter: video transcripts + channel/playlist/search video listings.
 
 Public surface:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Lightweight text-level heuristics for detecting AI-generated slop.
 
 All functions operate on plain text (post-markdown-conversion) and return

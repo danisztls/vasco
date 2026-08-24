@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Shared plumbing for the content adapters.
 
 Everything here used to be copy-pasted across the marketplace/real-estate

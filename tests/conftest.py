@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Shared pytest fixtures.
 
 `_isolate_user_state` redirects XDG dirs to a per-test tmp_path so that tests

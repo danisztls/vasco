@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Real-estate listing adapter (Brazilian portals).
 
 Brazilian real-estate sites render their useful payload as structured listings

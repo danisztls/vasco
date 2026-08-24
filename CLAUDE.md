@@ -94,7 +94,7 @@ Vasco — CLI for AI web research. Python 3.12+, managed with `uv`.
 
 ## Conventions
 
-- `from __future__ import annotations` at the top of every file.
+- Every `.py` file opens with the two-line SPDX header (`# SPDX-FileCopyrightText: 2026 Daniel de Souza` / `# SPDX-License-Identifier: AGPL-3.0-or-later`), then `from __future__ import annotations`.
 - Type hints on public functions; docstrings only where the *why* is non-obvious.
 - Failure handling: return failure envelopes, don't raise.
 - Cache writes go through `Cache.put`; never INSERT/UPDATE the table directly.

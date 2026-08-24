@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Cache-side concerns of the fetch path: per-reason negative-cache TTLs,
 cache-hit hydration, the timed cache write, and the adapter-envelope finalizer.
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """IsThereAnyDeal (ITAD) price-history client.
 
 Enriches Steam app pages with **Steam-only** historical pricing from the

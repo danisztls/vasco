@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The network seam and the auto-mode escalation chain.
 
 `_http_fetch` and `_browser_fetch` are the monkeypatch seam — tests stub them

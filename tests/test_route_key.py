@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Table-driven tests for `urls.route_key` — the per-route strategy key.
 
 These cases ARE the spec: list vs detail must differ; cities and listing-ids

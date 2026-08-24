@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """URL canonicalization: the single home for vasco's URL identity rules.
 
 `normalize_url` is the cache key and therefore load-bearing — changing it

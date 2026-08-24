@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Slop vocabulary: words and phrases statistically overrepresented in LLM output.
 
 Sources: slop-forensics (Sam Paech), EQ-Bench Slop Score, NousResearch ANTI-SLOP.md.

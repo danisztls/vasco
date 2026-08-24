@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Centralized, declarative seed strategies for the fetch escalation chain.
 
 This is the single place known per-route tier knowledge lives. Content adapters

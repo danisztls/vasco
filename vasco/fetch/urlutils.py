@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """URL / header / content-type helpers, tier budget constants, and the
 per-tier deadline clamp shared across the fetch path.
 

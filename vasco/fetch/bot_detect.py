@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Heuristic classification of fetch responses into FailureReasons.
 
 Pure function module. Never raises. Returns a `FailureReason` derived from

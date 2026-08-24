@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for the human-readable output path (`vasco.io.resolve_human` + `vasco.render`).
 
 Renderers write to an in-memory ``Console`` (``record=True`` so we can capture

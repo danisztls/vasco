@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Wikimedia Phabricator (Phorge) adapter.
 
 Phabricator/Phorge task pages and search results are **server-rendered HTML**

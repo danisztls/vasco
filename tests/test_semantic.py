@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Semantic ranking integration. The real sentence-transformers path is
 skipped unless the `semantic` extra is installed; the wiring is verified with
 a stub ranker.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """End-to-end fetch test using a real Cache (sqlite in tmp_path) but a stubbed
 HTTP tier. Covers the seam between fetch_one, Cache, and url_requested
 preservation — the exact gap that let the dead-CLI-cache bug slip through

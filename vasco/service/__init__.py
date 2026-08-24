@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """vascod — the resident vasco daemon and its wire protocol.
 
 `vasco serve` (``daemon.run_daemon``) owns the full fetch pipeline (one Config +

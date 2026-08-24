@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Scholar adapter — scientific articles via open scholarly APIs, no Cloudflare.
 
 Publisher article pages (ScienceDirect/Elsevier being the motivating case) are

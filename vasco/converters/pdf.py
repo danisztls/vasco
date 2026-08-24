@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """PDF → text via `pdftotext` and metadata via `pdfinfo`.
 
 Both binaries are shelled out. If `pdftotext` is missing on PATH, raises

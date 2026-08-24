@@ -192,3 +192,11 @@ jq -r 'select(.outcome=="fail") | .failure_reason' ~/.local/share/vasco/logs/*.j
 
 - **Tables rendered via MathJax / CSS come out hollow.** Pages like the arXiv HTML view encode numeric cells through scripts that trafilatura (and most plain-HTML extractors) strip. Prose around the table survives intact; the table itself becomes a markdown skeleton with empty data cells. Workaround for now: read the surrounding paragraphs, or fetch the PDF version (`https://arxiv.org/pdf/...`) which preserves tabular data via `pdftotext`.
 - **Large pages may overflow downstream context windows.** A 10k-word article can yield ~80 KB of markdown. Consumers running into per-tool-output caps should call `extract` for query-targeted passages, or pass `metadata_only=true` to the MCP `fetch` / `fetch_many` tools to get the envelope without the `markdown` field.
+
+## License
+
+Copyright (C) 2026 Daniel de Souza.
+
+Vasco is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+The AGPL's §13 network clause applies: if you run a modified version as a service others interact with over a network, those users must be offered its source.

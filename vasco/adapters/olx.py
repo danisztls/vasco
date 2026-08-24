@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """OLX.com.br classifieds adapter (real-estate + vehicle verticals).
 
 OLX is Brazil's dominant classifieds marketplace. Like the other structured-data

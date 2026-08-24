@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Binary-document fetchers: PDF (pdftotext) and pandoc-supported formats.
 
 These download bytes directly via httpx and convert them out-of-band — they do

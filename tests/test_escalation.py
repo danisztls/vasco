@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests for the fetch-mode escalation state machine in `vasco.fetch.fetch_one`.
 
 We monkeypatch the module-level helpers `_http_fetch` and `_browser_fetch`

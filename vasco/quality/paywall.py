@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniel de Souza
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Paywall detection — a diagnostic quality signal, not a bypass.
 
 Scans a page's *raw HTML* for fingerprints of known paywall / metering SaaS

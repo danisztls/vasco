@@ -1,7 +1,7 @@
 """MCP server tests: verify tool registration and that each adapter routes
 through to the underlying v0.1 core module with the right arguments.
 
-These tests bypass the stdio transport — they call the FastMCP server's
+These tests bypass the stdio transport — they call the MCPServer's
 in-process `call_tool` / `list_tools` API directly. The lifespan (which opens
 the cache) is not invoked, so tools that need cache/cfg are exercised with
 module globals patched directly.
@@ -13,9 +13,8 @@ from typing import Any
 
 import pytest
 
-from vasco.interface import mcp as mcp_mod
 from vasco import config as _config
-
+from vasco.interface import mcp as mcp_mod
 
 EXPECTED_TOOL_NAMES = {"search", "fetch", "fetch_many", "extract", "answer", "map"}
 
@@ -33,7 +32,7 @@ async def test_tool_input_schemas_are_well_formed() -> None:
     by_name = {t.name: t for t in tools}
     # Each input schema must be a JSON-Schema object with properties.
     for name in EXPECTED_TOOL_NAMES:
-        schema = by_name[name].inputSchema
+        schema = by_name[name].input_schema
         assert schema["type"] == "object", name
         assert "properties" in schema, name
 
@@ -589,10 +588,14 @@ async def test_lifespan_prewarm_failure_does_not_kill_server(
 
 
 def _text(result: Any) -> str:
-    """Extract a flat string from a FastMCP call_tool result for assertions."""
-    # FastMCP returns either Sequence[ContentBlock] or dict[str, Any].
+    """Extract a flat string from an MCPServer call_tool result for assertions."""
+    # MCP v2 always returns a CallToolResult; v1 returned bare content blocks
+    # or a (blocks, structured) tuple. Accept all three so the helper stays
+    # honest about what it is handed.
+    content = getattr(result, "content", None)
+    if content is not None:
+        return "\n".join(getattr(b, "text", None) or str(b) for b in content)
     if isinstance(result, tuple):
-        # (content_blocks, structured_dict)
         result = result[0]
     if isinstance(result, dict):
         import json

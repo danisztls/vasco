@@ -22,9 +22,7 @@ dependencies = [
     # yt-dlp needs secretstorage to decrypt Chromium-family (e.g. Brave) cookies
     # via the Secret Service API when youtube.cookies_from_browser is set; Linux-only.
     "secretstorage>=3.3; sys_platform == 'linux'",
-    # v2 renames FastMCP → MCPServer (breaking); stay on the 1.x line until
-    # `vasco/interface/mcp.py` is migrated.
-    "mcp>=1.28,<2",
+    "mcp>=2.0",
     "pyyaml>=6.0",
     "tldextract>=5.3.1",
     "rich>=15",  # human-readable CLI rendering (also a transitive dep of typer)

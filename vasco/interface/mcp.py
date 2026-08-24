@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from time import monotonic as _monotonic
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from vasco import cache as _cache_mod
 from vasco import config as _config
@@ -30,6 +32,16 @@ from vasco.service import protocol as _proto
 
 log = logging.getLogger("vasco.mcp")
 
+
+def _server_version() -> str:
+    """Our own version for `serverInfo`. MCP v2 no longer falls back to the
+    SDK's version, so an unset one would advertise an empty string."""
+    try:
+        return _pkg_version("vasco")
+    except PackageNotFoundError:  # running from a source tree, not installed
+        return "0.0.0+unknown"
+
+
 # Process-singleton state populated by the lifespan handler. Tools read these
 # directly — stdio MCP is single-process, so plain module globals are sufficient
 # and clearer than threading context through every tool.
@@ -38,7 +50,7 @@ _cfg: _config.Config | None = None
 
 
 @asynccontextmanager
-async def _lifespan(_server: FastMCP):  # type: ignore[no-untyped-def]
+async def _lifespan(_server: MCPServer):  # type: ignore[no-untyped-def]
     """Open the cache at server start; close the browser pool and cache on shutdown."""
     global _cache, _cfg
     _cfg = _config.load_config()
@@ -71,8 +83,9 @@ async def _lifespan(_server: FastMCP):  # type: ignore[no-untyped-def]
         _cfg = None
 
 
-server = FastMCP(
+server = MCPServer(
     "vasco",
+    version=_server_version(),
     instructions=(
         "Vasco: web research primitives for agents. "
         "search the web, fetch URLs (with Markdown + metadata envelope), "

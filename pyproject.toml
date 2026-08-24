@@ -22,7 +22,9 @@ dependencies = [
     # yt-dlp needs secretstorage to decrypt Chromium-family (e.g. Brave) cookies
     # via the Secret Service API when youtube.cookies_from_browser is set; Linux-only.
     "secretstorage>=3.3; sys_platform == 'linux'",
-    "mcp>=1.0",
+    # v2 renames FastMCP → MCPServer (breaking); stay on the 1.x line until
+    # `vasco/interface/mcp.py` is migrated.
+    "mcp>=1.28,<2",
     "pyyaml>=6.0",
     "tldextract>=5.3.1",
     "rich>=15",  # human-readable CLI rendering (also a transitive dep of typer)
@@ -44,7 +46,7 @@ semantic = [
 # and never launches a browser in-process, so core `vasco` doesn't depend on it.
 # Install on the host that runs the browser server: `uv tool install '.[browser]'`.
 browser = [
-    "camoufox[geoip]>=0.4",
+    "camoufox[geoip]>=0.5.5",
 ]
 
 [dependency-groups]

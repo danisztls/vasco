@@ -73,6 +73,7 @@ from .caching import (
     _cache_put,
     _finalize_adapter_envelope,
     _hydrate_cache_hit,
+    _smuggling_guard,
     _ttl_for,
 )
 from .core import _do_fetch_html
@@ -318,6 +319,11 @@ async def _fetch_one_body(
     phases = _Phases()
 
     def store(envelope: dict[str, Any]) -> dict[str, Any]:
+        # The single write seam for the core path — every non-adapter envelope
+        # (html, plaintext passthrough, pdf, pandoc, raw mode, the error net)
+        # passes through here, so screening for smuggled prompt payloads once at
+        # this point covers all of them, and always before the cache write.
+        envelope = _smuggling_guard(envelope, cfg=cfg)
         if use_cache and cache is not None:
             _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
         return envelope

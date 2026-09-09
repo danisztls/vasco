@@ -119,6 +119,10 @@ class QualityCfg:
     # Vendor fingerprint lists (local files or remote URLs); empty uses the
     # bundled default. Detection only — vasco never bypasses paywalls.
     paywall_vendor_paths: tuple[str, ...] = ()
+    # Withhold content that carries an encoded prompt payload in invisible text
+    # (see vasco.quality.smuggling). Detection only — the decoded payload is
+    # logged, never returned in the envelope.
+    detect_smuggling: bool = True
 
 
 @dataclass(frozen=True)

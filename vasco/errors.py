@@ -51,6 +51,15 @@ class FailureReason(StrEnum):
     # ``bot_detect.classify`` (which only sees raw HTML). Transient TTL: the page
     # may render later, or the browser server may simply have been down.
     EMPTY_BODY = "empty_body"
+    # Post-conversion verdict: the page carried an *encoded* prompt payload in
+    # invisible text (Unicode Tags block, variation selectors, or a zero-width
+    # binary encoding) — an ASCII-smuggling prompt-injection channel. The
+    # content is withheld rather than handed to the agent. Produced in core
+    # fetch and by the adapter finalizer via `quality.smuggling`, never by
+    # `bot_detect.classify` (which sees raw HTML, not converted text). The
+    # decoded payload is deliberately absent from the envelope; it goes to the
+    # telemetry log, correlated by the sha256 in `failure.smuggling`.
+    PROMPT_SMUGGLING = "prompt_smuggling"
 
 
 class AdapterParseError(Exception):

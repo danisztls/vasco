@@ -71,7 +71,8 @@ def log_event(cfg: Any | None, event: dict[str, Any]) -> None:
 #
 # Shared by `vasco.mcp` and `vasco.cli` so the JSONL schema stays identical
 # regardless of entry point. The summarizer (`vasco logs stats`) relies on a
-# consistent `outcome` discriminator: "ok" | "fail" | "exception" | "empty".
+# consistent `outcome` discriminator: "ok" | "fail" | "exception" | "empty"
+# | "smuggling" (the last is an evidence record, not a tool result).
 # ---------------------------------------------------------------------------
 
 
@@ -175,3 +176,38 @@ def fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
         fields["page_type"] = quality.get("page_type")
         fields["result_count"] = quality.get("result_count")
     return fields
+
+
+def record_smuggling(
+    cfg: Any | None,
+    tool: str,
+    *,
+    url: str | None,
+    payloads: list[dict[str, Any]],
+    mode_used: str | None = None,
+    action: str = "withheld",
+) -> None:
+    """Evidence log for detected ASCII smuggling (`vasco.quality.smuggling`).
+
+    This is the *only* place the decoded payload is persisted: it is kept out of
+    the fetch envelope on purpose, because writing an injection into a field the
+    agent reads is exactly the attack. `payloads` must already be escaped by the
+    caller (`smuggling.escaped_payload`), so the line is safe to `cat` — printable
+    ASCII stays readable for verification, everything else is `\\uXXXX`.
+
+    Emitted alongside the normal failure/redaction record rather than replacing
+    it; the distinct ``outcome`` keeps it from double-counting as a failure in
+    `logs stats`, where it surfaces as its own per-tool counter.
+    """
+    log_event(
+        cfg,
+        {
+            "tool": tool,
+            "outcome": "smuggling",
+            "action": action,
+            "url": url,
+            "mode_used": mode_used,
+            "payload_count": len(payloads),
+            "payloads": payloads,
+        },
+    )

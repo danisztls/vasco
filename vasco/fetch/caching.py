@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Cache-side concerns of the fetch path: per-reason negative-cache TTLs,
-cache-hit hydration, the timed cache write, and the adapter-envelope finalizer.
+cache-hit hydration, the timed cache write, the adapter-envelope finalizer, and
+the ASCII-smuggling guard that runs just before an envelope is persisted.
 
 The base/success/failure envelope builders live in `vasco.envelope`; this module
 only decides *how long* an envelope lives in cache and stamps the caller's URLs
@@ -15,8 +16,11 @@ import contextlib
 import time
 from typing import Any
 
+from vasco import telemetry
+from vasco.envelope import failure_envelope as _failure_envelope
 from vasco.envelope import now_epoch as _now_epoch
 from vasco.errors import FailureReason
+from vasco.quality import smuggling
 
 from .phases import _ms_since, _Phases
 
@@ -50,6 +54,11 @@ _FAILURE_TTL_MULTIPLIER: dict[FailureReason, float] = {
     # Empty body: a 200 that rendered no text — a JS shell may render later, or
     # the browser tier may simply have been down. Expire fast so a retry heals.
     FailureReason.EMPTY_BODY: 0.33,
+    # A smuggled payload is a property of the page's content, not a transient
+    # upstream condition — but pin it well short of the structural permanents so
+    # a page that is cleaned up (or a detector threshold that is tightened)
+    # heals within hours rather than a day.
+    FailureReason.PROMPT_SMUGGLING: 24.0,  # ~6h
 }
 
 
@@ -70,6 +79,69 @@ def _ttl_for(envelope: dict[str, Any], cfg: Any | None) -> int:
     except (ValueError, TypeError):
         return base
     return max(1, int(base * _FAILURE_TTL_MULTIPLIER.get(reason, 1.0)))
+
+
+# Provenance fields carried over when a success envelope is replaced by a
+# smuggling failure — the same set `envelope.base_envelope` produces.
+_BASE_KEYS = (
+    "url_requested",
+    "url_final",
+    "url_canonical",
+    "http_status",
+    "mode_used",
+    "fetched_at",
+    "from_cache",
+    "cache_age_seconds",
+    "content_type",
+)
+
+
+def _smuggling_guard(
+    envelope: dict[str, Any], *, cfg: Any | None, tool: str = "fetch"
+) -> dict[str, Any]:
+    """Withhold content that carries an encoded prompt payload.
+
+    Scans the agent-facing text of a *success* envelope — ``markdown``, ``title``
+    and the nested adapter payloads under ``quality`` — and on a hit replaces the
+    whole envelope with a ``PROMPT_SMUGGLING`` failure, so the smuggled content
+    is never returned. The decoded payload goes to the telemetry log
+    (`telemetry.record_smuggling`, escaped); the envelope carries only the
+    payload-free report, correlated to the log by ``sha256``.
+
+    Runs before the cache write, so the *failure* is what gets persisted. The
+    raw HTML is still cached separately, which is where a human verifies a hit.
+
+    Best-effort: a detector error leaves the envelope untouched — a bug here
+    must not take out the fetch path.
+    """
+    if "failure" in envelope or not smuggling.enabled(cfg):
+        return envelope
+    try:
+        hits = smuggling.scan_fields(
+            {"markdown": envelope.get("markdown"), "title": envelope.get("title")}
+        )
+        hits += smuggling.scan_structure(envelope.get("quality") or {})
+        if not hits:
+            return envelope
+
+        telemetry.record_smuggling(
+            cfg,
+            tool,
+            url=envelope.get("url_requested"),
+            mode_used=envelope.get("mode_used"),
+            payloads=smuggling.log_records(hits),
+        )
+        base = {k: envelope[k] for k in _BASE_KEYS if k in envelope}
+        failed = _failure_envelope(
+            base=base,
+            reason=FailureReason.PROMPT_SMUGGLING,
+            message=smuggling.summary_message(hits),
+            warnings=list(envelope.get("warnings") or []),
+        )
+        failed["failure"]["smuggling"] = smuggling.envelope_report(hits)
+        return failed
+    except Exception:
+        return envelope
 
 
 _LIVE_FETCH_PHASE_KEYS = (
@@ -129,6 +201,10 @@ def _finalize_adapter_envelope(
     envelope["url_canonical"] = normalized
     if raw:
         envelope.setdefault("warnings", []).append(f"raw_unsupported_for_{service}")
+    # Adapters bypass trafilatura entirely and put their payload in `quality.*`
+    # (products / listings / videos), so this is the only place their text is
+    # screened. Runs before the cache write so the failure is what persists.
+    envelope = _smuggling_guard(envelope, cfg=cfg, tool=service)
     if use_cache and cache is not None:
         _cache_put(cache, envelope, phases, ttl_seconds=_ttl_for(envelope, cfg))
     return envelope

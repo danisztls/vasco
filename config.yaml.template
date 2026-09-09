@@ -63,7 +63,8 @@
 #   detect_smuggling: true     # withhold content carrying an encoded prompt payload in invisible
 #                               # text (Unicode Tags / variation selectors / zero-width binary).
 #                               # The decoded payload is written to the event log, never to the
-#                               # envelope.
+#                               # envelope. Applies to fetch, search snippets and map's
+#                               # llms.txt bodies.
 
 # answer:                       # backend(s) for the `answer` command (fetch + LLM answer over a page)
 #                               # `providers` is an ordered chain: first = primary, the rest are fallbacks

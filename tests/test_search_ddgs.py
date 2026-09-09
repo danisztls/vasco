@@ -49,9 +49,13 @@ def test_other_ddgs_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
         list(DdgsBackend().search("anything"))
 
 
-def test_get_searcher_returns_ddgs_backend() -> None:
+def test_get_searcher_returns_guarded_ddgs_backend() -> None:
+    """The factory wraps every backend in the ASCII-smuggling guard, so a future
+    backend inherits it instead of having to remember it."""
     for name in ("ddg", "ddgs", "duckduckgo"):
-        assert isinstance(search.get_searcher(name), DdgsBackend)
+        searcher = search.get_searcher(name)
+        assert isinstance(searcher, search._GuardedSearcher)
+        assert isinstance(searcher._inner, DdgsBackend)
 
 
 def test_get_searcher_rejects_unknown_backend() -> None:

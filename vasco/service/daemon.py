@@ -122,7 +122,9 @@ class Dispatcher:
             # doesn't block other in-flight clients.
             url = params["url"]
             kw = _pick(params, _MAP_KEYS)
-            return await asyncio.to_thread(lambda: list(_map.map_site(url, **kw)))
+            return await asyncio.to_thread(
+                lambda: list(_map.map_site(url, cfg=self.cfg, **kw))
+            )
         if op == protocol.OP_SEARCH:
             backend = params.get("backend") or "ddg"
             searcher = get_searcher(backend, cfg=self.cfg)

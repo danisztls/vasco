@@ -480,7 +480,9 @@ async def map_site(
     async def _local() -> list[dict[str, Any]]:
         return await asyncio.to_thread(
             lambda: list(
-                _map_mod.map_site(url, source=source, limit=limit, exclude=exclude)
+                _map_mod.map_site(
+                    url, source=source, limit=limit, exclude=exclude, cfg=_cfg
+                )
             )
         )
 

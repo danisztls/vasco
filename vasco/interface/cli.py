@@ -559,7 +559,9 @@ def map_(
     started = _monotonic()
     count = 0
     try:
-        records = _map.map_site(url, source=source, limit=limit, exclude=exclude)
+        records = _map.map_site(
+            url, source=source, limit=limit, exclude=exclude, cfg=cfg
+        )
         if is_human:
             from vasco import render as _render
 

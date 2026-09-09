@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """ASCII-smuggling detection: the decoding discriminator, the payload-out-of-band
-rule, and the guard on the fetch path (core envelopes and adapter envelopes).
+rule, and the guard at each surface (fetch, adapter envelopes, search, llms.txt).
 
 The false-positive cases below are not invented — they are the real shapes found
 by scanning a 16.5k-page fetch cache, where every invisible-character occurrence
@@ -18,6 +18,7 @@ from vasco.config import Config, QualityCfg
 from vasco.errors import FailureReason
 from vasco.fetch.caching import _smuggling_guard
 from vasco.quality import smuggling
+from vasco.search import SearchResult, _guard_result
 
 # --- payload builders ------------------------------------------------------
 
@@ -227,3 +228,46 @@ def test_guard_logs_the_payload(tmp_path, monkeypatch) -> None:
 def test_guard_never_raises_on_a_malformed_envelope() -> None:
     env = {"markdown": tag_payload(INJECTION), "quality": object()}
     assert _smuggling_guard(env, cfg=None) is not None
+
+
+# --- search snippets -------------------------------------------------------
+
+
+def test_search_result_snippet_is_withheld() -> None:
+    result = SearchResult(
+        title="Cheap flights" + tag_payload(INJECTION),
+        url="https://example.com/x",
+        snippet="Book now",
+    )
+    guarded = _guard_result(result, None)
+
+    assert guarded.url == result.url  # the URL survives; it is the useful part
+    assert "withheld" in guarded.snippet
+    assert INJECTION not in guarded.title
+    assert guarded.title == "Cheap flights"
+
+
+def test_clean_search_result_is_unchanged() -> None:
+    result = SearchResult(title="Cheap flights", url="https://e.com", snippet="Book")
+    assert _guard_result(result, None) is result
+
+
+# --- map / llms.txt --------------------------------------------------------
+
+
+def test_llmstxt_body_is_withheld() -> None:
+    from vasco.map import _guard_llmstxt
+
+    body = _guard_llmstxt(
+        "# Docs\n" + tag_payload(INJECTION), "https://example.com/llms.txt", None
+    )
+    assert "withheld" in body
+    assert INJECTION not in body
+
+
+def test_clean_llmstxt_body_is_unchanged() -> None:
+    from vasco.map import _guard_llmstxt
+
+    assert _guard_llmstxt("# Docs\nAll good.", "https://e.com/llms.txt", None) == (
+        "# Docs\nAll good."
+    )

@@ -13,6 +13,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from vasco import telemetry
+from vasco.quality import smuggling
+
 _MAX_BODY_BYTES = 512 * 1024
 _DISK_TTL_SECONDS = 86400  # 24 h
 
@@ -72,6 +75,32 @@ def _fetch_llmstxt(url: str) -> tuple[str | None, str | None]:
         pass
 
     return content, llmstxt_url
+
+
+def _guard_llmstxt(content: str, url: str | None, cfg: Any | None) -> str:
+    """Strip an encoded prompt payload out of an llms.txt body.
+
+    llms.txt is *written for* LLMs and is the one map source whose full text —
+    not just a URL — is handed to the agent, which makes it the highest-value
+    place on this path to smuggle instructions. On a hit the body is replaced
+    outright rather than partially redacted: unlike a search snippet there is no
+    residual value in a mangled llms.txt, and the caller still gets the record's
+    URL. The decoded payload goes only to the log.
+    """
+    if not smuggling.enabled(cfg):
+        return content
+    hits = smuggling.scan_text(content, field="content")
+    if not hits:
+        return content
+    telemetry.record_smuggling(
+        cfg,
+        "map",
+        url=url,
+        payloads=smuggling.log_records(hits),
+        action="withheld",
+    )
+    kinds = ", ".join(sorted({hit.kind for hit in hits}))
+    return f"[llms.txt withheld: hidden-text payload detected ({kinds})]"
 
 
 def _iter_llmstxt(url: str) -> Iterator[dict[str, Any]]:
@@ -154,6 +183,7 @@ def map_site(
     source: str = "all",
     limit: int = 1000,
     exclude: list[str] | None = None,
+    cfg: Any | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Discover URLs on a site via sitemap, feeds, and/or a light spider.
 
@@ -163,6 +193,9 @@ def map_site(
 
     ``exclude`` is a list of substring patterns; any URL containing one of
     them is filtered out. Matching is case-sensitive against the full URL.
+
+    ``cfg`` is read only for the ASCII-smuggling gate applied to body-bearing
+    records (llms.txt); ``None`` means the default (enabled).
     """
     if limit <= 0:
         return
@@ -190,6 +223,16 @@ def map_site(
             seen.add(u)
             if patterns and any(p in u for p in patterns):
                 continue
+            # llms.txt is the only map source that hands the agent a *body*
+            # rather than just a URL — and it is written for LLMs, which makes
+            # it the highest-value place on this path to smuggle instructions.
+            # Screened here, at the merge point, so any future body-bearing
+            # source is covered by construction.
+            if isinstance(record.get("content"), str):
+                record = {
+                    **record,
+                    "content": _guard_llmstxt(record["content"], u, cfg),
+                }
             yield record
             emitted += 1
             if emitted >= limit:

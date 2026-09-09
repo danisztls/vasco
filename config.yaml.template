@@ -43,7 +43,7 @@
 #   vnc_port: 5900             # x11vnc loopback port -> connect to localhost:5900
 
 # cache:
-#   path: ""                   # "" = $XDG_DATA_HOME/vasco/cache.sqlite
+#   path: ""                   # "" = $XDG_CACHE_HOME/vasco/cache.db
 
 # logging:
 #   enabled: true              # true | false (logs successes too)

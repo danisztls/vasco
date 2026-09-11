@@ -71,7 +71,7 @@
 #                               # tried in order when an entry is unavailable or fails. empty = disabled.
 #   providers: []              # e.g. (uncomment and fill — first entry is primary):
 #                               #   - {provider: claude_cli, model: sonnet, effort: low}
-#                               #   - {provider: deepseek, model: deepseek-v4-flash, api_key: sk-...}
+#                               #   - {provider: deepseek, model: deepseek-flash, api_key: sk-...}
 #                               # effort (claude_cli only): low|medium|high|xhigh|max — the CLI has no
 #                               # thinking-off switch, so `low` clamps its high/xhigh default for the
 #                               # grounded answer/summarize task; unset = CLI's own default.

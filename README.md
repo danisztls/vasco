@@ -273,7 +273,7 @@ service: # vascod coordination
 answer: # ordered chain: first = primary, rest are fallbacks
   providers:
     - { provider: claude_cli, model: sonnet, effort: low }
-    - { provider: deepseek, model: deepseek-v4-flash, api_key: sk-... }
+    - { provider: deepseek, model: deepseek-flash, api_key: sk-... }
 
 domains: # per-host fetch overrides
   gitlab.example.com: honest # minimal client headers, for WAFs that 403 the full shape

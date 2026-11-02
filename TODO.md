@@ -61,3 +61,17 @@ uv run vasco fetch "https://www.olx.com.br/imoveis/venda/estado-sp/sao-paulo-e-r
 Brave has its own index, so it would be the one source independent of Bing and Google. It was removed from `_DDGS_TEXT_BACKENDS` on 2026-11-02 because scraping it through `ddgs` got rate limited (429) and returned nothing when tested, so the API is the way back to it.
 
 **Weigh first:** a pricing comparison from April 2026 calls its coverage narrower than Google's, which is the same weakness that got Tavily dropped. Include it in the Serper replay if a key is available.
+
+## Maybe: Yandex as an opt-in search backend
+
+**Status:** a possibility, low priority. If built, it should be opt-in through `--backend yandex`, not part of the default search.
+
+`ddgs` disables its Yandex engine, so it was removed from `_DDGS_TEXT_BACKENDS` on 2026-11-02. Calling the `ddgs.engines.yandex.Yandex` class directly returned 10 real results on each of 3 test queries, though one top result for an English query was Russian (`ozon.ru`).
+
+**Size:** about 20 lines plus tests: a `yandex` branch in `get_searcher` and a direct call to the class, reusing the retry and the empty-URL filter. Call the class rather than adding it to `ddgs`'s engine registry, which would change global state.
+
+**Limits:**
+
+- It depends on `ddgs` internals, and the reason upstream disabled it is unknown.
+- The engine ignores `region` and `time`, so `--time` would need to be rejected or documented.
+- The `site:` filter is untested on its endpoint.

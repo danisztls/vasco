@@ -35,6 +35,48 @@ uv run vasco fetch "https://www.olx.com.br/imoveis/venda/estado-sp/sao-paulo-e-r
 - Add a `tests/fixtures/` capture of the new page shape.
 - Update the OLX anchor in the CLAUDE.md invariants and in `docs/adapters.md`.
 
+## Bugs from the WebFetch comparison
+
+**Status:** open, not fixed. Found 2026-11-02 at `c816c38` while comparing vasco with Claude Code's WebFetch. Causes aren't investigated unless stated.
+
+### In-page links lose their path
+
+Every in-page link on the Python docs page comes back without its path, as `https://docs.python.org#id14` rather than `https://docs.python.org/3/library/asyncio-task.html#id14`: 137 links wrong, 0 right. Other sites may be affected, so fix this first.
+
+```bash
+uv run vasco fetch https://docs.python.org/3/library/asyncio-task.html --json | jq -r .markdown | rg -c 'docs\.python\.org#'
+```
+
+### Reddit titles come back translated
+
+`r/Python` post titles and bodies arrive in Portuguese, so an agent would quote text the original post doesn't contain. The browser profile's locale is the likely cause, but that's unconfirmed.
+
+```bash
+uv run vasco fetch https://www.reddit.com/r/Python/ --refresh --json | jq -r .markdown | head -20
+```
+
+### Stack Overflow loses the question and scores
+
+The Markdown for `https://stackoverflow.com/questions/11227809` starts at the answer. The question body and the scores are missing, and only the metadata `description` holds the start of the question. The envelope reports `boilerplate_ratio` 0.94.
+
+### Steam descriptions keep HTML entities
+
+The Portal 2 description contains a literal `&quot;`. Reproduce with `https://store.steampowered.com/app/620/Portal_2/`.
+
+### Wikipedia drops the closing sections
+
+The Wikimedia route ends at "Languages influenced by Python", without the article's References, Further reading and External links. This may be deliberate, so decide before changing it.
+
+## Improve GitHub, npm, Reddit, Reuters and Associated Press
+
+**Status:** to do. Vasco fetches the first four, but each misses what an agent would ask for. Associated Press wasn't part of the comparison, so start by testing it. The ideas below are untested.
+
+- **GitHub:** a repo page returns the README but not the star count. The public REST API carries repo metadata, though its anonymous rate limit is low.
+- **npm:** `react` returns the version, only through the metadata `description`, and no download count. `registry.npmjs.org` and `api.npmjs.org/downloads` are worth trying instead of the Cloudflare-fronted page.
+- **Reddit:** `r/Python` extracts poorly (`trafilatura_confidence` 0.40, `boilerplate_ratio` 0.68), and listings have no structure. Check whether an adapter can get structured posts, and fix the translation bug above.
+- **Reuters:** `/technology/` returns story summaries, not headlines (`trafilatura_confidence` 0.45, `boilerplate_ratio` 0.76).
+- **Associated Press:** test a section page and an article, then decide whether it needs the same treatment as Reuters. A shared approach for news section pages may cover both.
+
 ## Test Serper as a search backend
 
 **Status:** to do. Needs a Serper API key.

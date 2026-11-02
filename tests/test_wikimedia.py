@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import time
+from typing import Any
+
+import httpx
 import pytest
 
 from vasco.adapters import wikimedia
@@ -423,6 +427,36 @@ async def test_fetch_resolves_redirects(monkeypatch: pytest.MonkeyPatch) -> None
     )
     assert "failure" not in env
     assert resolved_titles[0] == "Color"
+
+
+def _patch_mediawiki_api(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    real_client = httpx.AsyncClient
+
+    def patched_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched_client)
+
+
+@pytest.mark.asyncio
+async def test_resolve_redirect_identifies_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Mirrors Wikimedia's policy: no project URL in the UA gets a 403.
+        if "https://" not in request.headers["user-agent"]:
+            return httpx.Response(403, text="<html>Wikimedia Error</html>")
+        return httpx.Response(
+            200,
+            json={"query": {"redirects": [{"from": "Foo", "to": "Foo Bar"}]}},
+        )
+
+    _patch_mediawiki_api(monkeypatch, handler)
+    resolved = await wikimedia._resolve_redirect(
+        "en", "wikipedia", "Foo", deadline_monotonic=time.monotonic() + 5
+    )
+    assert resolved == "Foo_Bar"
 
 
 @pytest.mark.asyncio

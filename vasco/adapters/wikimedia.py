@@ -31,6 +31,10 @@ from . import _common
 
 log = logging.getLogger(__name__)
 
+# Wikimedia's robot policy wants a way to identify the client: without the URL it
+# answers this API with a 403, which leaves redirects unresolved.
+_USER_AGENT = "Vasco/0.1 (https://github.com/dansouza/vasco)"
+
 _STRUCTURED_LANGS = frozenset({"en", "de", "fr", "es", "pt", "it", "nl", "cy", "id"})
 
 _PROJECT_CODES: dict[str, str] = {"wikipedia": "wiki"}
@@ -198,7 +202,7 @@ async def _resolve_redirect(
 
     api_url = f"https://{lang}.{project}.org/w/api.php"
     try:
-        headers = {"User-Agent": "Vasco/0.1 (web research CLI)"}
+        headers = {"User-Agent": _USER_AGENT}
         async with httpx.AsyncClient(
             timeout=min(5.0, remaining), headers=headers
         ) as client:
@@ -218,7 +222,7 @@ async def _resolve_redirect(
             if redirects:
                 return redirects[-1].get("to", title).replace(" ", "_")
     except Exception as exc:
-        log.debug("MediaWiki redirect resolution failed: %s", exc)
+        log.warning("MediaWiki redirect resolution failed: %s", exc)
     return title
 
 

@@ -544,7 +544,20 @@ def map_(
     source: Annotated[
         str, typer.Option(help="llmstxt|sitemap|feeds|spider|all.")
     ] = "all",
-    limit: Annotated[int, typer.Option(help="Maximum URLs to emit.")] = 1000,
+    limit: Annotated[
+        int | None, typer.Option(help="Maximum URLs to emit (default: set by --size).")
+    ] = None,
+    size: Annotated[
+        str,
+        typer.Option(
+            help="How much to spend: quick (50 URLs, 15s), standard (200, 60s), "
+            "full (1000, 300s)."
+        ),
+    ] = "standard",
+    budget: Annotated[
+        float | None,
+        typer.Option(help="Seconds to spend at most (default: set by --size)."),
+    ] = None,
     exclude: Annotated[
         list[str] | None,
         typer.Option(
@@ -567,7 +580,13 @@ def map_(
     count = 0
     try:
         records = _map.map_site(
-            url, source=source, limit=limit, exclude=exclude, cfg=cfg
+            url,
+            source=source,
+            limit=limit,
+            exclude=exclude,
+            size=size,
+            budget=budget,
+            cfg=cfg,
         )
         if is_human:
             from vasco import render as _render
@@ -577,7 +596,7 @@ def map_(
             for record in records:
                 _io.write_ndjson(record)
                 sys.stdout.flush()
-                count += 1
+                count += record.get("source") != _map.NOTICE_SOURCE
     except Exception as exc:
         _telemetry.record_exception(cfg, "map", exc, url=url, source=source)
         raise
@@ -586,6 +605,7 @@ def map_(
         "map",
         url=url,
         source=source,
+        size=size,
         result_count=count,
         duration_ms=int((_monotonic() - started) * 1000),
     )

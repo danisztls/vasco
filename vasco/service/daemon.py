@@ -55,7 +55,7 @@ _EXTRACT_KEYS = (
     "refresh",
 )
 _ANSWER_KEYS = ("question", "mode", "deadline", "use_cache", "refresh")
-_MAP_KEYS = ("source", "limit", "exclude")
+_MAP_KEYS = ("source", "limit", "exclude", "size", "budget")
 _SEARCH_KEYS = ("max_results", "region", "time", "site")
 
 

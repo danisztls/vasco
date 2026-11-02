@@ -57,7 +57,7 @@ vasco fetch     <url...> [--mode auto|http|browser|mobile|wayback] [--workers 4]
 vasco extract   <url>     --query "..." [--top 5] [--context-chars 400]
                           [--rank bm25|semantic] [--mode ...] [--deadline ...]
 vasco answer    <url>    [--question "..."] [--mode ...] [--refresh] [--deadline ...]
-vasco map       <url>    [--source llmstxt|sitemap|feeds|spider|all] [--limit 1000]
+vasco map       <url>    [--source llmstxt|sitemap|feeds|spider|all] [--size quick|standard|full] [--limit N] [--budget SECONDS]
                           [--exclude SUBSTR]...
 vasco normalize <url>
 vasco cache     list | purge [--older-than 7d] [--domain DOMAIN] | stats

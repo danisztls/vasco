@@ -457,6 +457,10 @@ _LLMSTXT_WARNING = (
 )
 
 
+# On top of the budget: the record in flight when it runs out, plus the reply.
+_MAP_READ_MARGIN = 30.0
+
+
 @server.tool(
     name="map",
     description=(
@@ -466,14 +470,21 @@ _LLMSTXT_WARNING = (
         "`source` to select a specific discovery method: 'llmstxt' tries the "
         "site's /llms.txt first (curated for LLMs); fall back to 'sitemap' or "
         "'feeds' if llmstxt is absent or unhelpful. Pass `exclude` as a list "
-        "of substrings (e.g. ['/team/', '/tag/']) to filter out noise paths."
+        "of substrings (e.g. ['/team/', '/tag/']) to filter out noise paths. "
+        "`size` sets how much to spend: 'quick' (up to 50 URLs in 15s, llms.txt "
+        "and sitemap only), 'standard' (200 URLs in 60s, all sources, a 10-page "
+        "spider) or 'full' (1000 URLs in 300s, a deep spider). `limit` and "
+        "`budget` (seconds) override the size's defaults. When either cuts "
+        "discovery short, a last record with source='notice' says so in `note`."
     ),
 )
 async def map_site(
     url: str,
     source: str = "all",
-    limit: int = 1000,
+    limit: int | None = None,
     exclude: list[str] | None = None,
+    size: str = "standard",
+    budget: float | None = None,
 ) -> list[dict[str, Any]] | str:
     # trafilatura does synchronous HTTP; offload to a thread so a slow
     # sitemap fetch doesn't block other in-flight MCP tool calls.
@@ -483,7 +494,13 @@ async def map_site(
         return await asyncio.to_thread(
             lambda: list(
                 _map_mod.map_site(
-                    url, source=source, limit=limit, exclude=exclude, cfg=_cfg
+                    url,
+                    source=source,
+                    limit=limit,
+                    exclude=exclude,
+                    size=size,
+                    budget=budget,
+                    cfg=_cfg,
                 )
             )
         )
@@ -491,8 +508,16 @@ async def map_site(
     try:
         results = await _service_client.request_or(
             _proto.OP_MAP,
-            {"url": url, "source": source, "limit": limit, "exclude": exclude},
+            {
+                "url": url,
+                "source": source,
+                "limit": limit,
+                "exclude": exclude,
+                "size": size,
+                "budget": budget,
+            },
             local=_local,
+            read_timeout=_map_mod.effective_budget(size, budget) + _MAP_READ_MARGIN,
         )
     except Exception as exc:
         _record_exception("map", exc, url=url, source=source)
@@ -501,7 +526,8 @@ async def map_site(
         "map",
         url=url,
         source=source,
-        result_count=len(results),
+        size=size,
+        result_count=sum(r.get("source") != _map_mod.NOTICE_SOURCE for r in results),
         duration_ms=int((_monotonic() - started) * 1000),
     )
     if any(r.get("source") == "llmstxt" for r in results):

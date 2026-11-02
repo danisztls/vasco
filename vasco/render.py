@@ -403,6 +403,10 @@ def render_map(
         source = record.get("source") or ""
         url = record.get("url") or ""
         lastmod = record.get("lastmod")
+        note = record.get("note")
+        if note:
+            con.print(Text(str(note), style="dim"))
+            continue
         line = Text()
         line.append(f"[{source}] ", style="magenta")
         line.append(str(url), style="cyan")

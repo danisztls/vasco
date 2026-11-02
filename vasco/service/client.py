@@ -30,7 +30,8 @@ from . import protocol
 
 _CONNECT_TIMEOUT = 2.0
 # Generous backstop: the server-side per-op deadline (default 30s, full
-# escalation chain ~24s) is the real bound. This only guards a wedged daemon.
+# escalation chain ~28s) is the real bound. This only guards a wedged daemon. An op
+# with a longer bound of its own (map's budget) passes a `read_timeout` to match.
 _READ_TIMEOUT = 120.0
 _RECONNECT_DELAY = 0.2
 
@@ -60,11 +61,13 @@ class DaemonClient:
             await writer.wait_closed()
         return True
 
-    async def request(self, op: str, **params: Any) -> Any:
+    async def request(
+        self, op: str, *, read_timeout: float | None = None, **params: Any
+    ) -> Any:
         last_exc: Exception | None = None
         for attempt in (0, 1):
             try:
-                return await self._once(op, params)
+                return await self._once(op, params, read_timeout or _READ_TIMEOUT)
             except (FileNotFoundError, ConnectionRefusedError) as exc:
                 # Daemon isn't listening — fail fast, no retry, so callers fall
                 # back to in-process without a latency penalty.
@@ -82,13 +85,13 @@ class DaemonClient:
                 raise DaemonUnavailable(str(exc)) from exc
         raise DaemonUnavailable(str(last_exc))  # pragma: no cover
 
-    async def _once(self, op: str, params: dict[str, Any]) -> Any:
+    async def _once(self, op: str, params: dict[str, Any], read_timeout: float) -> Any:
         reader, writer = await asyncio.wait_for(
             asyncio.open_unix_connection(self._sock), _CONNECT_TIMEOUT
         )
         try:
             await protocol.write_msg(writer, {"op": op, "params": params})
-            resp = await asyncio.wait_for(protocol.read_msg(reader), _READ_TIMEOUT)
+            resp = await asyncio.wait_for(protocol.read_msg(reader), read_timeout)
         finally:
             writer.close()
             with contextlib.suppress(Exception):
@@ -108,7 +111,11 @@ class DaemonClient:
 
 
 async def request_or[T](
-    op: str, params: dict[str, Any], *, local: Callable[[], Awaitable[T]]
+    op: str,
+    params: dict[str, Any],
+    *,
+    local: Callable[[], Awaitable[T]],
+    read_timeout: float | None = None,
 ) -> T:
     """Run ``op`` on vascod if reachable; otherwise await ``local()`` in-process.
 
@@ -116,6 +123,6 @@ async def request_or[T](
     (:class:`DaemonError`) propagates so callers don't silently mask real bugs.
     """
     try:
-        return await DaemonClient().request(op, **params)
+        return await DaemonClient().request(op, read_timeout=read_timeout, **params)
     except DaemonUnavailable:
         return await local()

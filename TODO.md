@@ -73,3 +73,23 @@ uv run vasco fetch "https://www.olx.com.br/imoveis/venda/estado-sp/sao-paulo-e-r
 - It depends on `ddgs` internals, and the reason upstream disabled it is unknown.
 - The engine ignores `region` and `time`, so `--time` would need to be rejected or documented.
 - The `site:` filter is untested on its endpoint.
+
+## Maybe: semantic ranking for `extract`
+
+**Status:** a possibility, not installed. `rank="semantic"` is wired up, but the `semantic` extra isn't on the deployed tool. Install it only if `extract` keeps missing passages that are worded differently from the query. The BM25 tokenizer fix of 2026-11-02 removed the main reason agents reached for it.
+
+**Measured cost (2026-11-02, CPU):**
+
+- The default install downloads 3.06 GB across 41 packages, and 2.45 GB of that is NVIDIA CUDA libraries, which an AMD GPU can't use.
+- A CPU-only `torch` takes 1.1 GB on disk, against 408 MB for the whole vasco tool today.
+- The model adds 88 MB, downloaded from Hugging Face on first use.
+- Peak memory was about 450 to 585 MB once loaded, and the daemon keeps the model until it restarts.
+- With everything on disk, the first call took about 3s to import and load. Encoding 300 short passages took 0.4s.
+
+**Before installing:**
+
+- Force CPU-only `torch` with a CPU index under `[tool.uv.sources]`. This was tested with `uv pip` and index flags, not through `uv tool install`.
+- Replace the default `all-MiniLM-L6-v2`, which is mainly suited to English. A multilingual model fits vasco's queries better, but its size is unmeasured.
+- Move `_rank_semantic` off the event loop in `vasco/extract.py`. It runs directly in the async `extract`, so loading the model and encoding would block every other daemon request.
+
+**Lighter option:** an ONNX library like `fastembed` should avoid `torch` altogether. It's untested and would mean changing `vasco/semantic.py`.

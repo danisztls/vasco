@@ -77,6 +77,29 @@ def test_failed_retry_keeps_the_empty_answer(monkeypatch: pytest.MonkeyPatch) ->
     assert list(DdgsBackend().search("q")) == []
 
 
+def test_failed_first_attempt_is_retried(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    from ddgs.exceptions import TimeoutException
+
+    calls = _scripted_ddgs(
+        monkeypatch,
+        [TimeoutException("timed out"), [{"title": "t", "href": "https://x/1"}]],
+    )
+    results = list(DdgsBackend().search("q"))
+    assert [r.url for r in results] == ["https://x/1"]
+    assert len(calls) == 2 and len(sleeps) == 1
+
+
+def test_failed_first_attempt_and_empty_retry_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ddgs.exceptions import TimeoutException
+
+    _scripted_ddgs(monkeypatch, [TimeoutException("timed out"), []])
+    assert list(DdgsBackend().search("q")) == []
+
+
 def test_results_are_not_retried(
     monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
 ) -> None:

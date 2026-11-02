@@ -118,7 +118,12 @@ class DdgsBackend:
             "region": canonical_region(region),
             "time": time,
         }
-        results = _text_search(full_query, **kwargs)
+        first_error: DDGSException | None = None
+        try:
+            results = _text_search(full_query, **kwargs)
+        except DDGSException as exc:
+            # Timeouts are as transient as empty answers, so they get the retry too.
+            results, first_error = [], exc
         if not results:
             sleep(_EMPTY_RETRY_DELAY_SECONDS)
             try:
@@ -126,5 +131,7 @@ class DdgsBackend:
             except DDGSException:
                 # The retry is a bonus: a failed one must not turn an empty
                 # answer into an error.
+                if first_error is not None:
+                    raise first_error from None
                 return
         yield from results

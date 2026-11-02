@@ -54,13 +54,11 @@ uv run vasco fetch "https://www.olx.com.br/imoveis/venda/estado-sp/sao-paulo-e-r
 
 **If it wins:** add it behind the `Searcher` interface in `vasco/search.py`, falling back to `ddgs` when it fails or returns nothing, or when no key is set. The key goes in `config.yaml`, because vascod doesn't see the shell environment. Check current pricing first, since the figures found so far date from April 2026.
 
-## Maybe: Brave Search API as a backend
+## Decide whether Brave should be more than opt-in
 
-**Status:** a possibility, not decided. Needs a Brave API key.
+**Status:** a possibility, not decided. The backend works through `--backend brave`, tested against the live API on 2026-11-02.
 
-Brave has its own index, so it would be the one source independent of Bing and Google. It was removed from `_DDGS_TEXT_BACKENDS` on 2026-11-02 because scraping it through `ddgs` got rate limited (429) and returned nothing when tested, so the API is the way back to it.
-
-**Weigh first:** a pricing comparison from April 2026 calls its coverage narrower than Google's, which is the same weakness that got Tavily dropped. Include it in the Serper replay if a key is available.
+**Weigh first:** a pricing comparison from April 2026 calls its coverage narrower than Google's, which is the same weakness that got Tavily dropped. Include it in the Serper replay.
 
 ## Maybe: Yandex as an opt-in search backend
 

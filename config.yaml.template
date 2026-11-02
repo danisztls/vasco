@@ -11,6 +11,7 @@
 # search:
 #   region: us-en              # DuckDuckGo region code (e.g. us-en, br-pt, uk-en)
 #   max_results: 10            # results returned per search
+#   brave_api_key: ""          # Brave Search API key for `--backend brave` (or VASCO_SEARCH_BRAVE_API_KEY); "" = off
 
 # fetch:
 #   workers: 4                 # thread-pool size for fetch_many

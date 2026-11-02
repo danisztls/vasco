@@ -104,7 +104,8 @@ server = MCPServer(
 @server.tool(
     description=(
         "Search the web. Returns a list of {title, url, snippet} objects. "
-        "Supports --site filter and time range (d|w|m|y)."
+        "Supports --site filter and time range (d|w|m|y). "
+        "backend: ddg (default) or brave (needs search.brave_api_key in config)."
     ),
 )
 async def search(

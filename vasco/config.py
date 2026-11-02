@@ -15,6 +15,8 @@ import yaml
 class SearchCfg:
     region: str = "us-en"
     max_results: int = 10
+    # In config rather than the shell env, because vascod doesn't inherit that.
+    brave_api_key: str = ""
 
 
 @dataclass(frozen=True)

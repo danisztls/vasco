@@ -11,8 +11,8 @@ from vasco.search import SearchResult
 # Pinned rather than `backend="auto"`, which prepends grokipedia (xAI's Wikipedia
 # clone) whose flaky typeahead API can raise DDGSException for the whole call.
 # Left out on purpose: bing/google/yandex (disabled upstream; naming them only
-# logs a warning), brave (scraping it gets rate limited; see TODO.md for its API)
-# and startpage (returned nothing when tested).
+# logs a warning), brave (scraping it gets rate limited; adapters/brave.py uses
+# its API instead) and startpage (returned nothing when tested).
 _DDGS_TEXT_BACKENDS = "duckduckgo,mojeek,yahoo,wikipedia"
 
 # ddgs reports an engine's 403/429 as "No results found", so an empty answer is

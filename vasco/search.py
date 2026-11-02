@@ -80,4 +80,11 @@ def get_searcher(backend: str = "ddg", *, cfg: Any | None = None) -> Searcher:
         from vasco.adapters.ddgs import DdgsBackend
 
         return _GuardedSearcher(DdgsBackend(), cfg)
+    if backend == "brave":
+        from vasco.adapters.brave import BraveBackend
+
+        api_key = cfg.search.brave_api_key if cfg else ""
+        if not api_key:
+            raise ValueError("brave search needs search.brave_api_key in config")
+        return _GuardedSearcher(BraveBackend(api_key), cfg)
     raise ValueError(f"unknown search backend: {backend!r}")

@@ -51,7 +51,7 @@ For a persistent deployment, see [`contrib/systemd/`](contrib/systemd/README.md)
 
 ```
 vasco search    <query>  [--max 10] [--region us-en] [--time d|w|m|y] [--site DOMAIN]
-                          [--backend ddg]
+                          [--backend ddg|brave]
 vasco fetch     <url...> [--mode auto|http|browser|mobile|wayback] [--workers 4]
                           [--no-cache] [--refresh] [--deadline 30s] [--raw] [--concat]
 vasco extract   <url>     --query "..." [--top 5] [--context-chars 400]

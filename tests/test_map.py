@@ -264,14 +264,14 @@ def _patch_sitemaps(
     found: dict[str, list[str]],
     robots: dict[str, list[str]] | None = None,
 ) -> list[str]:
-    """Stub trafilatura's sitemap calls; returns the URLs `sitemap_search` got."""
+    """Stub the walk and robots.txt; returns the URLs the walk was given."""
     searched: list[str] = []
 
-    def sitemap_search(url: str, **kw: Any) -> list[str]:
+    def walk(url: str, *, max_sitemaps: int) -> tuple[list[str], int]:
         searched.append(url)
-        return found.get(url, [])
+        return found.get(url, []), 0
 
-    monkeypatch.setattr("trafilatura.sitemaps.sitemap_search", sitemap_search)
+    monkeypatch.setattr(_map, "_walk_sitemaps", walk)
     monkeypatch.setattr(
         "trafilatura.sitemaps.find_robots_sitemaps",
         lambda base: (robots or {}).get(base, []),
@@ -323,3 +323,118 @@ def test_sitemap_fallback_needs_a_directory(
     searched = _patch_sitemaps(monkeypatch, {})
     assert _sitemap_urls(url) == []
     assert searched == [url]
+
+
+def _sitemap_site(
+    monkeypatch: pytest.MonkeyPatch,
+    pages: dict[str, str],
+    robots: list[str] | None = None,
+) -> None:
+    """Run the real walk over `pages`, a stand-in for the site's sitemap files."""
+    monkeypatch.setattr(_map, "_SITEMAP_DELAY_SECONDS", 0)
+    monkeypatch.setattr("trafilatura.sitemaps.is_live_page", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "trafilatura.sitemaps.find_robots_sitemaps", lambda *a, **k: robots or []
+    )
+    monkeypatch.setattr(
+        "trafilatura.sitemaps.fetch_url", lambda url, **k: pages.get(url, "")
+    )
+
+
+def _urlset(*urls: str) -> str:
+    locs = "".join(f"<url><loc>{u}</loc></url>" for u in urls)
+    return (
+        '<?xml version="1.0"?><urlset '
+        f'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>'
+    )
+
+
+def _sitemapindex(*urls: str) -> str:
+    locs = "".join(f"<sitemap><loc>{u}</loc></sitemap>" for u in urls)
+    return (
+        '<?xml version="1.0"?><sitemapindex '
+        f'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</sitemapindex>'
+    )
+
+
+def _big_site() -> dict[str, str]:
+    children = [f"https://www.example.com/sitemap-{i}.xml" for i in range(5)]
+    pages = {"https://www.example.com/sitemap.xml": _sitemapindex(*children)}
+    for i, child in enumerate(children):
+        pages[child] = _urlset(f"https://www.example.com/page-{i}")
+    return pages
+
+
+def test_map_notes_sitemaps_left_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    _sitemap_site(monkeypatch, _big_site())
+    records = list(
+        _map.map_site("https://www.example.com/", source="sitemap", size="quick")
+    )
+    # The index plus two children fit the quick cap of 3; three children don't.
+    assert [r["source"] for r in records] == ["sitemap", "sitemap", "notice"]
+    assert "left at least 3 unread" in records[-1]["note"]
+
+
+def test_map_is_silent_when_every_sitemap_was_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _sitemap_site(monkeypatch, _big_site())
+    records = list(
+        _map.map_site("https://www.example.com/", source="sitemap", size="standard")
+    )
+    assert len(records) == 5 and all(r["source"] == "sitemap" for r in records)
+
+
+def test_map_unfound_guesses_are_not_unread_sitemaps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap stops the walk among guessed locations here, which says nothing
+    about the site having more."""
+    _sitemap_site(
+        monkeypatch,
+        {"https://www.example.com/sitemap.xml": _urlset("https://www.example.com/a")},
+    )
+    records = list(
+        _map.map_site("https://www.example.com/", source="sitemap", size="quick")
+    )
+    assert [r["url"] for r in records] == ["https://www.example.com/a"]
+
+
+def test_map_robots_sitemaps_left_unread_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listed = [f"https://www.example.com/s{i}.xml" for i in range(4)]
+    _sitemap_site(monkeypatch, {u: _urlset(u + "-page") for u in listed}, robots=listed)
+    records = list(
+        _map.map_site("https://www.example.com/", source="sitemap", size="quick")
+    )
+    assert "left at least 1 unread" in records[-1]["note"]
+
+
+def test_map_page_url_still_narrows_walk_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _sitemap_site(
+        monkeypatch,
+        {
+            "https://www.example.com/sitemap.xml": _urlset(
+                "https://www.example.com/blog/a", "https://www.example.com/shop/b"
+            )
+        },
+    )
+    assert _sitemap_urls("https://www.example.com/blog/") == [
+        "https://www.example.com/blog/a"
+    ]
+
+
+def test_map_keeps_one_final_notice_when_the_limit_also_stops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _sitemap_site(monkeypatch, _big_site())
+    records = list(
+        _map.map_site(
+            "https://www.example.com/", source="sitemap", size="quick", limit=2
+        )
+    )
+    assert [r["source"] for r in records] == ["sitemap", "sitemap", "notice"]
+    assert "unread" in records[-1]["note"]

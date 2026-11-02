@@ -8,7 +8,7 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ _MAX_BODY_BYTES = 512 * 1024
 _DISK_TTL_SECONDS = 86400  # 24 h
 _SPIDER_STEP_PAGES = 5
 _SITEMAP_GUESSES = ("sitemap.xml", "sitemap_index.xml", "wp-sitemap.xml")
+_SITEMAP_DELAY_SECONDS = 2.0  # between sitemaps on one site, as trafilatura waits
 NOTICE_SOURCE = "notice"
 
 
@@ -202,43 +203,86 @@ def _iter_llmstxt(url: str) -> Iterator[dict[str, Any]]:
         }
 
 
-def _subdirectory_sitemap_urls(
-    url: str, sitemap_search: Callable[..., list[str]], max_sitemaps: int
-) -> list[str]:
+def _walk_sitemaps(url: str, *, max_sitemaps: int) -> tuple[list[str], int]:
+    """Returns the URLs found and how many discovered sitemaps were left unread.
+
+    Follows ``trafilatura.sitemaps.sitemap_search`` step by step, because that
+    gives no sign of `max_sitemaps` having stopped it. Guessed locations don't
+    count as unread: they mostly don't exist.
+    """
+    from trafilatura.sitemaps import (
+        GUESSES,
+        SitemapObject,
+        filter_urls,
+        find_robots_sitemaps,
+        get_hostinfo,
+        is_live_page,
+    )
+
+    domain, base = get_hostinfo(url)
+    if domain is None or not is_live_page(base):
+        return [], 0
+    guesses: list[str] = []
+    if url.endswith((".gz", "sitemap", ".xml")):
+        queue_ = [url]
+    else:
+        queue_ = find_robots_sitemaps(base)
+        if not queue_:
+            # Reversed: the queue is consumed from the end, likeliest guess first.
+            queue_ = guesses = [f"{base}/{g}" for g in reversed(GUESSES)]
+    walk = SitemapObject(base, domain, list(queue_), None)
+    while walk.sitemap_urls and len(walk.seen) < max_sitemaps:
+        walk.current_url = walk.sitemap_urls.pop()
+        walk.fetch()
+        walk.process()
+        walk.sitemap_urls = [s for s in walk.sitemap_urls if s not in walk.seen]
+        if walk.sitemap_urls and len(walk.seen) < max_sitemaps:
+            time.sleep(_SITEMAP_DELAY_SECONDS)
+    urls = walk.urls
+    # A page's URL narrows the results to what's under it.
+    if url != queue_[0] and len(url) > len(base) + 2:
+        urls = filter_urls(urls, url)
+    return urls, len([s for s in walk.sitemap_urls if s not in guesses])
+
+
+def _walk_subdirectory_sitemaps(
+    url: str, *, max_sitemaps: int
+) -> tuple[list[str], int]:
     """A site installed under a path keeps its robots.txt and sitemaps there, but
-    trafilatura only looks at the host's root."""
+    the walk only looks at the host's root."""
     from trafilatura.sitemaps import find_robots_sitemaps
 
     parts = urlsplit(url)
     path = parts.path.rstrip("/")
     if not path or path.endswith((".xml", ".gz", "sitemap")):
-        return []
+        return [], 0
     base = f"{parts.scheme}://{parts.netloc}{path}"
     for candidate in find_robots_sitemaps(base) or [
         f"{base}/{name}" for name in _SITEMAP_GUESSES
     ]:
-        urls = sitemap_search(candidate, target_lang=None, max_sitemaps=max_sitemaps)
+        urls, unread = _walk_sitemaps(candidate, max_sitemaps=max_sitemaps)
         if urls:
-            return urls
-    return []
+            return urls, unread
+    return [], 0
 
 
 def _iter_sitemap(url: str, *, max_sitemaps: int) -> Iterator[dict[str, Any]]:
     try:
-        from trafilatura.sitemaps import sitemap_search
-    except Exception as exc:  # pragma: no cover - import guard
-        _warn(f"sitemap import failed: {exc}")
-        return
-    try:
-        urls = sitemap_search(url, target_lang=None, max_sitemaps=max_sitemaps) or []
+        urls, unread = _walk_sitemaps(url, max_sitemaps=max_sitemaps)
         if not urls:
-            urls = _subdirectory_sitemap_urls(url, sitemap_search, max_sitemaps)
+            urls, unread = _walk_subdirectory_sitemaps(url, max_sitemaps=max_sitemaps)
     except Exception as exc:
         _warn(f"sitemap discovery failed for {url}: {exc}")
         return
     for u in urls:
         if u:
             yield {"url": u, "source": "sitemap", "lastmod": None}
+    if unread:
+        yield _notice(
+            url,
+            f"read {max_sitemaps} sitemaps and left at least {unread} unread, so "
+            "more URLs probably exist; a larger size reads more",
+        )
 
 
 def _iter_feeds(url: str) -> Iterator[dict[str, Any]]:
@@ -320,8 +364,8 @@ def map_site(
     default ``limit`` and ``budget``, what ``source="all"`` covers, how far the
     sitemap walk and the spider go, and how much of an llms.txt body is kept.
 
-    When the limit or budget cuts discovery short, a final ``source="notice"``
-    record says so in its ``note``.
+    When the limit, the budget or the size's sitemap cap cuts discovery short, a
+    final ``source="notice"`` record says so in its ``note``.
 
     ``exclude`` is a list of substring patterns; any URL containing one of
     them is filtered out. Matching is case-sensitive against the full URL.
@@ -340,6 +384,8 @@ def map_site(
     seen: set[str] = set()
     emitted = 0
     patterns = tuple(p for p in (exclude or ()) if p)
+    notes: list[str] = []
+    stopped = False
 
     streams: list[Iterator[dict[str, Any]]] = []
     if "llmstxt" in sources:
@@ -358,6 +404,9 @@ def map_site(
     for stream in streams:
         try:
             for record in _until(stream, deadline):
+                if record.get("source") == NOTICE_SOURCE:
+                    notes.append(record["note"])
+                    continue
                 u = record.get("url")
                 if not u or u in seen:
                     continue
@@ -365,10 +414,9 @@ def map_site(
                 if patterns and any(p in u for p in patterns):
                     continue
                 if emitted >= limit:
-                    yield _notice(
-                        url, f"stopped at the limit of {limit} URLs; more exist"
-                    )
-                    return
+                    notes.append(f"stopped at the limit of {limit} URLs; more exist")
+                    stopped = True
+                    break
                 # llms.txt is the only map source that hands the agent a *body*
                 # rather than just a URL — and it is written for LLMs, which makes
                 # it the highest-value place on this path to smuggle instructions.
@@ -384,9 +432,11 @@ def map_site(
                 yield record
                 emitted += 1
         except _BudgetExceeded:
-            yield _notice(
-                url, f"stopped at the budget of {budget:g}s; results may be partial"
+            notes.append(
+                f"stopped at the budget of {budget:g}s; results may be partial"
             )
-            return
-        if emitted >= limit:
-            return
+            stopped = True
+        if stopped or emitted >= limit:
+            break
+    if notes:
+        yield _notice(url, "; ".join(notes))

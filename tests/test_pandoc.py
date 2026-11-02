@@ -244,6 +244,19 @@ def test_pandoc_redirect_detection(
         _stub_http("", 200, {"_url_final": redirect_url}),
     )
 
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"PK\x03\x04fake-epub")
+
+    real_client = httpx.AsyncClient
+
+    def patched_client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(fetch_mod.httpx, "AsyncClient", patched_client)
+
     cache = Cache(str(tmp_path / "cache.db"))
     try:
         result = asyncio.run(

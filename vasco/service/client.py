@@ -69,11 +69,11 @@ class DaemonClient:
                 # Daemon isn't listening — fail fast, no retry, so callers fall
                 # back to in-process without a latency penalty.
                 raise DaemonUnavailable(str(exc)) from exc
-            except (
-                TimeoutError,
-                asyncio.IncompleteReadError,
-                ConnectionResetError,
-            ) as exc:
+            except TimeoutError as exc:
+                # The daemon may still be working: re-sending would run the request
+                # a second time and double the wait.
+                raise DaemonUnavailable(str(exc)) from exc
+            except (asyncio.IncompleteReadError, ConnectionResetError) as exc:
                 # Connection dropped mid-request (e.g. a redeploy) — reconnect once.
                 last_exc = exc
                 if attempt == 0:

@@ -474,3 +474,25 @@ def test_metadata_view_drops_content_keeps_scalars_and_signals() -> None:
         "signals": {"em_dash_density": 0.1},
     }
     assert env["quality"]["products"], "the original envelope stays intact"
+
+
+async def test_client_does_not_resend_a_timed_out_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connections = 0
+
+    async def silent(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        nonlocal connections
+        connections += 1
+        await reader.read()
+        writer.close()
+
+    monkeypatch.setattr(client_mod, "_READ_TIMEOUT", 0.05)
+    sock = tmp_path / "s.sock"
+    server = await asyncio.start_unix_server(silent, path=str(sock))
+    async with server:
+        with pytest.raises(client_mod.DaemonUnavailable):
+            await client_mod.DaemonClient(sock).request("fetch", url="https://x")
+    assert connections == 1

@@ -97,6 +97,75 @@ def test_only_urlless_rows_counts_as_empty(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize(
+    ("region", "sent"),
+    [("pt-br", "br-pt"), ("PT-BR", "br-pt"), ("br-pt", "br-pt"), ("us-en", "us-en")],
+)
+def test_region_reaches_ddgs_in_country_language_order(
+    monkeypatch: pytest.MonkeyPatch, region: str, sent: str
+) -> None:
+    seen: list[str] = []
+
+    class _DDGS:
+        def __enter__(self) -> _DDGS:
+            return self
+
+        def __exit__(self, *a: Any) -> None: ...
+
+        def text(self, query: str, **kw: Any) -> Any:
+            seen.append(kw["region"])
+            return [_HIT]
+
+    monkeypatch.setattr("ddgs.DDGS", _DDGS)
+    list(DdgsBackend().search("q", region=region))
+    assert seen == [sent]
+
+
+def test_duckduckgo_gets_the_region_as_kl() -> None:
+    """Guards the override of a ddgs internal: this should fail, not quietly go
+    back to US results, if ddgs changes how it builds the payload."""
+    from ddgs.engines import ENGINES
+
+    ddgs_mod._honor_region()
+    engine = ENGINES["text"]["duckduckgo"]()
+    payload = engine.build_payload(
+        query="q", region="br-pt", safesearch="moderate", timelimit=None, page=1
+    )
+    assert payload["kl"] == "br-pt"
+    assert payload["q"] == "q"
+
+
+@pytest.mark.parametrize(
+    ("region", "host"),
+    [("br-pt", "br.search.yahoo.com"), ("us-en", "search.yahoo.com")],
+)
+def test_yahoo_host_follows_the_region(region: str, host: str) -> None:
+    from urllib.parse import urlsplit
+
+    from ddgs.engines import ENGINES
+
+    ddgs_mod._honor_region()
+    engine = ENGINES["text"]["yahoo"]()
+    engine.build_payload(
+        query="q", region=region, safesearch="moderate", timelimit=None, page=1
+    )
+    assert urlsplit(engine.search_url).hostname == host
+
+
+def test_bing_ad_links_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    ad = {"title": "ad", "href": "https://www.bing.com/aclick?ld=x", "body": "b"}
+    _scripted_ddgs(monkeypatch, [[ad, _HIT]])
+    assert [r.url for r in DdgsBackend().search("q")] == ["https://example.com/"]
+
+
+def test_max_results_still_holds_after_asking_for_extra_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [{"title": "t", "href": f"https://example.com/{i}"} for i in range(5)]
+    _scripted_ddgs(monkeypatch, [rows])
+    assert len(list(DdgsBackend().search("q", max_results=2))) == 2
+
+
 def test_pinned_backends_are_all_enabled_in_ddgs() -> None:
     """ddgs silently skips (with a warning) an engine it has disabled, so a
     dropped engine should fail here rather than quietly shrink coverage."""

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from functools import cache
 from time import sleep
+from typing import Any
 
-from vasco.search import SearchResult
+from vasco.search import SearchResult, canonical_region
 
 # Pinned rather than `backend="auto"`, which prepends grokipedia (xAI's Wikipedia
 # clone) whose flaky typeahead API can raise DDGSException for the whole call.
@@ -19,6 +21,45 @@ _DDGS_TEXT_BACKENDS = "duckduckgo,mojeek,yahoo,wikipedia"
 # often transient: in a replay of 40 empty queries, 26 returned results on retry.
 _EMPTY_RETRY_DELAY_SECONDS = 4.0
 
+_BING_AD_PREFIX = "https://www.bing.com/aclick?"
+# Extra rows to ask for, so dropping ads still leaves `max_results`. Up to 3 of the
+# top 10 were ads when tested.
+_AD_ROWS_ALLOWANCE = 5
+
+# Only hosts tested to change the results. Other regions keep Yahoo's US pages.
+_YAHOO_REGION_HOSTS = {"br-pt": "br.search.yahoo.com"}
+
+
+@cache
+def _honor_region() -> None:
+    """Make the two engines that answer most searches respect `region`, which ddgs
+    doesn't: for br-pt both returned the same US pages as us-en. ddgs reads engine
+    classes from this registry, so swapping the entries is the only way in."""
+    from ddgs.engines import ENGINES
+    from ddgs.engines.duckduckgo import Duckduckgo
+    from ddgs.engines.yahoo import Yahoo
+
+    class _RegionalDuckduckgo(Duckduckgo):
+        # ddgs sends the region as `l`, which DuckDuckGo ignores.
+        def build_payload(
+            self, query: str, region: str, *args: Any, **kwargs: Any
+        ) -> dict[str, Any]:
+            payload = super().build_payload(query, region, *args, **kwargs)
+            return {**payload, "kl": region}
+
+    class _RegionalYahoo(Yahoo):
+        # ddgs ignores the region here; Yahoo goes by the host instead.
+        def build_payload(
+            self, query: str, region: str, *args: Any, **kwargs: Any
+        ) -> dict[str, Any]:
+            payload = super().build_payload(query, region, *args, **kwargs)
+            if host := _YAHOO_REGION_HOSTS.get(region):
+                self.search_url = self.search_url.replace("search.yahoo.com", host)
+            return payload
+
+    ENGINES["text"]["duckduckgo"] = _RegionalDuckduckgo
+    ENGINES["text"]["yahoo"] = _RegionalYahoo
+
 
 def _text_search(
     query: str, *, max_results: int, region: str, time: str | None
@@ -26,6 +67,7 @@ def _text_search(
     from ddgs import DDGS
     from ddgs.exceptions import DDGSException
 
+    _honor_region()
     try:
         with DDGS() as client:
             items = list(
@@ -33,7 +75,7 @@ def _text_search(
                     query,
                     region=region,
                     timelimit=time,
-                    max_results=max_results,
+                    max_results=max_results + _AD_ROWS_ALLOWANCE,
                     backend=_DDGS_TEXT_BACKENDS,
                 )
             )
@@ -49,8 +91,13 @@ def _text_search(
         )
         for item in items
     ]
-    # A row without a URL gives the agent nothing to fetch.
-    return [result for result in results if result.url]
+    # A row without a URL gives the agent nothing to fetch, and Yahoo's Bing ad
+    # links get past ddgs's own filter.
+    return [
+        result
+        for result in results
+        if result.url and not result.url.startswith(_BING_AD_PREFIX)
+    ][:max_results]
 
 
 class DdgsBackend:
@@ -66,7 +113,11 @@ class DdgsBackend:
         from ddgs.exceptions import DDGSException
 
         full_query = f"site:{site} {query}" if site else query
-        kwargs = {"max_results": max_results, "region": region, "time": time}
+        kwargs = {
+            "max_results": max_results,
+            "region": canonical_region(region),
+            "time": time,
+        }
         results = _text_search(full_query, **kwargs)
         if not results:
             sleep(_EMPTY_RETRY_DELAY_SECONDS)

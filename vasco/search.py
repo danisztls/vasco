@@ -30,6 +30,14 @@ class Searcher(Protocol):
     ) -> Iterator[SearchResult]: ...
 
 
+def canonical_region(region: str) -> str:
+    """Lowercase a region, and turn the `pt-br` locale spelling into `<country>-
+    <language>`: read literally it means Portugal, in Breton, and ddgs then
+    searches br.wikipedia.org."""
+    normalized = region.strip().lower()
+    return "br-pt" if normalized == "pt-br" else normalized
+
+
 def _guard_result(result: SearchResult, cfg: Any | None) -> SearchResult:
     """Strip an encoded prompt payload out of one search result.
 

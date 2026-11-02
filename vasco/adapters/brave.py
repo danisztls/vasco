@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from vasco.search import SearchResult
+from vasco.search import SearchResult, canonical_region
 
 _ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _TIMEOUT_SECONDS = 10.0
@@ -131,9 +131,7 @@ class BraveSearchError(RuntimeError):
 
 
 def _region_params(region: str) -> dict[str, str]:
-    normalized = region.strip().lower()
-    # Read literally, the locale spelling would mean Portugal, in Breton.
-    normalized = {"pt-br": "br-pt"}.get(normalized, normalized)
+    normalized = canonical_region(region)
     code, _, language = normalized.partition("-")
     country = _COUNTRY_ALIASES.get(code, code.upper())
     params = {"country": country if country in _COUNTRIES else "ALL"}

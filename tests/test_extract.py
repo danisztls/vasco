@@ -239,3 +239,25 @@ async def test_non_ascii_query_finds_its_passage(
     _patch_fetch(monkeypatch, _success_envelope(markdown=f"{paragraph}\n\n{filler}"))
     result = await extract("https://example.com/a", query=query)
     assert [p["text"] for p in result["passages"]] == [paragraph]
+
+
+async def test_short_page_match_survives_zero_idf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two passages with the term in one: Okapi IDF is exactly zero.
+    match = "The Lord is my shepherd and I shall not want for anything today."
+    other = "A completely different paragraph about some other subject matter."
+    _patch_fetch(monkeypatch, _success_envelope(markdown=f"{match}\n\n{other}"))
+    result = await extract("https://example.com/a", query="shepherd")
+    assert [p["text"] for p in result["passages"]] == [match]
+    assert result["passages"][0]["score"] == 0
+
+
+async def test_more_shared_terms_breaks_score_ties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    one = "The shepherd walked along the road through the long quiet valley."
+    both = "The shepherd and the flock walked along the road through the valley."
+    _patch_fetch(monkeypatch, _success_envelope(markdown=f"{one}\n\n{both}"))
+    result = await extract("https://example.com/a", query="shepherd flock")
+    assert result["passages"][0]["text"] == both

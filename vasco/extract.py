@@ -151,13 +151,19 @@ def bm25_scores(corpus_tokens: list[list[str]], query_tokens: list[str]) -> list
 
 def _rank_bm25(passages: list[str], query: str, *, top: int) -> list[tuple[int, float]]:
     corpus_tokens = [_tokenize(p) for p in passages]
-    scores = bm25_scores(corpus_tokens, _tokenize(query))
-    ranked = sorted(
-        ((i, scores[i]) for i in range(len(passages))),
-        key=lambda x: x[1],
+    query_tokens = _tokenize(query)
+    scores = bm25_scores(corpus_tokens, query_tokens)
+    # Okapi IDF is zero or negative for a term in half the passages or more, which
+    # on a short page is any term at all. So a hit is a passage sharing a query
+    # term, whatever its score, and shared terms break the ties.
+    query_terms = set(query_tokens)
+    shared = [len(query_terms.intersection(tokens)) for tokens in corpus_tokens]
+    hits = sorted(
+        (i for i in range(len(passages)) if shared[i]),
+        key=lambda i: (scores[i], shared[i]),
         reverse=True,
     )
-    return [(i, s) for i, s in ranked if s > 0][:top]
+    return [(i, max(scores[i], 0.0)) for i in hits[:top]]
 
 
 def _rank_semantic(

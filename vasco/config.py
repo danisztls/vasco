@@ -222,10 +222,11 @@ class ShopeeCfg:
 
 @dataclass(frozen=True)
 class AmazonCfg:
-    """Amazon BR adapter knobs. `currency`/`language` only label the envelope; the
-    parser reads the page's own rendered DOM (Amazon embeds no schema.org JSON-LD).
-    Scope is search + product pages on amazon.com.br (other-country domains and
-    non-listing URLs fall through to normal fetch)."""
+    """Amazon adapter knobs. `currency`/`language` only label amazon.com.br envelopes
+    (amazon.com is always USD/en-US); the parser reads the page's own rendered DOM
+    (Amazon embeds no schema.org JSON-LD). Scope is search + product pages on
+    amazon.com.br and amazon.com (other-country domains and non-listing URLs fall
+    through to normal fetch)."""
 
     currency: str = "BRL"
     language: str = "pt-BR"

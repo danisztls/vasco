@@ -215,7 +215,7 @@ Cache lives at `$XDG_CACHE_HOME/vasco/cache.db`, keyed by `urls.normalize_url` â
 Some pages aren't articles. For those, Vasco routes to a source-specific adapter that parses a structural anchor into normalized data in `quality.*` instead of prose:
 
 - **Media / reference**: YouTube (transcripts, plus channel/playlist/search listings), Wikimedia (Enterprise API), Scholar (DOI / PII / PubMed / arXiv via open scholarly APIs, with OA full-text pull)
-- **Marketplaces**: MercadoLivre, Amazon BR, AliExpress, Shopee BR, Petlove, OLX, Google Shopping, generic **Shopify** (any store, via platform JSON endpoints)
+- **Marketplaces**: MercadoLivre, Amazon (BR, US), AliExpress, Shopee BR, Petlove, OLX, Google Shopping, generic **Shopify** (any store, via platform JSON endpoints)
 - **Real estate**: vivareal
 - **Dev trackers**: GitLab (public `/api/v4`), Phabricator/Phorge (public tasks)
 - **Enrichment**: Steam store pages gain IsThereAnyDeal historical pricing when a key is configured

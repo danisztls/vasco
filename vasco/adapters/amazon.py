@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Daniel de Souza
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Amazon marketplace adapter (Brazil).
+"""Amazon marketplace adapter (Brazil and US).
 
 Amazon is one of Brazil's largest marketplaces, and like the other
 structured-data adapters its useful payload — price, rating, brand, availability,
@@ -22,29 +22,32 @@ markup-stable across themes:
   ``#landingImage``). Feature bullets and the detail/spec tables are lifted
   best-effort and never fail the parse.
 
-Scope is **search + product pages only** on ``amazon.com.br``; the homepage,
-category/browse nodes, cart, and account URLs aren't matched by ``is_amazon_url``
-(they carry no extractable listing), so they fall through to the normal fetch
-path. Other-country Amazon domains (``amazon.com``, ``amazon.co.uk``, …) are out of
-scope — prices/labels here assume the BR pt-BR storefront.
+Scope is **search + product pages only** on ``amazon.com.br`` and ``amazon.com``;
+the homepage, category/browse nodes, cart, and account URLs aren't matched by
+``is_amazon_url`` (they carry no extractable listing), so they fall through to the
+normal fetch path. Both stores share their markup and differ in number format,
+currency and label language (``_Store``). Other countries (``amazon.co.uk``, …) have
+no ``_Store`` and fall through, as do Amazon's other sites (``aws.amazon.com``, …).
 
 Public surface mirrors the other adapters:
-- ``is_amazon_url(url)`` — match an Amazon BR search/product URL.
+- ``is_amazon_url(url)`` — match an Amazon search/product URL.
 - ``fetch_amazon(url, *, deadline, cfg=None, fetch_html=None)`` — return a v0.1
   envelope (``mode_used="amazon"``, ``content_type="application/x-amazon"``);
   never raises — returns a failure envelope on any fetch/parse failure.
 
-Amazon serves full structured HTML on the plain http tier, so — unlike the
+Amazon usually serves full structured HTML on the plain http tier, so — unlike the
 bot-challenged marketplaces — it is **not** seeded to the browser tier in
-``vasco/strategy.py``; the shared escalation chain still escalates http → browser
-on its own if Amazon throws its homegrown robot/captcha wall (recognised by
-``fetch.bot_detect`` → ``BLOCKED_CAPTCHA``).
+``vasco/strategy.py``; the shared escalation chain escalates http → browser on its
+own when Amazon throws its robot/captcha wall (``BLOCKED_CAPTCHA``) or the Akamai
+interstitial (``BLOCKED_BOT``), both recognised by ``fetch.bot_detect``.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
@@ -54,9 +57,6 @@ from ..errors import AdapterParseError, FailureReason
 from . import _common
 from ._common import (
     HtmlFetcher,
-)
-from ._common import (
-    as_int as _as_int,
 )
 from ._common import (
     brl_to_num as _brl_to_num,
@@ -104,10 +104,12 @@ _SKIP_SPEC_KEYS: frozenset[str] = frozenset(
 # the regex is unanchored so the common slug form (/kindle-paperwhite/dp/B0CFPL6CFY)
 # matches too.
 _ASIN_RE = re.compile(r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})(?:[/?]|$)")
-# A review-count aria-label / text starts with the number then the BR word
-# ("8.399 classificações" / "8.400 avaliações"); the rating aria starts with
-# "4,8 de 5 …" so anchoring on the leading number + word keeps them apart.
-_REVIEW_COUNT_RE = re.compile(r"^\s*[\d.,]+\s+(?:classifica|avalia)", re.IGNORECASE)
+# A review-count aria-label / text starts with the number then the word
+# ("8.399 classificações" / "8.400 avaliações" / "22,978 ratings"); the rating aria
+# starts with "4,8 de 5 …" so anchoring on the leading number + word keeps them apart.
+_REVIEW_COUNT_RE = re.compile(
+    r"^\s*[\d.,]+\s+(?:classifica|avalia|rating|review)", re.IGNORECASE
+)
 # A rating ("4,8 de 5 estrelas" / "4,8 de 5"): grab the leading 0-5 decimal.
 _RATING_RE = re.compile(r"(\d(?:[.,]\d)?)")
 # Amazon CDN size/format transform suffix ("81-vCHKJb1L._AC_SL1500_.jpg" →
@@ -115,6 +117,65 @@ _RATING_RE = re.compile(r"(\d(?:[.,]\d)?)")
 _IMG_SUFFIX_RE = re.compile(
     r"\._[A-Za-z0-9,_-]+_\.(jpe?g|png|gif|webp)$", re.IGNORECASE
 )
+_USD_RE = re.compile(r"\s*\$?\s*(\d[\d,]*(?:\.\d+)?)\s*")
+
+
+def _usd_to_num(text: Any) -> int | float | None:
+    """ "$1,299.99" → 1299.99. Any other currency ("BRL 1,034.10") → None: a store
+    can quote a foreign visitor in their own money, and the envelope labels this
+    store's prices USD, so a missing price beats a mislabelled one."""
+    m = _USD_RE.fullmatch(str(text))
+    if not m:
+        return None
+    f = float(m.group(1).replace(",", ""))
+    return int(f) if f.is_integer() else f
+
+
+def _fmt_usd(price: Any, _currency: str) -> str:
+    return "Price unavailable" if price is None else f"${price:,.2f}"
+
+
+@dataclass(frozen=True)
+class _Store:
+    """What differs between storefronts; the page markup doesn't."""
+
+    currency: str
+    language: str
+    money: Callable[[Any], int | float | None]
+    fmt_price: Callable[[Any, str], str]
+    products: str
+    empty: str
+    list_price: str
+    reviews: str
+    brand: str
+    sponsored: str
+
+
+_BR = _Store(
+    currency="BRL",
+    language="pt-BR",
+    money=_brl_to_num,
+    fmt_price=_fmt_price,
+    products="{n} produtos",
+    empty="Nenhum produto encontrado.",
+    list_price="de",
+    reviews="avaliações",
+    brand="Marca",
+    sponsored="patrocinado",
+)
+_US = _Store(
+    currency="USD",
+    language="en-US",
+    money=_usd_to_num,
+    fmt_price=_fmt_usd,
+    products="{n} products",
+    empty="No products found.",
+    list_price="was",
+    reviews="ratings",
+    brand="Brand",
+    sponsored="sponsored",
+)
+_STORES: dict[str, _Store] = {"amazon.com.br": _BR, "amazon.com": _US}
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +183,11 @@ _IMG_SUFFIX_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 
-def _is_br_host(url: str) -> bool:
+def _store(url: str) -> _Store | None:
+    """The storefront ``url`` belongs to. Exact hosts, because amazon.com's other
+    subdomains are different sites (``aws.amazon.com``, ``developer.amazon.com``)."""
     host = _host(url)
-    return host == "amazon.com.br" or host.endswith(".amazon.com.br")
+    return _STORES.get(host.removeprefix("www.").removeprefix("m."))
 
 
 def _asin(url: str) -> str | None:
@@ -156,12 +219,12 @@ def _page_type(url: str) -> str | None:
 
 
 def is_amazon_url(url: str) -> bool:
-    """Match an Amazon BR *search* or *product* URL only.
+    """Match an Amazon *search* or *product* URL on a known storefront only.
 
     Non-listing Amazon URLs (home, browse nodes, cart, account) carry no
     extractable structured data, so leaving them unmatched lets them fall through
     to the normal fetch path instead of becoming an adapter failure."""
-    return bool(url) and _is_br_host(url) and _page_type(url) is not None
+    return bool(url) and _store(url) is not None and _page_type(url) is not None
 
 
 def _canonical_url(asin: str, base: str) -> str:
@@ -193,23 +256,38 @@ def _rating_num(text: Any) -> float | None:
     return f if 0.0 <= f <= 5.0 else None
 
 
-def _price_from_el(el: Any) -> int | float | None:
+def _count(text: Any) -> int | None:
+    """Review count from either store's digit grouping: "8.399 classificações" and
+    "(22,978)" both group thousands, so every separator goes."""
+    m = re.search(r"\d[\d.,]*", str(text))
+    return int(re.sub(r"\D", "", m.group())) if m else None
+
+
+def _price_from_el(
+    el: Any, money: Callable[[Any], int | float | None] = _brl_to_num
+) -> int | float | None:
     """Number from an ``.a-price`` element, robust to Amazon's two layouts.
 
     Search cards populate the screen-reader ``.a-offscreen`` ("R$ 879,00"), but
     product pages often leave it empty and render the price only in the visible
-    ``.a-price-whole`` ("879,") + ``.a-price-fraction`` ("00") spans. Prefer the
-    offscreen text when present, else reassemble the visible fragments."""
+    ``.a-price-symbol`` ("R$") + ``.a-price-whole`` ("879,") +
+    ``.a-price-fraction`` ("00") spans. Prefer the offscreen text when present,
+    else reassemble the visible fragments."""
     if el is None:
         return None
     off = el.select_one(".a-offscreen")
     if off and off.get_text(strip=True):
-        return _brl_to_num(off.get_text(strip=True))
+        return money(off.get_text(strip=True))
     whole = el.select_one(".a-price-whole")
     if whole is not None:
+        symbol = el.select_one(".a-price-symbol")
         frac = el.select_one(".a-price-fraction")
-        text = whole.get_text(strip=True) + (frac.get_text(strip=True) if frac else "")
-        return _brl_to_num(text)
+        text = (
+            (symbol.get_text(strip=True) if symbol else "")
+            + whole.get_text(strip=True)
+            + (frac.get_text(strip=True) if frac else "")
+        )
+        return money(text)
     return None
 
 
@@ -253,7 +331,7 @@ def _card_review_count(card: Any) -> int | None:
     """Review count from the card's "8.399 classificações" aria-label/text."""
     for el in card.select("[aria-label]"):
         if _REVIEW_COUNT_RE.match(el.get("aria-label") or ""):
-            return _as_int(el["aria-label"])
+            return _count(el["aria-label"])
     return None
 
 
@@ -272,15 +350,18 @@ def _parse_card(card: Any, base: str, position: int) -> dict[str, Any] | None:
     asin = (card.get("data-asin") or "").strip()
     if not asin:
         return None
+    # A US card can open with a brand <h2>; only the title's carries an aria-label.
     title_el = (
-        card.select_one("h2 a span")
+        card.select_one("h2[aria-label]")
+        or card.select_one("h2 a span")
         or card.select_one("h2 span")
         or card.select_one("h2")
     )
     title = title_el.get_text(" ", strip=True) if title_el else None
     icon = card.select_one(".a-icon-alt")
     img = card.select_one("img.s-image")
-    price = _price_from_el(_current_price_el(card))
+    money = (_store(base) or _BR).money
+    price = _price_from_el(_current_price_el(card), money)
     return _compact(
         {
             "position": position,
@@ -289,7 +370,7 @@ def _parse_card(card: Any, base: str, position: int) -> dict[str, Any] | None:
             "asin": asin,
             "price": price,
             "original_price": _list_price(
-                _price_from_el(card.select_one(".a-price.a-text-price")), price
+                _price_from_el(card.select_one(".a-price.a-text-price"), money), price
             ),
             "rating": _rating_num(icon.get_text(strip=True) if icon else None),
             "review_count": _card_review_count(card),
@@ -480,9 +561,10 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
         or soup.select_one("#price_inside_buybox")
         or soup
     )
-    price = _price_from_el(_current_price_el(price_scope))
+    money = (_store(url) or _BR).money
+    price = _price_from_el(_current_price_el(price_scope), money)
     original = _list_price(
-        _price_from_el(price_scope.select_one(".a-price.a-text-price")), price
+        _price_from_el(price_scope.select_one(".a-price.a-text-price"), money), price
     )
 
     rating_el = soup.select_one("#acrPopover") or soup.select_one(
@@ -493,7 +575,7 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
         or (rating_el.get_text(strip=True) if rating_el else None)
     )
     review_el = soup.select_one("#acrCustomerReviewText")
-    review_count = _as_int(review_el.get_text(strip=True)) if review_el else None
+    review_count = _count(review_el.get_text(strip=True)) if review_el else None
 
     availability, in_stock = _availability(soup)
     landing = _landing_image(soup)
@@ -527,23 +609,29 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
 
 
 def _render_markdown(
-    products: list[dict[str, Any]], *, page_type: str, currency: str
+    products: list[dict[str, Any]],
+    *,
+    page_type: str,
+    currency: str,
+    store: _Store = _BR,
 ) -> str:
     if not products:
-        return "# Amazon\n\nNenhum produto encontrado."
+        return f"# Amazon\n\n{store.empty}"
+    fmt = store.fmt_price
     parts: list[str] = []
     if page_type == "search":
-        parts.append(f"{len(products)} produtos")
+        parts.append(store.products.format(n=len(products)))
         parts.append("")
         for i, p in enumerate(products, 1):
             head = (
                 f"{i}. **{p.get('title', '?')}** — "
-                f"{_fmt_price(p.get('price'), p.get('currency') or currency)}"
+                f"{fmt(p.get('price'), p.get('currency') or currency)}"
             )
             extras: list[str] = []
             if p.get("original_price"):
                 extras.append(
-                    f"de {_fmt_price(p['original_price'], p.get('currency') or currency)}"
+                    f"{store.list_price} "
+                    f"{fmt(p['original_price'], p.get('currency') or currency)}"
                 )
             if p.get("rating") is not None:
                 rb = f"{p['rating']}/5"
@@ -551,7 +639,7 @@ def _render_markdown(
                     rb += f" ({p['review_count']})"
                 extras.append(rb)
             if p.get("sponsored"):
-                extras.append("patrocinado")
+                extras.append(store.sponsored)
             if extras:
                 head += " — " + " · ".join(extras)
             parts.append(head)
@@ -561,20 +649,21 @@ def _render_markdown(
     p = products[0]
     parts.append(
         f"# {p.get('title', '?')}\n\n"
-        f"**{_fmt_price(p.get('price'), p.get('currency') or currency)}**"
+        f"**{fmt(p.get('price'), p.get('currency') or currency)}**"
     )
     extras = []
     if p.get("original_price"):
         extras.append(
-            f"de {_fmt_price(p['original_price'], p.get('currency') or currency)}"
+            f"{store.list_price} "
+            f"{fmt(p['original_price'], p.get('currency') or currency)}"
         )
     if p.get("rating") is not None:
         rb = f"{p['rating']}/5"
         if p.get("review_count"):
-            rb += f" ({p['review_count']} avaliações)"
+            rb += f" ({p['review_count']} {store.reviews})"
         extras.append(rb)
     if p.get("brand"):
-        extras.append(f"Marca: {p['brand']}")
+        extras.append(f"{store.brand}: {p['brand']}")
     if p.get("availability"):
         extras.append(p["availability"])
     if extras:
@@ -605,14 +694,15 @@ async def fetch_amazon(
     cfg: Any | None = None,
     fetch_html: HtmlFetcher | None = None,
 ) -> dict[str, Any]:
-    """Fetch an Amazon BR search/product page and return a structured envelope.
+    """Fetch an Amazon search/product page and return a structured envelope.
 
     HTML is obtained via ``fetch_html`` — the main flow injects the shared
-    ``http → browser → mobile`` escalation chain (no wayback tail). Amazon serves
-    full structured HTML on the http tier, so it isn't seeded to the browser tier;
-    the chain escalates on its own if Amazon throws its robot/captcha wall. Without
-    an injected fetcher it falls back to a browser-only fetch."""
+    ``http → browser → mobile`` escalation chain (no wayback tail). Amazon usually
+    serves full structured HTML on the http tier, so it isn't seeded to the browser
+    tier; the chain escalates on its own if Amazon throws a wall or a challenge.
+    Without an injected fetcher it falls back to a browser-only fetch."""
     page_type = _page_type(url) or "search"
+    store = _store(url) or _BR
 
     got = await _common.acquire_html(
         url,
@@ -646,9 +736,14 @@ async def fetch_amazon(
 
     from .. import io as io_mod
 
-    amazon = getattr(getattr(cfg, "adapters", None), "amazon", None)
-    currency = getattr(amazon, "currency", None) or "BRL"
-    language = getattr(amazon, "language", None) or "pt-BR"
+    # The configured labels describe the BR store; US prices are parsed as dollars.
+    amazon = (
+        getattr(getattr(cfg, "adapters", None), "amazon", None)
+        if store is _BR
+        else None
+    )
+    currency = getattr(amazon, "currency", None) or store.currency
+    language = getattr(amazon, "language", None) or store.language
     for p in products:
         p.setdefault("currency", currency)
 
@@ -656,11 +751,13 @@ async def fetch_amazon(
     # result set (the rot case raises above). Product pages always yield one.
     warnings = ["no_results"] if page_type == "search" and not products else []
 
-    markdown = _render_markdown(products, page_type=page_type, currency=currency)
+    markdown = _render_markdown(
+        products, page_type=page_type, currency=currency, store=store
+    )
     title = (
         products[0].get("title")
         if page_type == "product" and products
-        else f"Amazon: {len(products)} produtos"
+        else f"Amazon: {store.products.format(n=len(products))}"
     )
     return envelope.success_envelope(
         base=_base_envelope(url, http_status=status or 200),

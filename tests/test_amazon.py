@@ -19,6 +19,8 @@ def _fx(name: str) -> str:
 
 SEARCH_URL = "https://www.amazon.com.br/s?k=kindle+paperwhite"
 PRODUCT_URL = "https://www.amazon.com.br/kindle-paperwhite/dp/B0CFPL6CFY"
+US_SEARCH_URL = "https://www.amazon.com/s?k=kindle"
+US_PRODUCT_URL = "https://www.amazon.com/dp/B0CFPJYX7P"
 
 
 # --- routing ---------------------------------------------------------------
@@ -39,8 +41,15 @@ PRODUCT_URL = "https://www.amazon.com.br/kindle-paperwhite/dp/B0CFPL6CFY"
         ("https://www.amazon.com.br/gp/cart/view.html", False),
         ("https://www.amazon.com.br/b?node=16243890011", False),
         ("https://www.amazon.com.br/s?rh=node%3A123", False),  # browse, no k=
-        # other-country Amazon is out of scope
-        ("https://www.amazon.com/dp/B0CFPL6CFY", False),
+        # the US store
+        (US_SEARCH_URL, True),
+        (US_PRODUCT_URL, True),
+        ("https://amazon.com/gp/product/B0CFPJYX7P", True),
+        ("https://www.amazon.com/", False),
+        # amazon.com's other subdomains are other sites
+        ("https://aws.amazon.com/s?k=lambda", False),
+        ("https://developer.amazon.com/dp/B0CFPJYX7P", False),
+        # other countries are out of scope
         ("https://www.amazon.co.uk/dp/B0CFPL6CFY", False),
         ("https://example.com/dp/B0CFPL6CFY", False),
         ("", False),
@@ -336,3 +345,89 @@ async def test_fetch_search_empty_is_no_results() -> None:
     assert "failure" not in env
     assert env["quality"]["result_count"] == 0
     assert env["warnings"] == ["no_results"]
+
+
+# --- the US store ----------------------------------------------------------
+
+
+def test_usd_to_num() -> None:
+    assert A._usd_to_num("$1,299.99") == 1299.99
+    assert A._usd_to_num("$199.00") == 199
+    assert A._usd_to_num("199.99") == 199.99
+    # Another currency has no honest USD reading.
+    assert A._usd_to_num("BRL 1,034.10") is None
+    assert A._usd_to_num("R$ 1.034,10") is None
+    assert A._usd_to_num("$0.40/oz") is None
+
+
+def test_price_from_visible_fragments_keeps_the_symbol() -> None:
+    el = A._soup(
+        '<span class="a-price"><span class="a-price-symbol">BRL</span>'
+        '<span class="a-price-whole">1,034.</span>'
+        '<span class="a-price-fraction">10</span></span>'
+    ).select_one(".a-price")
+    assert A._price_from_el(el, A._usd_to_num) is None
+
+
+def test_parse_search_us_cards() -> None:
+    prods = A._parse_search(_fx("us_search.html"), US_SEARCH_URL)
+    assert len(prods) == 4
+    p = prods[0]
+    # Not "Amazon": the card's first <h2> is the brand.
+    assert p["title"].startswith("Kindle Paperwhite 16GB")
+    assert p["url"] == "https://www.amazon.com/dp/B0CFPJYX7P"
+    assert p["price"] == 199.99
+    assert p["rating"] == 4.6
+    assert p["review_count"] == 22978
+    assert "sponsored" not in p
+    ad = prods[3]
+    assert ad["sponsored"] is True
+    assert ad["price"] == 9.99
+    assert ad["original_price"] == 15.99
+
+
+def test_parse_product_us() -> None:
+    [p] = A._parse_product(_fx("us_product.html"), US_PRODUCT_URL)
+    assert p["title"].startswith("Amazon Kindle Paperwhite 16GB")
+    assert p["url"] == US_PRODUCT_URL
+    assert p["price"] == 199.99
+    assert p["rating"] == 4.6
+    assert p["review_count"] == 22978
+    assert p["brand"] == "Amazon Kindle"
+    assert p["availability"] == "In Stock"
+    assert p["in_stock"] is True
+    assert len(p["features"]) == 7
+
+
+async def test_fetch_us_envelope_says_usd_in_english() -> None:
+    async def fake_fetch_html(_url: str):
+        return _fx("us_search.html"), 200, {}, A.FailureReason.OK, "http"
+
+    # The BR labels in config don't reach the US store.
+    class _Amazon:
+        currency = "BRL"
+        language = "pt-BR"
+
+    class _Adapters:
+        amazon = _Amazon()
+
+    class _Cfg:
+        adapters = _Adapters()
+
+    env = await A.fetch_amazon(US_SEARCH_URL, cfg=_Cfg(), fetch_html=fake_fetch_html)
+
+    assert env["quality"]["currency"] == "USD"
+    assert env["quality"]["products"][0]["currency"] == "USD"
+    assert env["language"] == "en-US"
+    assert env["title"] == "Amazon: 4 products"
+    assert env["markdown"].startswith("4 products")
+    assert "$199.99" in env["markdown"]
+    assert "was $15.99" in env["markdown"]
+    assert "sponsored" in env["markdown"]
+
+
+def test_render_markdown_us_without_a_price() -> None:
+    md = A._render_markdown(
+        [{"title": "X"}], page_type="product", currency="USD", store=A._US
+    )
+    assert "Price unavailable" in md

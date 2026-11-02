@@ -164,7 +164,10 @@ async def _handle_client(
                     "ok": False,
                     "error": {"type": type(exc).__name__, "message": str(exc)},
                 }
-            await protocol.write_msg(writer, resp)
+            try:
+                await protocol.write_msg(writer, resp)
+            except ConnectionError:  # the client gave up waiting for this answer
+                break
     finally:
         writer.close()
         with contextlib.suppress(Exception):

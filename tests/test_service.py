@@ -496,3 +496,34 @@ async def test_client_does_not_resend_a_timed_out_request(
         with pytest.raises(client_mod.DaemonUnavailable):
             await client_mod.DaemonClient(sock).request("fetch", url="https://x")
     assert connections == 1
+
+
+async def test_client_gone_before_the_answer_ends_the_connection_quietly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that hangs up mid-request must not escape as an unhandled
+    exception, which asyncio logs with a full traceback."""
+
+    class _Dispatcher:
+        async def handle(self, op: str, params: dict[str, Any]) -> dict[str, Any]:
+            return {}
+
+    class _Writer:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None: ...
+
+    async def lost(writer: Any, msg: dict[str, Any]) -> None:
+        raise ConnectionResetError("Connection lost")
+
+    async def request(reader: Any) -> dict[str, Any]:
+        return {"op": "fetch", "params": {}}
+
+    monkeypatch.setattr(protocol, "write_msg", lost)
+    monkeypatch.setattr(protocol, "read_msg", request)
+    writer = _Writer()
+    await daemon_mod._handle_client(None, writer, _Dispatcher())
+    assert writer.closed

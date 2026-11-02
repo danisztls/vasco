@@ -138,6 +138,25 @@ def test_amazon_robot_markers_fire_regardless_of_size() -> None:
     assert classify(200, stub + big, {}) == FailureReason.BLOCKED_CAPTCHA
 
 
+def test_amazon_404_is_not_a_robot_check() -> None:
+    """Amazon's 404 page carries the robot check's support address."""
+    html = (FIXTURES / "amazon_404.html").read_text()
+    assert "api-services-support@amazon" in html
+    assert classify(404, html, {}) == FailureReason.NOT_FOUND
+
+
+def test_akamai_interstitial_is_blocked_bot() -> None:
+    """A 200 with a proof-of-work script and no content must escalate."""
+    html = (FIXTURES / "akamai_interstitial.html").read_text()
+    assert classify(200, html, {}) == FailureReason.BLOCKED_BOT
+
+
+def test_akamai_markers_on_a_full_page_are_not_a_challenge() -> None:
+    body = "<p>" + ("filler text " * 500) + "</p>"
+    html = f'<a href="/x?bm-verify=abc">x</a>{body}'
+    assert classify(200, html, {}) == FailureReason.OK
+
+
 def test_mercadolivre_account_wall_at_200_is_login_required() -> None:
     """MercadoLivre serves its `/gz/account-verification` interstitial as a 200
     once it flags the session. It must classify as LOGIN_REQUIRED so the adapter

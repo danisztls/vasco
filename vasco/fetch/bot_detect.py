@@ -60,11 +60,21 @@ _ALIBABA_PUNISH_MARKERS: tuple[str, ...] = (
 # puzzle image lives in the opfcaptcha-prod bucket — so none appear on a real
 # product/search page. Like Alibaba's punish page this is checked size-independently
 # (Amazon may serve it 200 or 503) so the chain escalates http → browser (which,
-# with a warm profile, is often served real content).
+# with a warm profile, is often served real content). Amazon's 404 page carries the
+# same support address, so a 404/410 is left to the status branch.
 _AMAZON_ROBOT_MARKERS: tuple[str, ...] = (
     "/errors/validatecaptcha",
     "api-services-support@amazon",
     "opfcaptcha-prod",
+)
+
+# Akamai Bot Manager's interstitial: a 200 with next to no text whose script solves
+# a proof of work, posts it to /_sec/verify and reloads. Plain http can't run it and
+# a browser passes it in seconds, so it must escalate. amazon.com.br serves it to
+# some http requests and not others.
+_AKAMAI_CHALLENGE_MARKERS: tuple[str, ...] = (
+    "/_sec/verify?provider=interstitial",
+    "bm-verify=",
 )
 # Loading recaptcha/hcaptcha api.js alone is NOT a captcha challenge: tons of
 # normal sites embed these libraries for contact-form anti-spam, with the
@@ -219,7 +229,7 @@ def classify(
     # Checked before the status branches (Amazon serves it 200 or 503) and
     # size-independently: the markers are specific to the interstitial, never a
     # real page (see marker-set comment).
-    if _has_any(body_lc, _AMAZON_ROBOT_MARKERS):
+    if status not in (404, 410) and _has_any(body_lc, _AMAZON_ROBOT_MARKERS):
         return FailureReason.BLOCKED_CAPTCHA
 
     # --- Hard HTTP statuses ---------------------------------------------------
@@ -267,6 +277,12 @@ def classify(
             _has_any(body_lc, _CLOUDFLARE_MARKERS) or "cf-mitigated" in hdr_lc
         ) and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS:
             return FailureReason.BLOCKED_CLOUDFLARE
+
+        if (
+            _has_any(body_lc, _AKAMAI_CHALLENGE_MARKERS)
+            and visible_len < _CF_CHALLENGE_MAX_VISIBLE_CHARS
+        ):
+            return FailureReason.BLOCKED_BOT
 
         # A captcha *challenge* page is thin — its body IS the widget. A
         # content-rich page that merely EMBEDS a captcha (a login/comment form's

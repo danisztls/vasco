@@ -93,6 +93,36 @@ def test_fetch_one_round_trips_through_real_cache(
         cache.close()
 
 
+def test_akamai_interstitial_escalates_an_adapter_to_the_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interstitial reaches the adapter as a 200 unless the chain blocks it,
+    and the adapter would then report PARSE_FAILED for a page a browser passes."""
+    challenge = (FIXTURES / "akamai_interstitial.html").read_text()
+    results = (FIXTURES / "amazon" / "search.html").read_text()
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(challenge, 200))
+
+    async def _browser(
+        url: str, *, deadline_monotonic: float, cfg: Any = None, mobile: bool = False
+    ) -> tuple[str, int, dict[str, str]]:
+        return results, 200, {"_url_final": url}
+
+    monkeypatch.setattr(core_mod, "_browser_fetch", _browser)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://www.amazon.com.br/s?k=kindle", cache=cache, deadline=10.0
+            )
+        )
+    finally:
+        cache.close()
+    assert "failure" not in env
+    assert env["mode_used"] == "amazon"
+    assert env["quality"]["result_count"] == 4
+
+
 def test_adapter_rot_returns_parse_failed_with_short_ttl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

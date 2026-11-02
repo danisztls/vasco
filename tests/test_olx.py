@@ -337,6 +337,68 @@ async def test_fetch_list_genuine_empty_warns_no_results() -> None:
     assert "no_results" in env["warnings"]
 
 
+# --- App Router list pages ---------------------------------------------------
+
+
+def test_flight_list_skips_ad_slots_and_empty_arrays() -> None:
+    """The fixture splits the array across two chunks, puts an ad slot among the
+    listings and follows it with an empty ``ads`` array, like the live page."""
+    ads = O._parse_list_ads(_fx("re_list_app_router.html"))
+    assert len(ads) == 3
+    ln = O._normalize_ad(ads[0], vertical="realestate", page_type="list", base_url="x")
+    assert ln["title"] and ln["price"] and ln["uf"] == "MG"
+    assert ln["url"].startswith("https://mg.olx.com.br/")
+    assert ln["attributes"]["area"] == 66
+
+
+def test_flight_list_vehicle_attributes() -> None:
+    ads = O._parse_list_ads(_fx("car_list_app_router.html"))
+    ln = O._normalize_ad(ads[0], vertical="vehicles", page_type="list", base_url="x")
+    assert ln["attributes"]["brand"] == "Chevrolet"
+    assert ln["attributes"]["year"] == 2026
+
+
+def test_flight_stream_without_ads_falls_through_to_rot() -> None:
+    html = '<html><script>self.__next_f.push([1,"0:{}"])</script></html>'
+    with pytest.raises(O.AdapterParseError):
+        O._parse_list_ads(html)
+
+
+async def test_fetch_flight_empty_results_warn_no_results() -> None:
+    html = (
+        "<html><script>self.__next_f.push"
+        '([1,"1:{\\"ads\\":[],\\"x\\":{\\"ads\\":[]}}"])</script></html>'
+    )
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, O.FailureReason.OK, "http"
+
+    env = await O.fetch_olx(RE_LIST_URL, fetch_html=fake_fetch_html)
+    assert "failure" not in env
+    assert env["quality"]["result_count"] == 0
+    assert env["warnings"] == ["no_results"]
+
+
+@pytest.mark.parametrize(
+    "url, warned",
+    [
+        ("https://www.olx.com.br/imoveis/venda/estado-mg", False),
+        ("https://www.olx.com.br/imoveis/venda/estado-sp/sao-paulo-e-regiao/x", True),
+        ("https://www.olx.com.br/imoveis/venda", False),
+    ],
+)
+async def test_fetch_warns_when_olx_ignores_the_location(
+    url: str, warned: bool
+) -> None:
+    html = _fx("re_list_app_router.html")  # every listing is in MG
+
+    async def fake_fetch_html(_url: str):
+        return html, 200, {}, O.FailureReason.OK, "http"
+
+    env = await O.fetch_olx(url, fetch_html=fake_fetch_html)
+    assert ("location_not_applied" in env["warnings"]) is warned
+
+
 async def test_fetch_category_hub_short_circuits_without_fetch() -> None:
     """A bare category-landing hub (/imoveis/estado-sp) is App-Router with no
     listings: fetch_olx returns CATEGORY_LANDING *without* fetching, and never

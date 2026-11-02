@@ -7,8 +7,10 @@ OLX is Brazil's dominant classifieds marketplace. Like the other structured-data
 adapters, the useful payload is embedded JSON that the default trafilatura
 pipeline flattens to lossy prose. OLX exposes it cleanly:
 
-- **List/search pages** (``www.olx.com.br/<vertical>/...``) embed a Next.js
-  ``<script id="__NEXT_DATA__">`` blob with ``props.pageProps.ads[]``.
+- **List/search pages** (``www.olx.com.br/<vertical>/...``) carry an ``ads[]``
+  array in the Next.js App Router's ``self.__next_f.push`` stream. The older
+  ``<script id="__NEXT_DATA__">`` blob (``props.pageProps.ads[]``) is still
+  accepted when a page ships it.
 - **Detail/ad pages** (``<region>.olx.com.br/.../<slug>-<listId>``) use a
   different stack: a ``<script id="initial-data" data-json="...">`` blob (the
   JSON is HTML-attribute-escaped; BeautifulSoup decodes it on read) carrying
@@ -117,8 +119,8 @@ def _is_category_hub(url: str) -> bool:
         /imoveis/estado-sp  /autos-e-pecas/estado-sp  -> single state-location seg
 
     Any further refinement (transaction type ``/venda``/``/aluguel``, a
-    subcategory, or a deeper location drill-down) is a real Pages-Router listing
-    and is **not** a hub. Restricted to the www/bare host; regional subdomains
+    subcategory, or a deeper location drill-down) is a real listing and is **not**
+    a hub. Restricted to the www/bare host; regional subdomains
     carry detail + region lists and stay matched.
     """
     if _host(url) not in ("www.olx.com.br", "olx.com.br"):
@@ -239,8 +241,60 @@ def _attributes(props: dict[str, Any], vertical: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Raw-ad extraction (list __NEXT_DATA__ / detail initial-data / JSON-LD)
+# Raw-ad extraction (list flight stream or __NEXT_DATA__ / detail initial-data /
+# JSON-LD)
 # ---------------------------------------------------------------------------
+
+
+_FLIGHT_PUSH_RE = re.compile(r"^\s*self\.__next_f\.push\((.*)\)\s*;?\s*$", re.DOTALL)
+_FLIGHT_ADS_RE = re.compile(r'"ads":\[')
+
+
+def _flight_stream(html: str) -> str:
+    """Join the App Router's ``self.__next_f.push([1, "..."])`` text chunks.
+
+    A value can straddle two chunks, so they only parse once concatenated.
+    """
+    chunks: list[str] = []
+    for tag in _soup(html).find_all("script"):
+        match = _FLIGHT_PUSH_RE.match(tag.string or "")
+        if not match:
+            continue
+        try:
+            item = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, list) and len(item) > 1 and item[0] == 1:
+            chunks.append(str(item[1]))
+    return "".join(chunks)
+
+
+def _parse_flight_ads(html: str) -> list[dict[str, Any]] | None:
+    """List pages: the longest ``ads`` array in the App Router stream.
+
+    Returns None when the stream has no ``ads`` key, and ``[]`` for a genuinely
+    empty result page. The stream holds other, always-empty ``ads`` arrays.
+    """
+    stream = _flight_stream(html)
+    decoder = json.JSONDecoder()
+    found: list[Any] | None = None
+    for match in _FLIGHT_ADS_RE.finditer(stream):
+        try:
+            ads, _ = decoder.raw_decode(stream, match.end() - 1)
+        except json.JSONDecodeError:
+            continue
+        if found is None or len(ads) > len(found):
+            found = ads
+    if found is None:
+        return None
+    # Ad slots share the array with listings and have no subject.
+    return [a for a in found if isinstance(a, dict) and a.get("subject")]
+
+
+def _parse_list_ads(html: str) -> list[dict[str, Any]]:
+    """List pages: App Router stream first, then the older ``__NEXT_DATA__``."""
+    ads = _parse_flight_ads(html)
+    return ads if ads is not None else _parse_next_data(html)
 
 
 def _parse_next_data(html: str) -> list[dict[str, Any]]:
@@ -254,8 +308,8 @@ def _parse_next_data(html: str) -> list[dict[str, Any]]:
     tag = soup.find("script", id="__NEXT_DATA__")
     if not (tag and tag.string):
         raise AdapterParseError(
-            "list page: <script id='__NEXT_DATA__'> not found — site structure "
-            "may have changed"
+            "list page: no ads in the App Router stream and no "
+            "<script id='__NEXT_DATA__'> — site structure may have changed"
         )
     try:
         data = json.loads(tag.string)
@@ -380,6 +434,19 @@ def _normalize_ad(
     )
 
 
+def _location_ignored(url: str, listings: list[dict[str, Any]]) -> bool:
+    """True when most listings fall outside the URL's ``estado-XX`` state.
+
+    OLX answers a location slug it doesn't recognize with nationwide results
+    instead of an error (``.../sao-paulo-e-regiao/sao-paulo`` returned Rio ads).
+    """
+    match = re.search(r"/estado-([a-z]{2})(?:/|$)", (urlsplit(url).path or "").lower())
+    ufs = [ln["uf"].lower() for ln in listings if ln.get("uf")]
+    if not match or not ufs:
+        return False
+    return ufs.count(match.group(1)) * 2 < len(ufs)
+
+
 # ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
@@ -492,7 +559,7 @@ async def fetch_olx(
         if page_type == "list":
             listings = [
                 _normalize_ad(ad, vertical=vertical, page_type="list", base_url=url)
-                for ad in _parse_next_data(html_src)
+                for ad in _parse_list_ads(html_src)
             ]
         else:
             ad = _extract_detail_ad(html_src)
@@ -529,6 +596,8 @@ async def fetch_olx(
     # Anchor present but zero items: a genuinely empty list page (vs. the rot
     # case above, which raised). Flag it so an agent can tell the two apart.
     warnings = ["no_results"] if page_type == "list" and not listings else []
+    if page_type == "list" and _location_ignored(url, listings):
+        warnings.append("location_not_applied")
     markdown = _render_markdown(listings, vertical)
     title = (
         listings[0].get("title")

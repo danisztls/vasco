@@ -375,7 +375,7 @@ async def _enable_images_for_solve(
     with contextlib.suppress(Exception):
         await page.unroute("**/*")
     try:
-        # Generous floor: this is the human-solve path (budget-suspended), and a
+        # Generous floor: this is the human-solve path (own clock), and a
         # near-exhausted caller deadline shouldn't starve the reload.
         timeout = max(8000, _remaining_ms(deadline_monotonic))
         await page.reload(wait_until="domcontentloaded", timeout=timeout)
@@ -458,22 +458,12 @@ async def _maybe_solve_turnstile(
     html: str,
     headers: dict[str, str],
     deadline_monotonic: float,
-    url: str = "",
     solve_turnstile: bool = True,
-    manual_solve: bool = False,
-    manual_solve_timeout: float = 60.0,
-    block_images: bool = False,
 ) -> bool:
     """If the current page is a Cloudflare challenge, try to clear it. Returns
     True only when the challenge cleared. Never raises — a failed solve leaves the
     challenge HTML in place so the chain still reports BLOCKED_CAPTCHA, exactly as
     before this feature existed.
-
-    Order: auto-click (when `solve_turnstile`), then — if that didn't clear and
-    `manual_solve` is on — notify the user and hold the page for a human to solve
-    via VNC (budget-suspended, up to `manual_solve_timeout`). When `block_images`
-    is on, images are re-enabled (and the page reloaded) just before the human
-    hold, so an image-based captcha (e.g. a slider's puzzle) actually renders.
     """
     if not _looks_challenged(status, html, headers):
         return False
@@ -485,10 +475,6 @@ async def _maybe_solve_turnstile(
             await _click_turnstile(page, deadline_monotonic)
             if await _wait_for_clearance(page, deadline_monotonic):
                 return True
-        if manual_solve:
-            if block_images:
-                await _enable_images_for_solve(page, url, deadline_monotonic)
-            return await _manual_solve_hold(page, url, manual_solve_timeout)
         return False
     except Exception as exc:  # defensive: a solve must never kill the fetch
         log.info("turnstile solve attempt failed: %s", exc)
@@ -598,6 +584,7 @@ async def fetch_page(
     (third-party trackers / images respectively).
     """
     context = None
+    handed_to_human = False
     # Serialize page/context creation: concurrent `new_page`/`new_context` on one
     # shared Camoufox deadlock it. The lock is held only for creation — navigation
     # below runs concurrently, so throughput is unaffected.
@@ -640,27 +627,29 @@ async def fetch_page(
         html = await page.content()
         status = int(response.status) if response is not None else 0
         headers = await _extract_headers(response)
-        if (solve_turnstile or manual_solve) and await _maybe_solve_turnstile(
+        if solve_turnstile and await _maybe_solve_turnstile(
             page,
             status=status,
             html=html,
             headers=headers,
             deadline_monotonic=deadline_monotonic,
-            url=url,
             solve_turnstile=solve_turnstile,
-            manual_solve=manual_solve,
-            manual_solve_timeout=manual_solve_timeout,
-            block_images=block_images,
         ):
             # Cleared: re-read the now-rendered origin content. Report 200 — the
             # challenge response's status/markers no longer describe the page we
             # hold, and a stale 403 would re-trip the chain's bot classifier.
             html = await page.content()
             status = 200
+        elif manual_solve and _looks_challenged(status, html, headers):
+            # The caller gets the block now; the page stays open behind it. A
+            # solve lands in the profile's cookies, so a later fetch gets through.
+            handed_to_human = _start_manual_hold(
+                page, context, url, manual_solve_timeout, block_images
+            )
         # A persistent profile can accumulate state that flips a site into a login
         # wall; clear that domain's cookies and retry once (single-shot, cooldown-
         # guarded). Only meaningful on the shared persistent context.
-        if clear_cookies_on_wall and is_persistent:
+        if clear_cookies_on_wall and is_persistent and not handed_to_human:
             recovered = await _maybe_recover_login_wall(
                 page,
                 url,
@@ -673,11 +662,16 @@ async def fetch_page(
                 html, status, headers = recovered
         return html, status, headers
     finally:
+        if not handed_to_human:
+            await _close_page(page, context)
+
+
+async def _close_page(page: Any, context: Any) -> None:
+    with contextlib.suppress(Exception):
+        await page.close()
+    if context is not None:
         with contextlib.suppress(Exception):
-            await page.close()
-        if context is not None:
-            with contextlib.suppress(Exception):
-                await context.close()
+            await context.close()
 
 
 async def _fetch_page(
@@ -909,21 +903,42 @@ async def _notify_manual_solve(url: str) -> None:
 
 
 # Only one manual hold at a time: a burst of challenged fetches must not each pop
-# a notification or each pin a page-semaphore slot for a minute. Guarded by the
-# event loop's single-threadedness (no await between the check and the set).
+# a notification or each keep a page open for a minute. Guarded by the event loop's
+# single-threadedness (no await between the check and the set).
 _manual_in_progress = False
+# Strong references, since the event loop only keeps weak ones to running tasks.
+_manual_holds: set[asyncio.Task[None]] = set()
 
 
-async def _manual_solve_hold(page: Any, url: str, timeout: float) -> bool:
-    """Notify the user and hold the page open for a human to solve, budget-suspended.
+def _start_manual_hold(
+    page: Any, context: Any, url: str, timeout: float, block_images: bool
+) -> bool:
+    """Hand `page` to a background hold; False if one is already running.
 
-    Returns True only if the challenge clears within `timeout`. Concurrent calls
-    while one hold is active return False immediately (resume as normal)."""
+    On True the hold owns the page and closes it when done.
+    """
     global _manual_in_progress
     if _manual_in_progress:
         log.info("manual solve already in progress; not holding for %s", url)
         return False
     _manual_in_progress = True
+    task = asyncio.create_task(
+        _manual_solve_hold(page, context, url, timeout, block_images)
+    )
+    _manual_holds.add(task)
+    task.add_done_callback(_manual_holds.discard)
+    return True
+
+
+async def _manual_solve_hold(
+    page: Any, context: Any, url: str, timeout: float, block_images: bool
+) -> None:
+    """Notify the user and keep the page open for a human to solve, up to `timeout`.
+
+    When `block_images` is on, images are re-enabled (and the page reloaded) first,
+    so an image-based captcha (e.g. a slider's puzzle) actually renders.
+    """
+    global _manual_in_progress
     try:
         log.warning(
             "manual solve: holding %s up to %.0fs for a human (VNC localhost:%d)",
@@ -931,12 +946,17 @@ async def _manual_solve_hold(page: Any, url: str, timeout: float) -> bool:
             timeout,
             _VNC_PORT,
         )
+        deadline = time.monotonic() + timeout
+        if block_images:
+            await _enable_images_for_solve(page, url, deadline)
         await _notify_manual_solve(url)
-        # Own clock, independent of the caller's fetch deadline — this is the
-        # "budget suspension": the page stays open for the human window.
-        return await _wait_for_clearance(page, time.monotonic() + timeout)
+        solved = await _wait_for_clearance(page, deadline)
+        log.warning("manual solve: %s %s", url, "solved" if solved else "not solved")
+    except Exception as exc:  # e.g. the browser relaunched under the hold
+        log.info("manual solve hold for %s ended: %s", url, exc)
     finally:
         _manual_in_progress = False
+        await _close_page(page, context)
 
 
 def _kill_browser_processes() -> None:

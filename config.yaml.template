@@ -37,8 +37,8 @@
 #   block_images: false        # skip image loading to cut headful render cost
 #   window: []                 # fixed [width, height]; [] = Camoufox random
 #   # --- Manual (human-in-the-loop) solving via VNC, for what auto-solve can't clear ---
-#   manual_solve: false        # notify-send + hold the page open for a human via VNC
-#   manual_solve_timeout: 60.0 # seconds to hold for a human before resuming as normal
+#   manual_solve: false        # the fetch fails right away; notify-send + keep the page open behind it for a human via VNC
+#   manual_solve_timeout: 60.0 # seconds to keep the page open; once solved, re-fetch with refresh to skip the cached block
 #   vnc_display_size: [1280, 720]  # managed Xvfb framebuffer [width, height]
 #   vnc_display: ":99"         # managed Xvfb display number (auto-fallback if taken)
 #   vnc_port: 5900             # x11vnc loopback port -> connect to localhost:5900

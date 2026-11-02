@@ -653,6 +653,7 @@ async def test_manual_solve_reenables_images_before_hold(
         def __init__(self) -> None:
             self.unrouted = False
             self.reloaded = False
+            self.closed = False
 
         async def content(self) -> str:
             return _CF_CHALLENGE_HTML  # stays challenged
@@ -663,25 +664,20 @@ async def test_manual_solve_reenables_images_before_hold(
         async def reload(self, **_: Any) -> None:
             self.reloaded = True
 
+        async def close(self) -> None:
+            self.closed = True
+
     async def _no_notify(_url: str) -> None:
         return None
 
     monkeypatch.setattr(bs, "_notify_manual_solve", _no_notify)
+    monkeypatch.setattr(bs, "_manual_in_progress", True)
     page = _Page()
-    cleared = await bs._maybe_solve_turnstile(
-        page,
-        status=200,
-        html=_CF_CHALLENGE_HTML,
-        headers={},
-        deadline_monotonic=time.monotonic() + 5,
-        solve_turnstile=False,
-        manual_solve=True,
-        manual_solve_timeout=0.0,  # hold returns immediately (never clears)
-        block_images=True,
-    )
-    assert cleared is False  # never solved (no human)
+    await bs._manual_solve_hold(page, None, "https://x", 1.0, True)
     assert page.unrouted is True
     assert page.reloaded is True
+    assert page.closed is True
+    assert bs._manual_in_progress is False
 
 
 # ── fetch_page end-to-end with solving ────────────────────────────────────────
@@ -735,6 +731,33 @@ async def test_fetch_page_solves_challenge_when_enabled() -> None:
     assert page.clicks == 1
     assert "real content" in html
     assert status == 200  # cleared content reported as 200, not the 403 challenge
+
+
+async def test_fetch_page_returns_block_and_holds_in_background(monkeypatch) -> None:
+    """The caller gets the challenge at once; the page stays open for the human."""
+    release = asyncio.Event()
+
+    async def fake_notify(url: str) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(bs, "_notify_manual_solve", fake_notify)
+    monkeypatch.setattr(bs, "_manual_in_progress", False)
+    page = _CFFetchPage(status=403)
+    html, status, _ = await bs.fetch_page(
+        _CFBrowser(page),
+        "https://x.test",
+        deadline_monotonic=time.monotonic() + 5,
+        manual_solve=True,
+        manual_solve_timeout=0.01,
+    )
+    assert status == 403
+    assert "real content" not in html
+    assert page.closed is False  # the hold owns it now
+
+    release.set()
+    await asyncio.gather(*bs._manual_holds)
+    assert page.closed is True
+    assert bs._manual_in_progress is False
 
 
 async def test_fetch_page_skips_solve_when_disabled() -> None:
@@ -947,7 +970,7 @@ def test_pick_free_display_returns_unused_display() -> None:
     assert not os.path.exists(f"/tmp/.X11-unix/X{n}")  # genuinely free
 
 
-async def test_manual_solve_hold_notifies_and_clears(monkeypatch) -> None:
+async def test_manual_solve_hold_notifies_clears_and_closes(monkeypatch) -> None:
     notified: list[str] = []
 
     async def fake_notify(url: str) -> None:
@@ -955,11 +978,19 @@ async def test_manual_solve_hold_notifies_and_clears(monkeypatch) -> None:
 
     monkeypatch.setattr(bs, "_notify_manual_solve", fake_notify)
     monkeypatch.setattr(bs, "_manual_in_progress", False)
+    closed: list[bool] = []
+
+    async def fake_close(page: Any, context: Any) -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(bs, "_close_page", fake_close)
     page = _CFChallengePage()
     page.cleared = True  # human "solved it" → clearance detected on first poll
-    ok = await bs._manual_solve_hold(page, "https://x", timeout=5)
-    assert ok is True
+    assert bs._start_manual_hold(page, None, "https://x", 5, False) is True
+    await asyncio.gather(*bs._manual_holds)
     assert notified == ["https://x"]
+    assert closed == [True]
+    assert bs._manual_in_progress is False
 
 
 async def test_manual_solve_hold_skips_when_already_in_progress(monkeypatch) -> None:
@@ -972,30 +1003,8 @@ async def test_manual_solve_hold_skips_when_already_in_progress(monkeypatch) -> 
     monkeypatch.setattr(bs, "_notify_manual_solve", fake_notify)
     monkeypatch.setattr(bs, "_manual_in_progress", True)  # one already running
     page = _CFChallengePage()
-    page.cleared = True
-    ok = await bs._manual_solve_hold(page, "https://x", timeout=5)
-    assert ok is False
+    assert bs._start_manual_hold(page, None, "https://x", 5, False) is False
     assert notified == []  # never notified, never held
-
-
-async def test_maybe_solve_turnstile_manual_fallback(monkeypatch) -> None:
-    """When auto is skipped/failed and manual_solve is on, hold for the human."""
-    monkeypatch.setattr(bs, "_notify_manual_solve", lambda url: _noop())
-    monkeypatch.setattr(bs, "_manual_in_progress", False)
-    page = _CFChallengePage()
-    page.cleared = True  # human solves during the hold
-    ok = await bs._maybe_solve_turnstile(
-        page,
-        status=403,
-        html=_CF_CHALLENGE_HTML,
-        headers={},
-        deadline_monotonic=time.monotonic() + 5,
-        url="https://x",
-        solve_turnstile=False,  # skip auto-click; go straight to manual
-        manual_solve=True,
-        manual_solve_timeout=5,
-    )
-    assert ok is True
 
 
 async def test_maybe_solve_turnstile_no_manual_when_disabled() -> None:
@@ -1007,9 +1016,7 @@ async def test_maybe_solve_turnstile_no_manual_when_disabled() -> None:
         html=_CF_CHALLENGE_HTML,
         headers={},
         deadline_monotonic=time.monotonic() - 1,  # no budget → auto can't clear
-        url="https://x",
         solve_turnstile=True,
-        manual_solve=False,
     )
     assert ok is False
 

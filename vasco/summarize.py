@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vasco import fetch as _fetch
+from vasco.adapters.claude_api import ClaudeApiClient
 from vasco.adapters.claude_cli import DEFAULT_BINARY, ClaudeCliClient, binary_available
 from vasco.adapters.deepseek import PROVIDER_ENDPOINTS, DeepSeekClient
 
@@ -41,10 +42,18 @@ _QUESTION_SYSTEM = (
 
 
 def resolve_api_key(pcfg: Any) -> str:
-    """Resolve a provider's API key from env → its config entry, in that order."""
-    env_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get(
-        "VASCO_ANSWER_API_KEY"
-    )
+    """Resolve a provider's API key from env → its config entry, in that order.
+
+    Env vars are per-provider so a chain never sends one vendor's key to another.
+    ``VASCO_ANSWER_API_KEY`` reaches `claude` only through the single-provider
+    override, which puts it on the entry (see ``config._load_answer``).
+    """
+    if (getattr(pcfg, "provider", "") or "").strip() == "claude":
+        env_key = os.environ.get("ANTHROPIC_API_KEY")
+    else:
+        env_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get(
+            "VASCO_ANSWER_API_KEY"
+        )
     if env_key:
         return env_key
     return getattr(pcfg, "api_key", "") or ""
@@ -63,6 +72,12 @@ def _backend_status(pcfg: Any) -> tuple[str | None, str | None]:
                 "No API key for the answer provider. "
                 "Set DEEPSEEK_API_KEY or its api_key in config.yaml."
             )
+    elif provider == "claude":
+        if not resolve_api_key(pcfg):
+            return "no_api_key", (
+                "No API key for the Claude API. "
+                "Set ANTHROPIC_API_KEY or its api_key in config.yaml."
+            )
     elif provider == "claude_cli":
         if not binary_available(DEFAULT_BINARY):
             return "claude_cli_unavailable", (
@@ -72,7 +87,7 @@ def _backend_status(pcfg: Any) -> tuple[str | None, str | None]:
     else:
         return "answer_not_configured", (
             "No answer provider configured. Add an answer.providers entry with "
-            "provider 'deepseek' or 'claude_cli'."
+            "provider 'claude', 'claude_cli' or 'deepseek'."
         )
     if not getattr(pcfg, "model", ""):
         return "answer_not_configured", "Set a model for the answer provider."
@@ -94,12 +109,19 @@ class _AnswerResult:
 
 async def _run_backend(
     system: str, user: str, pcfg: Any
-) -> tuple[str | None, dict[str, Any] | None]:
-    """Call one ready provider; return ``(text, usage)`` or ``(None, None)``."""
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Call one ready provider; return ``(text, usage, served_model)``, all ``None``
+    on failure. ``served_model`` is ``None`` when the backend doesn't report one."""
     provider = (getattr(pcfg, "provider", "") or "").strip()
     try:
-        if provider == "claude_cli":
-            client: Any = ClaudeCliClient(
+        if provider == "claude":
+            client: Any = ClaudeApiClient(
+                api_key=resolve_api_key(pcfg),
+                model=pcfg.model,
+                effort=getattr(pcfg, "effort", "") or "",
+            )
+        elif provider == "claude_cli":
+            client = ClaudeCliClient(
                 model=pcfg.model, effort=getattr(pcfg, "effort", "") or ""
             )
         else:
@@ -111,8 +133,12 @@ async def _run_backend(
         text = await client.complete(system=system, user=user)
     except Exception as exc:
         log.warning("answer call failed (%s): %s", provider, exc)
-        return None, None
-    return (text or None), getattr(client, "last_usage", None)
+        return None, None, None
+    return (
+        (text or None),
+        getattr(client, "last_usage", None),
+        getattr(client, "last_model", None),
+    )
 
 
 async def _generate(
@@ -157,13 +183,13 @@ async def _generate(
             )
             continue
         any_ready = True
-        text, usage = await _run_backend(system, user, pcfg)
+        text, usage, served_model = await _run_backend(system, user, pcfg)
         if text is not None:
             return _AnswerResult(
                 text=text,
                 usage=usage,
                 provider=(pcfg.provider or "").strip() or None,
-                model=pcfg.model or None,
+                model=served_model or pcfg.model or None,
                 fell_back=index > 0,
             )
         log.warning("answer provider %r failed; trying next", pcfg.provider)
@@ -214,7 +240,8 @@ async def answer(
         served it);
       - a result dict with ``error`` and ``answer=None`` when the LLM step can't
         run: ``answer_not_configured`` (empty chain / missing model),
-        ``no_api_key`` / ``claude_cli_unavailable`` (no entry ready), or
+        ``no_api_key`` / ``claude_cli_unavailable`` (first entry's reason when no
+        entry is ready), or
         ``answer_failed`` (every ready provider returned nothing).
     """
     env = await _fetch.fetch_one(

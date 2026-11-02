@@ -129,18 +129,19 @@ class QualityCfg:
 class ProviderCfg:
     """One answer backend: a provider + its model (+ api_key for HTTP providers).
 
-    `provider` is ``"deepseek"`` (OpenAI-compatible HTTP; endpoint from the
-    built-in ``deepseek.PROVIDER_ENDPOINTS`` registry) or ``"claude_cli"`` (shell
-    out to ``claude -p`` on the user's Claude Code subscription via OAuth — no API
-    key; ``claude`` must be on PATH). `model` is required.
+    `provider` is ``"claude"`` (the Claude API via the Anthropic SDK; API key),
+    ``"deepseek"`` (OpenAI-compatible HTTP; endpoint from the built-in
+    ``deepseek.PROVIDER_ENDPOINTS`` registry) or ``"claude_cli"`` (shell out to
+    ``claude -p`` on the user's Claude Code subscription via OAuth — no API key;
+    ``claude`` must be on PATH). `model` is required.
     """
 
-    provider: str = ""  # "deepseek" | "claude_cli"
+    provider: str = ""  # "claude" | "deepseek" | "claude_cli"
     model: str = ""  # model id/alias for the provider
-    api_key: str = ""  # deepseek only; or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
-    effort: str = (
-        ""  # claude_cli only: --effort low|medium|high|xhigh|max (default = CLI's own)
-    )
+    # claude: or ANTHROPIC_API_KEY; deepseek: or DEEPSEEK_API_KEY / VASCO_ANSWER_API_KEY
+    api_key: str = ""
+    # claude, claude_cli: low|medium|high|xhigh|max (default = the model's/CLI's own)
+    effort: str = ""
 
 
 @dataclass(frozen=True)

@@ -71,8 +71,68 @@ class _Boom:
 def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("VASCO_ANSWER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _FakeClient.last = {}
     _FakeCliClient.last = {}
+
+
+# --- provider selection: claude (Claude API) ---
+
+
+def test_claude_key_never_comes_from_another_providers_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("VASCO_ANSWER_API_KEY", "deepseek-secret")
+    pcfg = ProviderCfg(provider="claude", model="haiku", api_key="from-cfg")
+    assert _sum.resolve_api_key(pcfg) == "from-cfg"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+    assert _sum.resolve_api_key(pcfg) == "from-env"
+    # ...and the reverse: DeepSeek must not pick up the Anthropic key.
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    monkeypatch.delenv("VASCO_ANSWER_API_KEY")
+    assert _sum.resolve_api_key(ProviderCfg(provider="deepseek", api_key="d")) == "d"
+
+
+async def test_claude_provider_builds_client_and_reports_served_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeClaude(_FakeClient):
+        last_model = "claude-haiku-5-5"
+
+    monkeypatch.setattr(_sum, "ClaudeApiClient", _FakeClaude)
+    cfg = _chain(
+        ProviderCfg(provider="claude", model="haiku", effort="low", api_key="k")
+    )
+    result = await _sum._generate("body", None, cfg)
+    assert result.text == "THE ANSWER"
+    assert result.provider == "claude"
+    assert result.model == "claude-haiku-5-5"
+    assert _FakeClient.last["init"] == {
+        "api_key": "k",
+        "model": "haiku",
+        "effort": "low",
+    }
+
+
+async def test_claude_without_key_falls_through_to_next_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sum, "DeepSeekClient", _FakeClient)
+    cfg = _chain(
+        ProviderCfg(provider="claude", model="haiku"),
+        ProviderCfg(provider="deepseek", model="m", api_key="k"),
+    )
+    result = await _sum._generate("body", None, cfg)
+    assert result.provider == "deepseek"
+    assert result.fell_back is True
+
+
+async def test_claude_without_key_alone_reports_no_api_key() -> None:
+    cfg = _chain(ProviderCfg(provider="claude", model="haiku"))
+    result = await _sum._generate("body", None, cfg)
+    assert result.error == "no_api_key"
+    assert "ANTHROPIC_API_KEY" in (result.message or "")
 
 
 async def test_generic_summary_uses_generic_prompt(

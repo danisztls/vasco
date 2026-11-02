@@ -382,8 +382,8 @@ async def extract(
         "directed answer; omit it for a generic summary. Returns {url, title, "
         "answer, model, ...}. Use this when you only need what a page says about "
         "something; use `fetch` when you need the full verbatim Markdown. "
-        "Requires an answer provider configured (`deepseek` with an API key, or "
-        "`claude_cli` to use the Claude Code subscription); otherwise it returns "
+        "Requires an answer provider configured (`claude` or `deepseek` with an API "
+        "key, or `claude_cli` to use the Claude Code subscription); otherwise it returns "
         "an `error` field."
     ),
 )

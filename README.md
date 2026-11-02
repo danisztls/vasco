@@ -272,7 +272,7 @@ service: # vascod coordination
 
 answer: # ordered chain: first = primary, rest are fallbacks
   providers:
-    - { provider: claude_cli, model: sonnet, effort: low }
+    - { provider: claude, model: haiku, effort: low, api_key: sk-ant-... }
     - { provider: deepseek, model: deepseek-flash, api_key: sk-... }
 
 domains: # per-host fetch overrides
@@ -283,7 +283,7 @@ Precedence: **CLI flag > `VASCO_*` env var > config file > default**. Env names 
 
 Setting `browser.user_data_dir` enables a **persistent profile** — Cloudflare clearance and login sessions survive across runs, which several adapters depend on. Vasco keeps the profile healthy: a login wall triggers a **domain-scoped** cookie clear and one retry (single-shot, cooldown-gated), so a poisoned session can't wedge a site permanently and sibling domains keep their clearances.
 
-The `answer` command supports **`claude_cli`**, which shells out to `claude -p` and runs on your Claude Code subscription rather than an API key.
+The `answer` command supports **`claude`**, the Claude API billed per token (`api_key` or `ANTHROPIC_API_KEY`; `model` is a full id or `haiku`/`sonnet`/`opus`/`fable`), and **`claude_cli`**, which shells out to `claude -p` and runs on your Claude Code subscription rather than an API key.
 
 ## Telemetry
 

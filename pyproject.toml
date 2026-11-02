@@ -28,6 +28,7 @@ dependencies = [
     "pyyaml>=6.0",
     "tldextract>=5.3.1",
     "rich>=15",  # human-readable CLI rendering (also a transitive dep of typer)
+    "anthropic>=2.3.0",
 ]
 
 [project.scripts]

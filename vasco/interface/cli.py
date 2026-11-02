@@ -461,8 +461,9 @@ def answer(
 ) -> None:
     """Fetch a URL and print an LLM answer/summary over its content.
 
-    Needs `answer.provider` configured: `deepseek` (OpenAI-compatible, API key) or
-    `claude_cli` (runs `claude -p` on your Claude Code subscription, no API key).
+    Needs `answer.providers` configured: `claude` (Claude API, API key), `deepseek`
+    (OpenAI-compatible, API key) or `claude_cli` (runs `claude -p` on your Claude
+    Code subscription, no API key).
     """
     from vasco import config as _config
     from vasco import summarize as _summarize

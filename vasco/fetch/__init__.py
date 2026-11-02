@@ -44,6 +44,7 @@ from vasco.adapters import (
     gitlab,
     google_shopping,
     mercadolivre,
+    npm,
     olx,
     petlove,
     phabricator,
@@ -222,6 +223,7 @@ def _adapter_routes() -> tuple[_AdapterRoute, ...]:
             _AdapterRoute("petlove", petlove.is_petlove_url, petlove.fetch_petlove),
             _AdapterRoute("amazon", amazon.is_amazon_url, amazon.fetch_amazon),
             _AdapterRoute("steam", steam.is_steam_url, steam.fetch_steam),
+            _AdapterRoute("npm", npm.is_npm_url, npm.fetch_npm),
         )
     return _ADAPTER_ROUTES
 

@@ -102,6 +102,7 @@ _GALLERY_CAP: int = 6
 # MLB<digits> item ids plus the MLBU<digits> "unified product" family id (the
 # /up/ form). The optional letter is captured so MLBU1490047005 stays distinct
 # from a hypothetical MLB1490047005 — it is never collapsed away.
+_AD_CLICK_HOST = "click1.mercadolivre.com.br"
 _MLB_RE = re.compile(r"MLB-?([A-Z]?\d+)", re.IGNORECASE)
 
 
@@ -241,13 +242,67 @@ def _search_product(item: dict[str, Any], position: int) -> dict[str, Any] | Non
     )
 
 
+def _card_price(card: Any, selector: str) -> int | float | None:
+    amount = card.select_one(selector)
+    fraction = amount.select_one(".andes-money-amount__fraction") if amount else None
+    if fraction is None:
+        return None
+    cents = amount.select_one(".andes-money-amount__cents")
+    return _brl_to_num(f"{fraction.get_text()},{cents.get_text() if cents else 0}")
+
+
+def _card_product(card: Any, position: int) -> dict[str, Any] | None:
+    link = card.select_one("a.poly-component__title")
+    href = link.get("href") if link else None
+    if not href or not link.get_text(strip=True):
+        return None
+    url = urlsplit(href)._replace(fragment="").geturl()
+    # Paid placements link through a click tracker rather than to the product.
+    if urlsplit(url).hostname == _AD_CLICK_HOST:
+        return None
+    picture = card.select_one("img.poly-component__picture")
+    image = picture.get("src") if picture else None
+    seller = card.select_one(".poly-component__seller")
+    shipping = card.select_one(".poly-component__shipping-v2")
+    return _compact(
+        {
+            "position": position,
+            "title": link.get_text(" ", strip=True),
+            "url": url,
+            "product_id": _product_id(url),
+            "price": _card_price(card, ".poly-price__current .andes-money-amount"),
+            "original_price": _card_price(card, ".andes-money-amount--previous"),
+            "currency": "BRL",
+            "seller": seller.get_text(" ", strip=True) if seller else None,
+            "free_shipping": True
+            if shipping and "grátis" in shipping.get_text().lower()
+            else None,
+            "image": image
+            if isinstance(image, str) and image.startswith("http")
+            else None,
+        }
+    )
+
+
+def _parse_cards(html: str) -> list[dict[str, Any]]:
+    """Offers and seller listings ship no ``Product`` JSON-LD, only rendered cards."""
+    cards = _soup(html).select("div.poly-card")
+    if not cards:
+        raise AdapterParseError(
+            "search page: no schema.org Product JSON-LD or product cards found — "
+            "site structure may have changed"
+        )
+    parsed = (_card_product(card, 0) for card in cards)
+    return [
+        {**product, "position": position}
+        for position, product in enumerate(filter(None, parsed), start=1)
+    ]
+
+
 def _parse_search(html: str) -> list[dict[str, Any]]:
     items = _jsonld_products(html)
     if not items:
-        raise AdapterParseError(
-            "search page: no schema.org Product JSON-LD found — site structure "
-            "may have changed"
-        )
+        return _parse_cards(html)
     out: list[dict[str, Any]] = []
     for position, item in enumerate(items, start=1):
         parsed = _search_product(item, position)

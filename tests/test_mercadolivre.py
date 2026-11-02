@@ -467,6 +467,67 @@ def test_product_group_without_variants_is_still_a_parse_failure() -> None:
         M._parse_product(html, "https://www.mercadolivre.com.br/x/p/MLB1")
 
 
+def _card(href: str, title: str, price: str, cents: str = "") -> str:
+    cents_tag = (
+        f'<span class="andes-money-amount__cents">{cents}</span>' if cents else ""
+    )
+    return (
+        '<div class="poly-card"><img class="poly-component__picture" '
+        'src="https://http2.mlstatic.com/a.webp">'
+        f'<a class="poly-component__title" href="{href}">{title}</a>'
+        '<span class="poly-component__seller">Loja X</span>'
+        '<s class="andes-money-amount andes-money-amount--previous">'
+        '<span class="andes-money-amount__fraction">2.169</span></s>'
+        '<div class="poly-price__current"><span class="andes-money-amount">'
+        f'<span class="andes-money-amount__fraction">{price}</span>{cents_tag}</span></div>'
+        '<div class="poly-component__shipping-v2">Frete grátis</div></div>'
+    )
+
+
+def test_search_without_jsonld_parses_the_cards() -> None:
+    html = (
+        "<html><body>"
+        + _card(
+            "https://click1.mercadolivre.com.br/mclics/clicks/external/MLB/x?wid=MLB5",
+            "Ad",
+            "10",
+        )
+        + _card(
+            "https://www.mercadolivre.com.br/colchao/p/MLB28374695#position=1&wid=MLB35",
+            "Colchão",
+            "1.379",
+        )
+        + _card(
+            "https://produto.mercadolivre.com.br/MLB-5408593708-tenis-_JM#position=2",
+            "Tênis",
+            "89",
+            "99",
+        )
+        + "</body></html>"
+    )
+    first, second = M._parse_search(html)
+    assert first == {
+        "position": 1,
+        "title": "Colchão",
+        "url": "https://www.mercadolivre.com.br/colchao/p/MLB28374695",
+        "product_id": "MLB28374695",
+        "price": 1379,
+        "original_price": 2169,
+        "currency": "BRL",
+        "seller": "Loja X",
+        "free_shipping": True,
+        "image": "https://http2.mlstatic.com/a.webp",
+    }
+    assert second["position"] == 2
+    assert second["price"] == 89.99
+    assert second["product_id"] == "MLB5408593708"
+
+
+def test_search_without_jsonld_or_cards_is_a_parse_failure() -> None:
+    with pytest.raises(AdapterParseError):
+        M._parse_search("<html><body>nothing here</body></html>")
+
+
 def _search_html(*names_prices: tuple[str, str]) -> str:
     graph = [
         {

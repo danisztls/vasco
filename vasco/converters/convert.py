@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 # trafilatura is imported lazily: it pulls htmldate → dateparser, whose
 # timezone-parser build costs ~430ms at import time. Deferring it to the first
@@ -92,6 +93,38 @@ def text_to_markdown(text: str, *, content_type: str | None = None) -> tuple[str
     return body, metadata
 
 
+def _with_absolute_links(html: str, url: str | None) -> Any:
+    """Parse ``html`` with every ``<a href>`` resolved against the page's URL.
+
+    trafilatura resolves relative links against the bare host, so
+    ``/3/library/x.html`` turns ``#id`` into ``https://host#id`` and ``y.html``
+    into ``https://host/y.html``. Absolute targets pass through it untouched.
+    Returns the original string when there's nothing to resolve against or the
+    page doesn't parse, so trafilatura applies its own handling.
+    """
+    if not url:
+        return html
+    tree = trafilatura.load_html(html)
+    if tree is None:
+        return html
+    base = url
+    base_tag = tree.find(".//base[@href]")
+    if base_tag is not None:
+        base = _join(url, base_tag.get("href")) or url
+    for anchor in tree.iter("a"):
+        href = anchor.get("href")
+        if href:
+            anchor.set("href", _join(base, href) or href)
+    return tree
+
+
+def _join(base: str, href: str) -> str | None:
+    try:
+        return urljoin(base, href.strip())
+    except ValueError:  # e.g. a malformed IPv6 host in the href
+        return None
+
+
 def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     """Convert HTML to Markdown via trafilatura and return (markdown, metadata).
 
@@ -122,7 +155,7 @@ def html_to_markdown(html: str, *, url: str | None = None) -> tuple[str, dict]:
     markdown: str = ""
     try:
         extracted = trafilatura.extract(
-            html,
+            _with_absolute_links(html, url),
             output_format="markdown",
             with_metadata=True,
             include_links=True,

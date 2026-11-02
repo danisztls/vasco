@@ -195,3 +195,47 @@ async def test_segmentation_splits_long_paragraph(
 def test_extract_module_exports_expected_symbol() -> None:
     # Belt-and-suspenders: confirms the public function is importable.
     assert callable(extract_mod.extract)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Hello, World_2!", ["hello", "world", "2"]),
+        ("Água MAÇÃ", ["agua", "maca"]),
+        ("население города", ["население", "города"]),
+        ("Παναγία", ["παναγια"]),
+        ("天主教", ["天主", "主教"]),
+        ("foo 天主 bar", ["foo", "天主", "bar"]),
+    ],
+)
+def test_tokenize(text: str, expected: list[str]) -> None:
+    assert extract_mod._tokenize(text) == expected
+
+
+def test_tokenize_folds_hangul_consistently() -> None:
+    assert extract_mod._tokenize("묵주기도") == ["묵주", "주기", "기도"]
+
+
+@pytest.mark.parametrize(
+    "paragraph, query",
+    [
+        (
+            "Население города Москвы превышает двенадцать миллионов человек.",
+            "население",
+        ),
+        ("Η Παναγία είναι μια εκκλησία στην Πάρο της Ελλάδας και όχι μόνο.", "παναγια"),
+        ("法定節日是天主教會規定信徒必須參與彌撒的重要節日之一。", "彌撒"),
+        ("เพลงลาวดวงเดือนเป็นเพลงไทยเดิมที่มีชื่อเสียงมากในประเทศไทย", "ลาวดวงเดือน"),
+        ("O Senhor é meu pastor e nada me faltará neste caminho longo.", "faltara"),
+    ],
+)
+async def test_non_ascii_query_finds_its_passage(
+    paragraph: str, query: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filler = "\n\n".join(
+        f"Unrelated filler paragraph number {i} about something else entirely."
+        for i in range(5)
+    )
+    _patch_fetch(monkeypatch, _success_envelope(markdown=f"{paragraph}\n\n{filler}"))
+    result = await extract("https://example.com/a", query=query)
+    assert [p["text"] for p in result["passages"]] == [paragraph]

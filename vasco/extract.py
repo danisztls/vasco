@@ -4,14 +4,22 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from rank_bm25 import BM25Okapi
 
 from vasco import fetch as _fetch
 
-# Tokenization regex: lowercased alphanumerics.
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Scripts written without spaces between words (CJK, Thai, Lao, Khmer, Myanmar),
+# plus Hangul, whose particles attach to the word. Runs of these become bigrams.
+_UNSEGMENTED = (
+    "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    "\uac00-\ud7af\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff"
+)
+_UNSEGMENTED_RE = re.compile(f"[{_UNSEGMENTED}]")
+# Tokenization regex: a run of unsegmented script, or of any other alphanumerics.
+_TOKEN_RE = re.compile(rf"[{_UNSEGMENTED}]+|[^\W_{_UNSEGMENTED}]+")
 # Paragraph boundary: one or more blank lines.
 _PARA_SPLIT_RE = re.compile(r"\n\n+")
 # Simple sentence boundary on . ! ? followed by whitespace.
@@ -20,11 +28,25 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 # Tunables (kept module-private — extract() signature stays per the contract).
 _MAX_PARAGRAPH_CHARS = 500
 _MIN_PASSAGE_CHARS = 30
+# The same amount of text takes far fewer characters without spaces between words.
+_MIN_UNSEGMENTED_PASSAGE_CHARS = 10
 _MIN_MERGED_SENTENCE_CHARS = 80
 
 
 def _tokenize(text: str) -> list[str]:
-    return _TOKEN_RE.findall(text.lower())
+    """Casefolded, mark-free tokens in any script, so `água` matches `agua`."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    folded = unicodedata.normalize(
+        "NFC",
+        "".join(c for c in decomposed if not unicodedata.category(c).startswith("M")),
+    )
+    tokens: list[str] = []
+    for run in _TOKEN_RE.findall(folded):
+        if len(run) > 1 and _UNSEGMENTED_RE.match(run):
+            tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+        else:
+            tokens.append(run)
+    return tokens
 
 
 def _split_long_paragraph(paragraph: str, base_offset: int) -> list[tuple[str, int]]:
@@ -106,7 +128,12 @@ def _segment(markdown: str) -> list[tuple[str, int]]:
             passages.append((stripped, para_offset))
 
     # Filter out very short fragments.
-    return [(t, o) for t, o in passages if len(t) >= _MIN_PASSAGE_CHARS]
+    return [
+        (t, o)
+        for t, o in passages
+        if len(t) >= _MIN_PASSAGE_CHARS
+        or (len(t) >= _MIN_UNSEGMENTED_PASSAGE_CHARS and _UNSEGMENTED_RE.search(t))
+    ]
 
 
 def bm25_scores(corpus_tokens: list[list[str]], query_tokens: list[str]) -> list[float]:

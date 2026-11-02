@@ -294,6 +294,33 @@ def test_youtube_raw_flag_adds_warning(
         cache.close()
 
 
+def test_raw_neither_reads_nor_writes_the_page_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    html = "<html><body><p>" + "words " * 200 + "</p></body></html>"
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    fetch = lambda **kw: asyncio.run(  # noqa: E731
+        fetch_mod.fetch_one("https://example.com/r", cache=cache, deadline=10.0, **kw)
+    )
+    try:
+        raw_first = fetch(raw=True)
+        assert "<body>" in raw_first["markdown"] and raw_first["from_cache"] is False
+
+        # The raw body didn't take the page's row...
+        page = fetch()
+        assert page["from_cache"] is False and "<body>" not in page["markdown"]
+
+        # ...and a cached page doesn't stand in for the raw body.
+        raw_again = fetch(raw=True)
+        assert "<body>" in raw_again["markdown"] and raw_again["from_cache"] is False
+        assert fetch()["from_cache"] is True
+    finally:
+        cache.close()
+
+
 def test_refresh_flag_writes_but_ignores_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

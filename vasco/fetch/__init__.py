@@ -307,6 +307,11 @@ async def _fetch_one_body(
             None,
         )
 
+    # A raw body shares the page's cache key but isn't its Markdown, so it can't
+    # be read from or written to that row.
+    if raw:
+        use_cache = False
+
     if use_cache and not refresh and cache is not None:
         try:
             hit = cache.get(normalized)

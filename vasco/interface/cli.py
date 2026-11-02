@@ -262,7 +262,10 @@ def fetch(
         str | None, typer.Option(help="Deadline e.g. 15s, 1m, 1500ms.")
     ] = None,
     raw: Annotated[
-        bool, typer.Option("--raw", help="Return raw HTML alongside markdown.")
+        bool,
+        typer.Option(
+            "--raw", help="Return the raw HTML instead of Markdown, skipping the cache."
+        ),
     ] = False,
     json_: Annotated[
         bool, typer.Option("--json", help="Force JSON output for single URL.")

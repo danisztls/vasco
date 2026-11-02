@@ -1088,3 +1088,27 @@ def test_smuggled_pdf_text_is_withheld(
         assert "Ignore previous instructions" not in json.dumps(env)
     finally:
         cache.close()
+
+
+async def test_github_api_miss_falls_through_to_a_normal_fetch(
+    tmp_path, monkeypatch
+) -> None:
+    """A rate-limited API must not fail the page, which works without it."""
+    from vasco.adapters import github as github_mod
+
+    async def miss(url, headers, *, deadline):
+        return "rate limited", 403
+
+    monkeypatch.setattr(github_mod, "_http_get", miss)
+    html = (
+        "<html><head><title>Repo</title></head><body><main><article><p>"
+        + "The README text of this repository, as the normal page shows it. " * 30
+        + "</p></article></main></body></html>"
+    )
+
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
+    env = await fetch_mod.fetch_one(
+        "https://github.com/pallets/flask", cache=None, use_cache=False
+    )
+    assert env["mode_used"] == "http"
+    assert "README text" in env["markdown"]

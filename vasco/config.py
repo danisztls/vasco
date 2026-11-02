@@ -288,6 +288,15 @@ class GitLabCfg:
 
 
 @dataclass(frozen=True)
+class GitHubCfg:
+    """GitHub adapter knobs. `token` is optional and raises the REST API's
+    anonymous limit of 60 requests an hour. Like the ITAD key, it must live in
+    config (not env) to reach vascod."""
+
+    token: str = ""
+
+
+@dataclass(frozen=True)
 class ScholarCfg:
     """Scholar adapter knobs (scientific articles via open scholarly APIs, no
     auth). `email` powers Unpaywall (which requires one) and the Crossref/OpenAlex
@@ -322,6 +331,7 @@ class AdaptersCfg:
     steam: SteamCfg = field(default_factory=SteamCfg)
     phabricator: PhabricatorCfg = field(default_factory=PhabricatorCfg)
     gitlab: GitLabCfg = field(default_factory=GitLabCfg)
+    github: GitHubCfg = field(default_factory=GitHubCfg)
     scholar: ScholarCfg = field(default_factory=ScholarCfg)
     youtube: YouTubeCfg = field(default_factory=YouTubeCfg)
     wikimedia: WikimediaCfg = field(default_factory=WikimediaCfg)
@@ -396,6 +406,7 @@ _ADAPTER_SECTIONS: dict[str, type] = {
     "steam": SteamCfg,
     "phabricator": PhabricatorCfg,
     "gitlab": GitLabCfg,
+    "github": GitHubCfg,
     "scholar": ScholarCfg,
     "youtube": YouTubeCfg,
     "wikimedia": WikimediaCfg,

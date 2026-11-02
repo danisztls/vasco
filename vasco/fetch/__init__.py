@@ -41,6 +41,7 @@ from vasco import quality as quality_mod
 from vasco.adapters import (
     aliexpress,
     amazon,
+    github,
     gitlab,
     google_shopping,
     mercadolivre,
@@ -442,6 +443,15 @@ async def _dispatch_adapters(
         except wikimedia.WikimediaUnavailable:
             return None, False
         return finalize(envelope, "wikimedia"), False
+
+    # GitHub repos via the public REST API; the page still works without it, so
+    # any API miss (rate limit, private repo, a non-repo path) is a normal fetch.
+    if github.is_github_url(url):
+        try:
+            envelope = await github.fetch_github(url, deadline=deadline, cfg=cfg)
+        except github.GitHubUnavailable:
+            return None, False
+        return finalize(envelope, "github"), False
 
     # Scholar (scientific articles via open scholarly APIs): a closed, deterministic
     # host set (doi.org / sciencedirect PII / pubmed / arxiv / europepmc), so no

@@ -136,6 +136,8 @@
 #     domains: []              # extra known GitLab hosts (gitlab.com built in); skips the probe
 #     autodetect: true         # probe unknown hosts on claimable URLs (falls through on a miss)
 #     max_comments: 20         # cap issue/MR notes (comments) parsed
+#   github:                     # GitHub repo pages (public REST API + raw README)
+#     token: ""                # optional; raises the anonymous limit of 60 API requests an hour
 #   scholar:                    # scientific articles via open scholarly APIs (doi.org / ScienceDirect PII / pubmed / arxiv)
 #     email: ""                # powers Unpaywall (requires one) + Crossref/OpenAlex polite pools; "" = skip Unpaywall (OA falls back to OpenAlex)
 #     elsevier_api_key: ""     # optional opt-in: Elsevier PII fallback + entitled full text

@@ -467,6 +467,40 @@ def test_product_group_without_variants_is_still_a_parse_failure() -> None:
         M._parse_product(html, "https://www.mercadolivre.com.br/x/p/MLB1")
 
 
+def _item_page(canonical: str) -> str:
+    return (
+        f'<html><head><link rel="canonical" href="{canonical}"></head>'
+        '<body><div class="poly-card"></div></body></html>'
+    )
+
+
+async def test_item_sent_to_a_category_listing_is_not_found() -> None:
+    html = _item_page("https://lista.mercadolivre.com.br/casa/protetores-colchoes/")
+
+    async def fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(
+        "https://produto.mercadolivre.com.br/MLB-5800197466-pillow-top-_JM",
+        fetch_html=fetch_html,
+    )
+    assert env["failure"]["reason"] == M.FailureReason.NOT_FOUND
+    assert "ended" in env["failure"]["message"]
+
+
+async def test_item_page_that_lost_its_jsonld_is_still_a_parse_failure() -> None:
+    """Related-product cards alone don't make a page a listing."""
+    html = _item_page("https://www.mercadolivre.com.br/x/p/MLB1")
+
+    async def fetch_html(_url: str):
+        return html, 200, {}, M.FailureReason.OK, "browser"
+
+    env = await M.fetch_mercadolivre(
+        "https://www.mercadolivre.com.br/x/p/MLB1", fetch_html=fetch_html
+    )
+    assert env["failure"]["reason"] == M.FailureReason.PARSE_FAILED
+
+
 def _card(href: str, title: str, price: str, cents: str = "") -> str:
     cents_tag = (
         f'<span class="andes-money-amount__cents">{cents}</span>' if cents else ""

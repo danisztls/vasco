@@ -103,6 +103,7 @@ _GALLERY_CAP: int = 6
 # /up/ form). The optional letter is captured so MLBU1490047005 stays distinct
 # from a hypothetical MLB1490047005 — it is never collapsed away.
 _AD_CLICK_HOST = "click1.mercadolivre.com.br"
+_LISTING_HOST = "lista.mercadolivre.com.br"
 _MLB_RE = re.compile(r"MLB-?([A-Z]?\d+)", re.IGNORECASE)
 
 
@@ -465,6 +466,16 @@ def _free_shipping(offers: dict[str, Any]) -> bool | None:
         return None
 
 
+class _AdEnded(AdapterParseError):
+    """An item URL answered with a category listing instead of the item."""
+
+
+def _canonical_is_a_listing(html: str) -> bool:
+    link = _soup(html).find("link", rel="canonical")
+    href = link.get("href") if link else None
+    return isinstance(href, str) and urlsplit(href).hostname == _LISTING_HOST
+
+
 def _group_variants(html: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
     """A product sold in several colors or sizes has a ``ProductGroup`` instead of
     a top-level ``Product``: its ``Product`` objects are in ``hasVariant``, with the
@@ -509,6 +520,11 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     else:
         grouped = _group_variants(html)
         if grouped is None:
+            if _canonical_is_a_listing(html):
+                raise _AdEnded(
+                    "item page: this ad now leads to a category listing, so it has "
+                    "probably ended"
+                )
             raise AdapterParseError(
                 "product page: no schema.org Product JSON-LD found — site structure "
                 "may have changed"
@@ -668,6 +684,10 @@ async def fetch_mercadolivre(
             products = _parse_product(html_src, url)
         else:
             products = _parse_search(html_src)
+    except _AdEnded as exc:
+        return _failure_envelope(
+            url, FailureReason.NOT_FOUND, f"mercadolivre {exc}", http_status=status
+        )
     except AdapterParseError as exc:
         log.warning("mercadolivre parse anchor missing (%s): %s", page_type, exc)
         return _failure_envelope(

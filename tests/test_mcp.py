@@ -423,6 +423,36 @@ async def test_extract_empty_passages_logs_telemetry(
 
 
 @pytest.mark.asyncio
+async def test_extract_failure_logs_as_failure_not_empty(
+    patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco import extract as _extract
+    from vasco import telemetry as _telemetry
+
+    async def fake_extract(url: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "url": url,
+            "mode_used": "pdf",
+            "passages": [],
+            "failure": {"reason": "not_found", "message": "gone"},
+        }
+
+    monkeypatch.setattr(_extract, "extract", fake_extract)
+
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        _telemetry, "log_event", lambda cfg, event: captured.append(event)
+    )
+
+    await mcp_mod.server.call_tool("extract", {"url": "https://x", "query": "q"})
+
+    assert len(captured) == 1
+    assert captured[0]["outcome"] == "fail"
+    assert captured[0]["failure_reason"] == "not_found"
+    assert captured[0]["url"] == "https://x"
+
+
+@pytest.mark.asyncio
 async def test_fetch_many_default_strips_markdown(
     patched_cfg: _config.Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:

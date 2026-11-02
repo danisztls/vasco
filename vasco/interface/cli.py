@@ -401,7 +401,13 @@ def extract(
             raise
         duration_ms = int((_monotonic() - started) * 1000)
         passages = result.get("passages") if isinstance(result, dict) else None
-        if not passages:
+        if isinstance(result, dict) and result.get("failure"):
+            _telemetry.record_failure(
+                cfg,
+                "extract",
+                {**result, "url_requested": url, "duration_ms": duration_ms},
+            )
+        elif not passages:
             _telemetry.log_event(
                 cfg,
                 {

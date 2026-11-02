@@ -351,7 +351,11 @@ async def extract(
     # An empty `passages` list is a legitimate outcome (no BM25 match), not a
     # failure. Logging it distinguishes "query was off" from "fetch silently broke".
     passages = result.get("passages") if isinstance(result, dict) else None
-    if not passages:
+    if isinstance(result, dict) and result.get("failure"):
+        _record_failure(
+            "extract", {**result, "url_requested": url, "duration_ms": duration_ms}
+        )
+    elif not passages:
         _telemetry.log_event(
             _cfg,
             {

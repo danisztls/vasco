@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -390,6 +391,80 @@ def test_apply_relevance_blank_query_is_noop() -> None:
 
 
 # --- relevance: end-to-end through fetch -----------------------------------
+
+
+_GROUP_PAGE = (
+    '<html><body><script type="application/ld+json">'
+    + json.dumps(
+        {
+            "@type": "ProductGroup",
+            "name": "Rolo - todas as opções de Cor",
+            "brand": {"@type": "Brand", "name": "Alanca"},
+            "aggregateRating": {"ratingValue": 4.7, "reviewCount": 39},
+            "hasVariant": [
+                {
+                    "@type": "Product",
+                    "name": f"Rolo {color}",
+                    "sku": f"MLB{sku}",
+                    "productID": f"MLB{product_id}",
+                    "color": color,
+                    "offers": {
+                        "price": price,
+                        "priceCurrency": "BRL",
+                        "availability": "https://schema.org/InStock",
+                        "url": f"https://www.mercadolivre.com.br/rolo/p/MLB{product_id}",
+                    },
+                }
+                for color, sku, product_id, price in [
+                    ("Branco", 111, 52966082, 71),
+                    ("Azul", 222, 59391573, 72.5),
+                ]
+            ],
+        }
+    )
+    + "</script></body></html>"
+)
+
+
+def test_product_group_picks_the_variant_in_the_url() -> None:
+    [product] = M._parse_product(
+        _GROUP_PAGE, "https://www.mercadolivre.com.br/rolo/p/MLB59391573"
+    )
+    assert product["title"] == "Rolo Azul"
+    assert product["product_id"] == "MLB59391573"
+    assert product["price"] == 72.5
+    assert product["color"] == "Azul"
+    assert product["in_stock"] is True
+    # On the group, not the variant.
+    assert product["brand"] == "Alanca"
+    assert product["rating"] == 4.7
+    assert product["review_count"] == 39
+    assert [v["color"] for v in product["variants"]] == ["Branco", "Azul"]
+
+
+def test_product_group_url_without_a_matching_variant_takes_the_first() -> None:
+    [product] = M._parse_product(
+        _GROUP_PAGE, "https://www.mercadolivre.com.br/rolo/p/MLB999"
+    )
+    assert product["title"] == "Rolo Branco"
+
+
+def test_product_group_variants_reach_the_markdown() -> None:
+    products = M._parse_product(
+        _GROUP_PAGE, "https://www.mercadolivre.com.br/rolo/p/MLB52966082"
+    )
+    markdown = M._render_markdown(products, page_type="product", currency="BRL")
+    assert "- Branco:" in markdown and "- Azul:" in markdown
+
+
+def test_product_group_without_variants_is_still_a_parse_failure() -> None:
+    html = (
+        '<html><script type="application/ld+json">'
+        '{"@type": "ProductGroup", "name": "x", "hasVariant": []}'
+        "</script></html>"
+    )
+    with pytest.raises(AdapterParseError):
+        M._parse_product(html, "https://www.mercadolivre.com.br/x/p/MLB1")
 
 
 def _search_html(*names_prices: tuple[str, str]) -> str:

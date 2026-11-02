@@ -410,14 +410,77 @@ def _free_shipping(offers: dict[str, Any]) -> bool | None:
         return None
 
 
+def _group_variants(html: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """A product sold in several colors or sizes has a ``ProductGroup`` instead of
+    a top-level ``Product``: its ``Product`` objects are in ``hasVariant``, with the
+    brand and rating left on the group. Returns ``(group, variants)``."""
+    for obj in _common.jsonld_objects(html):
+        if obj.get("@type") != "ProductGroup":
+            continue
+        variants = obj.get("hasVariant")
+        variants = [v for v in variants if isinstance(v, dict)] if variants else []
+        if variants:
+            return obj, variants
+    return None
+
+
+def _variant_summary(variant: dict[str, Any]) -> dict[str, Any]:
+    offers = variant.get("offers") if isinstance(variant.get("offers"), dict) else {}
+    variant_url = offers.get("url") or variant.get("url")
+    return _compact(
+        {
+            "title": (variant.get("name") or "").strip() or None,
+            "url": variant_url,
+            "product_id": _product_id(variant.get("productID"), variant_url),
+            "color": variant.get("color"),
+            "price": _num(offers.get("price")),
+            "in_stock": _in_stock(offers),
+        }
+    )
+
+
+def _in_stock(offers: dict[str, Any]) -> bool | None:
+    availability = offers.get("availability")
+    if not isinstance(availability, str):
+        return None
+    return "instock" in availability.lower()
+
+
 def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     products = _jsonld_products(html)
-    if not products:
-        raise AdapterParseError(
-            "product page: no schema.org Product JSON-LD found — site structure "
-            "may have changed"
+    variants: list[dict[str, Any]] = []
+    if products:
+        item = products[0]
+    else:
+        grouped = _group_variants(html)
+        if grouped is None:
+            raise AdapterParseError(
+                "product page: no schema.org Product JSON-LD found — site structure "
+                "may have changed"
+            )
+        group, variants = grouped
+        wanted = _product_id(url)
+        requested = next(
+            (
+                v
+                for v in variants
+                if wanted
+                and wanted
+                in (
+                    _product_id(v.get("productID")),
+                    _product_id(v.get("url")),
+                    _product_id(v.get("sku")),
+                )
+            ),
+            variants[0],
         )
-    item = products[0]
+        item = {
+            "brand": group.get("brand"),
+            "aggregateRating": group.get("aggregateRating"),
+            **requested,
+        }
+        # The sku is one seller's listing; the URL and `variants` use the catalog id.
+        item.pop("sku", None)
     offers = item.get("offers") if isinstance(item.get("offers"), dict) else {}
     rating, review_count = _rating(item)
     agg = item.get("aggregateRating") or {}
@@ -426,7 +489,6 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
         if isinstance(agg, dict) and isinstance(agg.get("reviewCount"), (int, float))
         else review_count
     )
-    availability = offers.get("availability")
     final_url = offers.get("url") or url
 
     product = {
@@ -443,9 +505,7 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
         if isinstance(review_count, (int, float))
         else None,
         "free_shipping": _free_shipping(offers),
-        "in_stock": ("instock" in availability.lower())
-        if isinstance(availability, str)
-        else None,
+        "in_stock": _in_stock(offers),
         "description": (item.get("description") or "").strip() or None,
         "images": _dedup(item.get("image"), _GALLERY_CAP),
     }
@@ -463,6 +523,8 @@ def _parse_product(html: str, url: str) -> list[dict[str, Any]]:
     compact = _compact(product)
     if compact.get("images") and not compact.get("image"):
         compact["image"] = compact["images"][0]
+    if len(variants) > 1:
+        compact["variants"] = [_variant_summary(v) for v in variants]
     return [compact]
 
 
@@ -503,6 +565,9 @@ def _render_markdown(
         if extras:
             head += " — " + " · ".join(extras)
         parts.append(head)
+        for v in p.get("variants") or []:
+            price = _fmt_price(v.get("price"), p.get("currency") or currency)
+            parts.append(f"   - {v.get('color') or v.get('title', '?')}: {price}")
     return "\n".join(parts)
 
 

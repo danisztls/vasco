@@ -39,6 +39,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from html import unescape
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
@@ -267,7 +268,7 @@ def _parse_app(body: str, app_id: str, url: str) -> dict[str, Any] | None:
             "currency": price.get("currency")
             if isinstance(price.get("currency"), str)
             else None,
-            "short_description": d.get("short_description").strip()
+            "short_description": unescape(d["short_description"]).strip()
             if isinstance(d.get("short_description"), str)
             and d["short_description"].strip()
             else None,

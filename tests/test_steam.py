@@ -138,6 +138,22 @@ def test_parse_app_early_access() -> None:
     assert "Early Access" in p["genres"]
 
 
+def test_parse_app_unescapes_short_description() -> None:
+    body = json.dumps(
+        {
+            APP_ID: {
+                "success": True,
+                "data": {
+                    "name": "Portal 2",
+                    "short_description": "The &quot;Perpetual Testing Initiative&quot; ",
+                },
+            }
+        }
+    )
+    p = S._parse_app(body, APP_ID, "x")
+    assert p["short_description"] == 'The "Perpetual Testing Initiative"'
+
+
 def test_epoch_to_date() -> None:
     assert S._epoch_to_date(1599999600) == "2020-09-13"
     assert S._epoch_to_date(0) is None

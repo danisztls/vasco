@@ -149,6 +149,24 @@ def test_specs_parses_tables_and_bullets() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "text,in_stock",
+    [
+        ("Em estoque", True),
+        ("Disponível", True),
+        ("In Stock", True),
+        ("Only 3 left in stock", True),
+        ("Indisponível", False),
+        ("Fora de estoque", False),
+        ("Currently unavailable.", False),
+        ("Pré-venda", None),
+    ],
+)
+def test_availability(text: str, in_stock: bool | None) -> None:
+    html = f'<div id="availability">{text}</div>'
+    assert A._availability(A._soup(html)) == (text, in_stock)
+
+
 # --- search parse ----------------------------------------------------------
 
 

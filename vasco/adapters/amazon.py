@@ -361,9 +361,8 @@ def _availability(soup: BeautifulSoup) -> tuple[str | None, bool | None]:
     txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip() or None
     low = (txt or "").lower()
     in_stock: bool | None = None
-    if any(w in low for w in ("em estoque", "disponível", "in stock")):
-        in_stock = True
-    elif any(
+    # Negatives first: "indisponível" contains "disponível".
+    if any(
         w in low
         for w in (
             "indisponível",
@@ -374,6 +373,8 @@ def _availability(soup: BeautifulSoup) -> tuple[str | None, bool | None]:
         )
     ):
         in_stock = False
+    elif any(w in low for w in ("em estoque", "disponível", "in stock")):
+        in_stock = True
     return txt, in_stock
 
 

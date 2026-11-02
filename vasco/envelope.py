@@ -26,6 +26,16 @@ def now_epoch() -> int:
     return int(time.time())
 
 
+# A later fetch gets the cached block, even once someone has solved the captcha.
+_CACHED_BLOCKS = frozenset(
+    {FailureReason.BLOCKED_CAPTCHA, FailureReason.BLOCKED_CLOUDFLARE}
+)
+_REFRESH_HINT = (
+    "This block stays cached for about an hour. To try again sooner, such as after "
+    "someone solves the captcha, fetch with refresh=true."
+)
+
+
 class FetchEnvelope(TypedDict, total=False):
     # Identity / provenance — always present (set by ``base_envelope``).
     url_requested: str
@@ -142,6 +152,8 @@ def failure_envelope(
         "retry_after_seconds": retry_after,
         "message": message,
     }
+    if reason in _CACHED_BLOCKS:
+        env["failure"]["hint"] = _REFRESH_HINT
     env["markdown"] = partial_markdown or partial_html or ""
     env["warnings"] = list(warnings or [])
     return env

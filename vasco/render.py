@@ -173,7 +173,7 @@ def _render_failure(
     failure: dict[str, Any], con: Console, url: str | None = None
 ) -> None:
     reason = failure.get("reason") or "failure"
-    message = failure.get("message") or ""
+    message = " ".join(filter(None, (failure.get("message"), failure.get("hint"))))
     body = Text()
     if url:
         body.append(f"{url}\n", style="cyan")

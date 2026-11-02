@@ -424,12 +424,16 @@ async def _dispatch_adapters(
         )
 
     # Self-fetching shortcuts: own envelope shape, no HTTP/browser tier at all.
-    # (Wikimedia is Enterprise-API only; without creds it's a normal HTTP page.)
+    # (Wikimedia is Enterprise-API only; without creds, or when Enterprise can't
+    # serve the URL, it's a normal HTTP page.)
     if youtube.is_youtube_url(url):
         envelope = await youtube.fetch_youtube(url, deadline=deadline, cfg=cfg)
         return finalize(envelope, "youtube"), False
     if wikimedia.is_wikimedia_url(url) and wikimedia.has_credentials(cfg):
-        envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
+        try:
+            envelope = await wikimedia.fetch_wikimedia(url, deadline=deadline, cfg=cfg)
+        except wikimedia.WikimediaUnavailable:
+            return None, False
         return finalize(envelope, "wikimedia"), False
 
     # Scholar (scientific articles via open scholarly APIs): a closed, deterministic

@@ -467,20 +467,83 @@ async def test_fetch_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(wikimedia, "_ensure_token", fake_token)
-    env = await wikimedia.fetch_wikimedia(
-        "https://en.wikipedia.org/wiki/Foo", deadline=10.0
-    )
-    assert env["failure"]["reason"] == FailureReason.LOGIN_REQUIRED.value
+    with pytest.raises(wikimedia.WikimediaUnavailable):
+        await wikimedia.fetch_wikimedia(
+            "https://en.wikipedia.org/wiki/Foo", deadline=10.0
+        )
 
 
 @pytest.mark.asyncio
-async def test_fetch_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_enterprise_miss_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_enterprise(monkeypatch, structured=None, standard=None)
+    with pytest.raises(wikimedia.WikimediaUnavailable):
+        await wikimedia.fetch_wikimedia(
+            "https://en.wikipedia.org/wiki/Nonexistent_12345",
+            deadline=10.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_enterprise_error_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mediawiki_api(monkeypatch, lambda request: httpx.Response(500))
+    with pytest.raises(wikimedia.WikimediaUnavailable):
+        await wikimedia._enterprise_request(
+            "articles",
+            "Foo",
+            "enwiki",
+            "token",
+            deadline_monotonic=time.monotonic() + 5,
+        )
+
+
+def _patch_token_auth(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[str]:
+    """Route auth + Enterprise through `handler`; return the tokens issued so far."""
+    wikimedia._reset_token_for_tests()
+    issued: list[str] = []
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            issued.append(f"token-{len(issued)}")
+            return httpx.Response(
+                200, json={"access_token": issued[-1], "expires_in": 86400}
+            )
+        if "api.enterprise" in request.url.host:
+            return handler(request)
+        return httpx.Response(200, json={"query": {}})
+
+    _patch_mediawiki_api(monkeypatch, route)
+    monkeypatch.setattr(wikimedia, "_get_credentials", lambda cfg: ("u", "p"))
+    monkeypatch.setattr(wikimedia, "_AUTH_URL", "https://auth.example/login")
+    return issued
+
+
+@pytest.mark.asyncio
+async def test_rejected_token_is_renewed_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers["authorization"] == "Bearer token-0":
+            return httpx.Response(401)
+        return httpx.Response(200, json=[_SAMPLE_STANDARD])
+
+    issued = _patch_token_auth(monkeypatch, handler)
     env = await wikimedia.fetch_wikimedia(
-        "https://en.wikipedia.org/wiki/Nonexistent_12345",
-        deadline=10.0,
+        "https://en.wikipedia.org/wiki/Foo", deadline=10.0
     )
-    assert env["failure"]["reason"] == FailureReason.NOT_FOUND.value
+    assert "failure" not in env
+    assert issued == ["token-0", "token-1"]
+    wikimedia._reset_token_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_token_rejected_twice_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = _patch_token_auth(monkeypatch, lambda request: httpx.Response(401))
+    with pytest.raises(wikimedia.WikimediaUnavailable):
+        await wikimedia.fetch_wikimedia(
+            "https://en.wikipedia.org/wiki/Foo", deadline=10.0
+        )
+    assert len(issued) == 2
+    wikimedia._reset_token_for_tests()
 
 
 @pytest.mark.asyncio

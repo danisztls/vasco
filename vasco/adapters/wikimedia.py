@@ -35,6 +35,20 @@ log = logging.getLogger(__name__)
 # answers this API with a 403, which leaves redirects unresolved.
 _USER_AGENT = "Vasco/0.1 (https://github.com/dansouza/vasco)"
 
+
+class WikimediaUnavailable(Exception):
+    """Enterprise can't serve this URL; the dispatcher falls through to a normal fetch.
+
+    Enterprise only covers the main namespace and can be down or reject the token,
+    none of which says anything about the page itself. The normal fetch gives the
+    honest verdict, including a real 404.
+    """
+
+
+class _TokenRejected(Exception):
+    """Enterprise answered 401 to a token we still considered valid."""
+
+
 _STRUCTURED_LANGS = frozenset({"en", "de", "fr", "es", "pt", "it", "nl", "cy", "id"})
 
 _PROJECT_CODES: dict[str, str] = {"wikipedia": "wiki"}
@@ -146,7 +160,9 @@ def _get_credentials(cfg: Any | None) -> tuple[str, str]:
 async def _ensure_token(cfg: Any | None, deadline_monotonic: float) -> str | None:
     global _access_token, _token_expires_at
 
-    if _access_token and time.monotonic() < _token_expires_at:
+    # Wall clock, not monotonic: the token keeps expiring while the host is
+    # suspended, and the monotonic clock doesn't advance during suspend.
+    if _access_token and time.time() < _token_expires_at:
         return _access_token
 
     username, password = _get_credentials(cfg)
@@ -169,17 +185,20 @@ async def _ensure_token(cfg: Any | None, deadline_monotonic: float) -> str | Non
             data = resp.json()
             _access_token = data.get("access_token")
             expires_in = int(data.get("expires_in", 86400))
-            _token_expires_at = time.monotonic() + expires_in - 300
+            _token_expires_at = time.time() + expires_in - 300
             return _access_token
     except Exception as exc:
         log.warning("Wikimedia Enterprise auth failed: %s", exc)
         return None
 
 
-def _reset_token_for_tests() -> None:
+def _clear_token() -> None:
     global _access_token, _token_expires_at
     _access_token = None
     _token_expires_at = 0.0
+
+
+_reset_token_for_tests = _clear_token
 
 
 # ---------------------------------------------------------------------------
@@ -261,14 +280,18 @@ async def _enterprise_request(
             )
             if resp.status_code == 404:
                 return None
+            if resp.status_code == 401:
+                raise _TokenRejected
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list) and data:
                 return data[0]
             return None
+    except _TokenRejected:
+        raise
     except Exception as exc:
         log.warning("Wikimedia Enterprise %s failed: %s", endpoint, exc)
-        return None
+        raise WikimediaUnavailable(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +512,10 @@ async def fetch_wikimedia(
     deadline: float = 30.0,
     cfg: Any | None = None,
 ) -> dict[str, Any]:
-    """Fetch a Wikimedia article via Enterprise API and return an envelope."""
+    """Fetch a Wikimedia article via Enterprise API and return an envelope.
+
+    Raises :class:`WikimediaUnavailable` when Enterprise can't serve the URL.
+    """
     deadline_monotonic = time.monotonic() + max(0.0, float(deadline))
 
     info = extract_article_info(url)
@@ -502,9 +528,7 @@ async def fetch_wikimedia(
 
     token = await _ensure_token(cfg, deadline_monotonic)
     if not token:
-        return _failure_envelope(
-            url, FailureReason.LOGIN_REQUIRED, "Wikimedia Enterprise auth failed"
-        )
+        raise WikimediaUnavailable("Wikimedia Enterprise auth failed")
 
     resolved = await _resolve_redirect(
         lang, project, title, deadline_monotonic=deadline_monotonic
@@ -512,15 +536,38 @@ async def fetch_wikimedia(
 
     project_id = _enterprise_project_id(lang, project)
 
+    async def request(endpoint: str) -> dict[str, Any] | None:
+        nonlocal token
+        try:
+            return await _enterprise_request(
+                endpoint,
+                resolved,
+                project_id,
+                token,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except _TokenRejected:
+            pass
+        _clear_token()
+        token = await _ensure_token(cfg, deadline_monotonic)
+        if not token:
+            raise WikimediaUnavailable("Wikimedia Enterprise auth failed")
+        try:
+            return await _enterprise_request(
+                endpoint,
+                resolved,
+                project_id,
+                token,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except _TokenRejected as exc:
+            raise WikimediaUnavailable(
+                "Wikimedia Enterprise rejected a new token"
+            ) from exc
+
     # Structured Contents for Wikipedia in the 9 beta languages.
     if project == "wikipedia" and lang in _STRUCTURED_LANGS:
-        article = await _enterprise_request(
-            "structured-contents",
-            resolved,
-            project_id,
-            token,
-            deadline_monotonic=deadline_monotonic,
-        )
+        article = await request("structured-contents")
         if article:
             markdown, meta = _structured_to_fields(article)
             if markdown:
@@ -529,17 +576,9 @@ async def fetch_wikimedia(
                 )
 
     # Standard articles endpoint (all projects and languages).
-    article = await _enterprise_request(
-        "articles",
-        resolved,
-        project_id,
-        token,
-        deadline_monotonic=deadline_monotonic,
-    )
+    article = await request("articles")
     if not article:
-        return _failure_envelope(
-            url, FailureReason.NOT_FOUND, "article not found", http_status=404
-        )
+        raise WikimediaUnavailable(f"Enterprise has no article {resolved!r}")
 
     markdown, meta = _standard_to_fields(article)
     if not markdown:

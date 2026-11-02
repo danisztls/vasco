@@ -971,6 +971,34 @@ def test_smuggled_plaintext_is_withheld_and_logged(
         cache.close()
 
 
+def test_enterprise_miss_falls_through_to_normal_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vasco.adapters import wikimedia as wikimedia_mod
+
+    async def _miss(url: str, *, deadline: float, cfg: Any):
+        raise wikimedia_mod.WikimediaUnavailable("no article")
+
+    html = (FIXTURES / "article_clean.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(wikimedia_mod, "has_credentials", lambda cfg: True)
+    monkeypatch.setattr(wikimedia_mod, "fetch_wikimedia", _miss)
+    monkeypatch.setattr(core_mod, "_http_fetch", _stub_http(html, 200))
+    _disable_browser(monkeypatch)
+
+    cache = Cache(str(tmp_path / "cache.db"))
+    try:
+        env = asyncio.run(
+            fetch_mod.fetch_one(
+                "https://en.wikipedia.org/wiki/Talk:Foo", cache=cache, deadline=10.0
+            )
+        )
+        assert "failure" not in env
+        assert env["mode_used"] == "http"
+        assert env["markdown"]
+    finally:
+        cache.close()
+
+
 def test_smuggled_pdf_text_is_withheld(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

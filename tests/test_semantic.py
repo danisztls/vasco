@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import sys
 from typing import Any
 
 import pytest
@@ -140,23 +141,35 @@ def test_extract_rejects_unknown_rank() -> None:
         )
 
 
-def test_semantic_unavailable_raises_clear_error(
+def test_semantic_unavailable_says_what_to_do(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When sentence-transformers is not installed, the lazy importer raises a
-    typed error with installation instructions.
-    """
-
-    def fake_import() -> Any:
-        raise semantic.SemanticRankerUnavailable(
-            "Semantic ranking requires the 'semantic' extra."
-        )
-
-    monkeypatch.setattr(semantic, "_import_sentence_transformers", fake_import)
+    """Without sentence-transformers, the error names the alternative and how to
+    install the extra for both the deployed tool and a dev checkout."""
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
     monkeypatch.setattr(semantic, "_ranker", None, raising=False)
     ranker = semantic.SemanticRanker()
-    with pytest.raises(semantic.SemanticRankerUnavailable):
+    with pytest.raises(semantic.SemanticRankerUnavailable) as caught:
         ranker.rank(["a"], "a", top=1)
+    message = str(caught.value)
+    assert "rank='bm25'" in message
+    assert "uv tool install --reinstall '.[browser,semantic]'" in message
+    assert "uv sync --extra semantic" in message
+
+
+def test_extract_fails_before_fetching_when_the_extra_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    async def must_not_fetch(url: str, **kwargs: Any) -> dict:
+        raise AssertionError("fetched despite the missing extra")
+
+    monkeypatch.setattr(fetch_mod, "fetch_one", must_not_fetch)
+    with pytest.raises(semantic.SemanticRankerUnavailable):
+        asyncio.run(
+            extract_mod.extract("https://example.com/x", query="a", rank="semantic")
+        )
 
 
 @pytest.mark.skipif(

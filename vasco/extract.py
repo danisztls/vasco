@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import unicodedata
 from typing import Any
@@ -196,6 +197,11 @@ async def extract(
     """
     if rank not in ("bm25", "semantic"):
         raise ValueError(f"unknown rank backend: {rank!r}")
+    if rank == "semantic":
+        # Fail before the fetch, which can take a full deadline to no use.
+        from vasco import semantic
+
+        await asyncio.to_thread(semantic.require_installed)
 
     env = await _fetch.fetch_one(
         url,

@@ -18,6 +18,14 @@ from typing import Any
 
 _DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
+_NOT_INSTALLED = (
+    "rank='semantic' isn't available because the 'semantic' extra "
+    "(sentence-transformers) isn't installed. Use rank='bm25' instead. To install "
+    "it, run `uv tool install --reinstall '.[browser,semantic]'` from the vasco "
+    "checkout and restart vascod.service, or `uv sync --extra semantic` in a dev "
+    "checkout. The default install downloads about 3 GB, mostly CUDA libraries."
+)
+
 
 class SemanticRankerUnavailable(RuntimeError):
     """Raised when the ``semantic`` extra is not installed."""
@@ -27,11 +35,14 @@ def _import_sentence_transformers() -> Any:
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
-        raise SemanticRankerUnavailable(
-            "Semantic ranking requires the 'semantic' extra. "
-            "Install it with: uv sync --extra semantic"
-        ) from exc
+        raise SemanticRankerUnavailable(_NOT_INSTALLED) from exc
     return SentenceTransformer
+
+
+def require_installed() -> None:
+    """Raise ``SemanticRankerUnavailable`` if the extra is missing. Doesn't load
+    the model, so a caller can check this before doing any other work."""
+    _import_sentence_transformers()
 
 
 class SemanticRanker:

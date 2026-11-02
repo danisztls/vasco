@@ -448,3 +448,29 @@ async def test_queue_wait_does_not_shrink_fetch_deadline(
         coord.fetch("https://q.test/2", deadline=30.0),
     )
     assert seen == [30.0, 30.0]
+
+
+def test_metadata_view_drops_content_keeps_scalars_and_signals() -> None:
+    from vasco.envelope import metadata_view
+
+    env = {
+        "title": "T",
+        "markdown": "body",
+        "quality": {
+            "slop_score": 0.2,
+            "provider": "steam",
+            "signals": {"em_dash_density": 0.1},
+            "infoboxes": [{"a": 1}],
+            "products": [{"title": "x"}],
+            "scores": {"revertrisk": {}},
+        },
+    }
+    view = metadata_view(env)
+    assert "markdown" not in view
+    assert view["title"] == "T"
+    assert view["quality"] == {
+        "slop_score": 0.2,
+        "provider": "steam",
+        "signals": {"em_dash_density": 0.1},
+    }
+    assert env["quality"]["products"], "the original envelope stays intact"

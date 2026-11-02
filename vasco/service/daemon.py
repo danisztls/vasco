@@ -32,6 +32,7 @@ from vasco import map as _map
 from vasco import summarize as _summarize
 from vasco.cache import Cache
 from vasco.config import Config, load_config
+from vasco.envelope import metadata_view
 from vasco.search import get_searcher
 
 from . import protocol
@@ -60,11 +61,6 @@ _SEARCH_KEYS = ("max_results", "region", "time", "site")
 
 def _pick(params: dict[str, Any], allowed: tuple[str, ...]) -> dict[str, Any]:
     return {k: params[k] for k in allowed if k in params}
-
-
-def _strip_markdown(env: dict[str, Any]) -> dict[str, Any]:
-    """Drop the large ``markdown`` field for triage-only callers (fetch_many)."""
-    return {k: v for k, v in env.items() if k != "markdown"}
 
 
 class Dispatcher:
@@ -102,7 +98,7 @@ class Dispatcher:
                     return await self.coordinator.fetch(u, **kw)
 
             envs = await asyncio.gather(*[_one(u) for u in urls])
-            return [_strip_markdown(e) if metadata_only else e for e in envs]
+            return [metadata_view(e) if metadata_only else e for e in envs]
         if op == protocol.OP_EXTRACT:
             return await _extract.extract(
                 params["url"],

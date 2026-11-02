@@ -29,6 +29,7 @@ from vasco import map as _map_mod
 from vasco import search as _search
 from vasco import summarize as _summarize_mod
 from vasco import telemetry as _telemetry
+from vasco.envelope import metadata_view
 from vasco.fetch import browser as _browser
 from vasco.service import client as _service_client
 from vasco.service import protocol as _proto
@@ -171,11 +172,6 @@ async def search(
     return rows
 
 
-def _strip_markdown(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Drop the large `markdown` field for triage-only callers."""
-    return {k: v for k, v in envelope.items() if k != "markdown"}
-
-
 def _record_failure(tool: str, envelope: dict[str, Any]) -> None:
     _telemetry.record_failure(_cfg, tool, envelope)
 
@@ -200,7 +196,8 @@ def _fetch_success_fields(env: dict[str, Any]) -> dict[str, Any]:
         "return a transcript; PDFs are rendered to text; Wikipedia/Wikimedia "
         "URLs use the Enterprise API when configured. Set refresh=true to "
         "bypass the cache and re-fetch from the source. Set metadata_only=true "
-        "to omit the `markdown` field (useful when triaging many URLs before "
+        "to omit the content: `markdown` and the structured lists in `quality` "
+        "such as adapter products (useful when triaging many URLs before "
         "deciding what to read in full). To get an LLM answer/summary over a "
         "page instead of its full text, use the `answer` tool."
     ),
@@ -240,7 +237,7 @@ async def fetch(
     else:
         _record_success("fetch", **_fetch_success_fields(envelope))
     if metadata_only:
-        return _strip_markdown(envelope)
+        return metadata_view(envelope)
     return envelope
 
 
@@ -266,7 +263,7 @@ async def fetch_many(
 ) -> list[dict[str, Any]]:
     async def _local() -> list[dict[str, Any]]:
         return [
-            _strip_markdown(env) if metadata_only else env
+            metadata_view(env) if metadata_only else env
             async for env in _fetch.fetch_many(
                 urls,
                 workers=workers,

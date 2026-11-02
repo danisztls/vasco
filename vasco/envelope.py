@@ -107,6 +107,23 @@ def success_envelope(
     return env
 
 
+def metadata_view(env: dict[str, Any]) -> dict[str, Any]:
+    """An envelope without its content, for ``metadata_only`` triage.
+
+    Adapters carry content in ``quality`` too (infoboxes, products, price history),
+    so only its scalars and the slop ``signals`` stay.
+    """
+    view = {k: v for k, v in env.items() if k != "markdown"}
+    quality = view.get("quality")
+    if isinstance(quality, dict):
+        view["quality"] = {
+            k: v
+            for k, v in quality.items()
+            if k == "signals" or not isinstance(v, dict | list)
+        }
+    return view
+
+
 def failure_envelope(
     *,
     base: dict[str, Any],

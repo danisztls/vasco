@@ -257,3 +257,69 @@ def test_spider_stops_at_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
             "https://x.test", limit=100, pages=12, deadline=time.monotonic() - 1
         )
     )
+
+
+def _patch_sitemaps(
+    monkeypatch: pytest.MonkeyPatch,
+    found: dict[str, list[str]],
+    robots: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """Stub trafilatura's sitemap calls; returns the URLs `sitemap_search` got."""
+    searched: list[str] = []
+
+    def sitemap_search(url: str, **kw: Any) -> list[str]:
+        searched.append(url)
+        return found.get(url, [])
+
+    monkeypatch.setattr("trafilatura.sitemaps.sitemap_search", sitemap_search)
+    monkeypatch.setattr(
+        "trafilatura.sitemaps.find_robots_sitemaps",
+        lambda base: (robots or {}).get(base, []),
+    )
+    return searched
+
+
+def _sitemap_urls(url: str) -> list[str]:
+    return [r["url"] for r in _map._iter_sitemap(url, max_sitemaps=3)]
+
+
+def test_sitemap_falls_back_to_the_urls_own_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = "https://x.test/v1/sitemap_index.xml"
+    _patch_sitemaps(monkeypatch, {index: ["https://x.test/v1/a"]})
+    assert _sitemap_urls("https://x.test/v1/") == ["https://x.test/v1/a"]
+
+
+def test_sitemap_fallback_prefers_the_directorys_robots_txt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listed = "https://x.test/v1/maps/all.xml"
+    searched = _patch_sitemaps(
+        monkeypatch,
+        {listed: ["https://x.test/v1/a"]},
+        robots={"https://x.test/v1": [listed]},
+    )
+    assert _sitemap_urls("https://x.test/v1") == ["https://x.test/v1/a"]
+    assert searched == ["https://x.test/v1", listed]
+
+
+def test_sitemap_found_at_the_root_skips_the_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    searched = _patch_sitemaps(
+        monkeypatch, {"https://x.test/v1/": ["https://x.test/v1/a"]}
+    )
+    assert _sitemap_urls("https://x.test/v1/") == ["https://x.test/v1/a"]
+    assert searched == ["https://x.test/v1/"]
+
+
+@pytest.mark.parametrize(
+    "url", ["https://x.test/", "https://x.test", "https://x.test/maps/all.xml"]
+)
+def test_sitemap_fallback_needs_a_directory(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    searched = _patch_sitemaps(monkeypatch, {})
+    assert _sitemap_urls(url) == []
+    assert searched == [url]

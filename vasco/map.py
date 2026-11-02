@@ -8,7 +8,7 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,7 @@ from vasco.quality import smuggling
 _MAX_BODY_BYTES = 512 * 1024
 _DISK_TTL_SECONDS = 86400  # 24 h
 _SPIDER_STEP_PAGES = 5
+_SITEMAP_GUESSES = ("sitemap.xml", "sitemap_index.xml", "wp-sitemap.xml")
 NOTICE_SOURCE = "notice"
 
 
@@ -201,6 +202,27 @@ def _iter_llmstxt(url: str) -> Iterator[dict[str, Any]]:
         }
 
 
+def _subdirectory_sitemap_urls(
+    url: str, sitemap_search: Callable[..., list[str]], max_sitemaps: int
+) -> list[str]:
+    """A site installed under a path keeps its robots.txt and sitemaps there, but
+    trafilatura only looks at the host's root."""
+    from trafilatura.sitemaps import find_robots_sitemaps
+
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    if not path or path.endswith((".xml", ".gz", "sitemap")):
+        return []
+    base = f"{parts.scheme}://{parts.netloc}{path}"
+    for candidate in find_robots_sitemaps(base) or [
+        f"{base}/{name}" for name in _SITEMAP_GUESSES
+    ]:
+        urls = sitemap_search(candidate, target_lang=None, max_sitemaps=max_sitemaps)
+        if urls:
+            return urls
+    return []
+
+
 def _iter_sitemap(url: str, *, max_sitemaps: int) -> Iterator[dict[str, Any]]:
     try:
         from trafilatura.sitemaps import sitemap_search
@@ -209,6 +231,8 @@ def _iter_sitemap(url: str, *, max_sitemaps: int) -> Iterator[dict[str, Any]]:
         return
     try:
         urls = sitemap_search(url, target_lang=None, max_sitemaps=max_sitemaps) or []
+        if not urls:
+            urls = _subdirectory_sitemap_urls(url, sitemap_search, max_sitemaps)
     except Exception as exc:
         _warn(f"sitemap discovery failed for {url}: {exc}")
         return

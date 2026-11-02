@@ -213,10 +213,17 @@ async def _history(
 
 
 async def steam_price_history(
-    appid: str, *, cfg: Any | None = None, timeout: float = 12.0
+    appid: str,
+    *,
+    cfg: Any | None = None,
+    country: str | None = None,
+    timeout: float = 12.0,
 ) -> dict[str, Any] | None:
     """Steam appid → ``{itad_id, itad_url?, historical_low?, price_history?,
     currency?}`` or ``None``.
+
+    ``country`` is the region of the store price shown beside it, when that isn't
+    the configured one, so both are in the same currency.
 
     Returns ``None`` with **zero network** when no API key is configured, so it's
     free to schedule unconditionally alongside the Steam fetches. Looks the appid
@@ -226,7 +233,7 @@ async def steam_price_history(
     key = resolve_api_key(cfg)
     if not key:
         return None
-    country = _country(cfg)
+    country = country.upper() if country else _country(cfg)
 
     import httpx
 

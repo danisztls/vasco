@@ -138,6 +138,33 @@ def test_steam_price_history_no_key_is_zero_network(
     assert asyncio.run(I.steam_price_history("1145360", cfg=None)) is None
 
 
+def test_steam_price_history_country_overrides_the_configured_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    async def _lookup(client, appid, key):
+        return "GID-123", "hades"
+
+    async def _store_low(client, gid, key, country):
+        seen.append(country)
+
+    async def _history(client, gid, key, country, limit):
+        seen.append(country)
+        return []
+
+    monkeypatch.setattr(I, "_lookup", _lookup)
+    monkeypatch.setattr(I, "_store_low", _store_low)
+    monkeypatch.setattr(I, "_history", _history)
+    steam = SteamCfg(itad_api_key="k", country="BR")
+    asyncio.run(
+        I.steam_price_history(
+            "1145360", cfg=Config(adapters=AdaptersCfg(steam=steam)), country="us"
+        )
+    )
+    assert seen == ["US", "US"]
+
+
 def test_steam_price_history_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _lookup(client, appid, key):
         assert appid == "1145360" and key == "k"

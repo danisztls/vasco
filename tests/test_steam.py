@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -441,6 +442,54 @@ def test_region_honors_cfg() -> None:
     )
     details_url = next(t for t in captured if "/api/appdetails" in t)
     assert "cc=us" in details_url and "l=english" in details_url
+
+
+@pytest.mark.parametrize(
+    ("query", "cc", "lang"),
+    [
+        ("?cc=us&l=english", "us", "english"),
+        ("?CC=US", "br", "brazilian"),  # Steam's own params are lowercase
+        ("?cc=US&l=Japanese", "us", "japanese"),
+        ("?cc=usa&l=en-gb", "br", "brazilian"),  # malformed: keep the config's
+        ("?snr=1_7", "br", "brazilian"),
+    ],
+)
+def test_region_from_url_overrides_cfg(query: str, cc: str, lang: str) -> None:
+    cfg = Config(
+        adapters=AdaptersCfg(steam=SteamCfg(country="BR", language="brazilian"))
+    )
+    url = f"https://store.steampowered.com/app/1145360/{query}"
+    assert S._region(url, cfg) == (cc, lang)
+
+
+def test_url_region_reaches_the_store_and_itad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    countries: list[str | None] = []
+    captured: list[str] = []
+
+    async def _itad(appid: str, *, cfg: Any = None, country: str | None = None) -> None:
+        countries.append(country)
+
+    async def _fetch(target: str):
+        captured.append(target)
+        if "/api/appdetails" in target:
+            return (_fx("appdetails_1145360.json"), 200, {}, FailureReason.OK, "http")
+        if "/appreviews/" in target:
+            return (_fx("appreviews_1145360.json"), 200, {}, FailureReason.OK, "http")
+        return (_fx("players_1145360.json"), 200, {}, FailureReason.OK, "http")
+
+    monkeypatch.setattr(S.itad, "steam_price_history", _itad)
+    cfg = Config(adapters=AdaptersCfg(steam=SteamCfg(country="BR")))
+    asyncio.run(
+        S.fetch_steam(
+            "https://store.steampowered.com/app/1145360/?cc=us",
+            cfg=cfg,
+            fetch_html=_fetch,
+        )
+    )
+    assert "cc=us" in next(t for t in captured if "/api/appdetails" in t)
+    assert countries == ["us"]
 
 
 def test_fetch_steam_no_fetcher_fails_cleanly() -> None:

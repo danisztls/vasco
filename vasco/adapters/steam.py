@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlsplit
@@ -58,6 +59,9 @@ _HOST = "store.steampowered.com"
 # stable numeric anchor, unlike the localized description ("Acesso Antecipado").
 _EARLY_ACCESS_GENRE_ID = "70"
 _DEFAULT_MAX_REVIEWS = 10
+
+_COUNTRY_RE = re.compile(r"[a-z]{2}")
+_LANGUAGE_RE = re.compile(r"[a-z]+")
 
 
 # ---------------------------------------------------------------------------
@@ -98,12 +102,19 @@ def is_steam_url(url: str) -> bool:
     return _claim(url) is not None
 
 
-def _region(cfg: Any | None) -> tuple[str, str]:
-    """``(cc, language)`` from ``cfg.adapters.steam`` — Steam's storefront region knobs."""
+def _region(url: str, cfg: Any | None) -> tuple[str, str]:
+    """``(cc, language)`` for a fetch: the URL's own ``cc``/``l``, as on the store,
+    else ``cfg.adapters.steam``."""
     steam = getattr(getattr(cfg, "adapters", None), "steam", None)
     cc = str(getattr(steam, "country", "US") or "US").lower()
     lang = str(getattr(steam, "language", "english") or "english").lower()
-    return cc, lang
+    query = parse_qs(urlsplit(url).query)
+    url_cc = (query.get("cc") or [""])[0].strip().lower()
+    url_lang = (query.get("l") or [""])[0].strip().lower()
+    return (
+        url_cc if _COUNTRY_RE.fullmatch(url_cc) else cc,
+        url_lang if _LANGUAGE_RE.fullmatch(url_lang) else lang,
+    )
 
 
 def _max_reviews(cfg: Any | None) -> int:
@@ -642,7 +653,7 @@ async def _fetch_app(
         fetch_html(_appdetails_url(app_id, cc, lang)),
         fetch_html(_appreviews_url(app_id, num_per_page=max_reviews)),
         fetch_html(_players_url(app_id)),
-        itad.steam_price_history(app_id, cfg=cfg),
+        itad.steam_price_history(app_id, cfg=cfg, country=cc),
         return_exceptions=True,
     )
 
@@ -773,7 +784,7 @@ async def fetch_steam(
             url, FailureReason.SERVER_ERROR, "steam: no HTML fetcher injected"
         )
     page_type, key = claim
-    cc, lang = _region(cfg)
+    cc, lang = _region(url, cfg)
     if page_type == "search":
         return await _fetch_search(url, key, cc, lang, fetch_html)
     return await _fetch_app(url, key, cc, lang, fetch_html, cfg)

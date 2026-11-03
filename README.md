@@ -30,8 +30,8 @@ Vasco got something useful from all 18 URLs in a test against Claude Code's buil
 
 | Result          | Vasco | WebFetch |
 | --------------- | ----- | -------- |
-| Fully answered  | 11    | 6        |
-| Partly answered | 7     | 2        |
+| Fully answered  | 13    | 6        |
+| Partly answered | 5     | 2        |
 | Failed          | 0     | 10       |
 
 | URL                       | Vasco                                       | WebFetch                                 |
@@ -39,14 +39,14 @@ Vasco got something useful from all 18 URLs in a test against Claude Code's buil
 | Anthropic article         | Yes                                         | Yes                                      |
 | Python docs (end of page) | Yes, verbatim                               | Yes, from a summary past about 40k chars |
 | Wikipedia                 | Partial: no References or later sections    | Partial: summary invented the headings   |
-| GitHub `uv`               | Partial: no star count                      | Yes                                      |
+| GitHub `uv`               | Yes, with stars and forks                   | Yes                                      |
 | Hacker News               | Yes                                         | Yes                                      |
 | RFC 9110 (503k chars)     | Yes, full text                              | Partial: end of document not reached     |
 | arXiv PDF                 | Yes, including references                   | No: PDF saved to a file, no text         |
 | YouTube                   | Yes, transcript                             | No: 302 to Google's `/sorry` page        |
 | Reddit                    | Partial: titles translated to Portuguese    | No: "unable to fetch"                    |
 | Stack Overflow            | Partial: answer text, no score or question  | No: "unable to fetch"                    |
-| npm                       | Partial: version, no download count         | No: 403                                  |
+| npm                       | Yes, with version and weekly downloads      | No: 403                                  |
 | ScienceDirect             | Yes, through the scholar adapter            | No: 403                                  |
 | Reuters                   | Partial: story summaries, not headlines     | No: "unable to fetch"                    |
 | Amazon search             | Yes, 16 structured products                 | No: 503                                  |
@@ -55,9 +55,9 @@ Vasco got something useful from all 18 URLs in a test against Claude Code's buil
 | X profile                 | Partial: posts, possibly not the latest one | No: 402                                  |
 | 404 test                  | Yes, typed `not_found`                      | Yes, plain HTTP 404                      |
 
-Vasco's median was 2.4s per URL, and the 18 took about 17s with 4 workers. WebFetch ran through a subagent, so there's no per-URL timing to compare. Vasco's text is also usually much smaller: 265 vs 21,008 chars on Steam and 8,862 vs 25,390 on GitHub. The cost of always returning a whole page is that the RFC comes to about 117k tokens, which is what `extract` is for.
+Vasco's median was 2.4s per URL, and the 18 took about 17s with 4 workers. WebFetch ran through a subagent, so there's no per-URL timing to compare. Vasco's text is also usually much smaller: 265 vs 21,008 chars on Steam and 10,317 vs 25,390 on GitHub. The cost of always returning a whole page is that the RFC comes to about 117k tokens, which is what `extract` is for.
 
-This is one run on 2026-11-02 (`c816c38`), from one residential connection, on sites picked by hand. Several of them have dedicated Vasco adapters, and on ordinary articles and docs the two mostly tied. WebFetch's "unable to fetch" errors come from Anthropic's domain blocklist rather than the site: its check refuses Reddit, Stack Overflow and Reuters. Turning the check off with `skipWebFetchPreflight` would probably only help Reddit, since plain `curl` gets a 403 from Stack Overflow and a 401 from Reuters. WebFetch's docs give a limit of 100,000 chars per call, and past about 40k this run got a model summary rather than verbatim text. An agent could still open the saved arXiv PDF with `Read`, as a second step. Vasco also takes more to set up: the browser tier needs its service running and the Wikipedia Enterprise route needs configuring, while WebFetch needs nothing.
+This is one run on 2026-11-02 (`c816c38`), with the GitHub and npm rows re-run at `3633af6` once their adapters landed, from one residential connection, on sites picked by hand. Several of them have dedicated Vasco adapters, and on ordinary articles and docs the two mostly tied. WebFetch's "unable to fetch" errors come from Anthropic's domain blocklist rather than the site: its check refuses Reddit, Stack Overflow and Reuters. Turning the check off with `skipWebFetchPreflight` would probably only help Reddit, since plain `curl` gets a 403 from Stack Overflow and a 401 from Reuters. WebFetch's docs give a limit of 100,000 chars per call, and past about 40k this run got a model summary rather than verbatim text. An agent could still open the saved arXiv PDF with `Read`, as a second step. Vasco also takes more to set up: the browser tier needs its service running and the Wikipedia Enterprise route needs configuring, while WebFetch needs nothing.
 
 ## Install
 

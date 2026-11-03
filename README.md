@@ -102,6 +102,7 @@ vasco serve             # vascod
 vasco mcp               # MCP server on stdio
 vasco browser-server    # Camoufox browser tier
 vasco browser-solve <url>   # hold a page open for a manual captcha solve over VNC
+vasco browser-clean [--dry-run]   # delete old Camoufox installs and profile caches; keeps cookies and sessions
 ```
 
 Every content command takes `--human/-H` (force pretty output even when piped) and `--json` (force machine output even on a terminal). By default output **auto-detects the TTY**: rich rendering on a terminal, JSON/NDJSON when piped. Machine output is byte-for-byte identical either way.

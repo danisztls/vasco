@@ -743,6 +743,14 @@ def _resolve_spoof_os(spoof_os: str) -> str:
     return _HOST_OS_TO_CAMOUFOX.get(platform.system(), "linux")
 
 
+def _resolve_user_data_dir(raw: str) -> str:
+    """Absolute profile path from ``browser.user_data_dir``, honoring the XDG default."""
+    if "XDG_DATA_HOME" not in os.environ:
+        xdg = str(Path.home() / ".local" / "share")
+        raw = raw.replace("${XDG_DATA_HOME}", xdg).replace("$XDG_DATA_HOME", xdg)
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(raw)))
+
+
 def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
     """Resolve Camoufox launch kwargs and whether we run a persistent context."""
     headless: bool | str = True
@@ -774,14 +782,7 @@ def _build_launch_kwargs(cfg: Any | None) -> tuple[dict[str, Any], bool]:
                 window = ()
 
     if user_data_dir:
-        if "XDG_DATA_HOME" not in os.environ:
-            xdg = str(Path.home() / ".local" / "share")
-            user_data_dir = user_data_dir.replace("${XDG_DATA_HOME}", xdg).replace(
-                "$XDG_DATA_HOME", xdg
-            )
-        user_data_dir = os.path.abspath(
-            os.path.expanduser(os.path.expandvars(user_data_dir))
-        )
+        user_data_dir = _resolve_user_data_dir(user_data_dir)
 
     # virtual_display launches a real (non-headless) Firefox inside Xvfb; it wins
     # over the bool `headless` because clicking the Turnstile checkbox needs a
@@ -1191,6 +1192,12 @@ class _BrowserSupervisor:
             await self._close_locked()
 
 
+def _prune_old_browsers() -> None:
+    from .browser_housekeeping import prune_old_browsers
+
+    prune_old_browsers()
+
+
 async def run_server(cfg: Any | None = None) -> None:
     try:
         import camoufox.async_api  # noqa: F401
@@ -1282,6 +1289,10 @@ async def run_server(cfg: Any | None = None) -> None:
     log.info("launching camoufox (locale=%s, persistent=%s)", locale, is_persistent)
     supervisor = _BrowserSupervisor(kwargs, is_persistent)
     await supervisor.start()
+    # Only now: the launch may have just installed a new bundle, and an upgrade
+    # that can't launch keeps the old one to roll back to. In the background
+    # because deleting a bundle shouldn't delay the first fetch.
+    prune = asyncio.create_task(asyncio.to_thread(_prune_old_browsers))
     try:
         server = await asyncio.start_unix_server(
             lambda r, w: _handle_client(
@@ -1307,6 +1318,7 @@ async def run_server(cfg: Any | None = None) -> None:
             server.close()
             await server.wait_closed()
     finally:
+        await prune
         await supervisor.close()
         if managed:
             for proc in managed:

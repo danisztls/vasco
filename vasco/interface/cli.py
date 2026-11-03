@@ -798,6 +798,37 @@ def mcp() -> None:
     _mcp.run()
 
 
+@app.command("browser-clean")
+def browser_clean(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Report what would go; delete nothing."),
+    ] = False,
+    human: HumanOpt = False,
+    json_: JsonOpt = False,
+) -> None:
+    """Delete old Camoufox browser installs and profile caches.
+
+    Keeps the active browser, any browser still running, and all session state
+    (cookies, logins, site storage). The profile cache can only be cleared while
+    the browser server is stopped; the rest can go at any time.
+    """
+    from vasco.config import load_config
+    from vasco.fetch.browser_housekeeping import housekeep
+
+    is_human = _resolve_output(human, json_)
+    report = housekeep(load_config(), dry_run=dry_run)
+    if is_human:
+        from vasco import render as _render
+
+        _render.render_json(report)
+    else:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+    if report["errors"]:
+        raise typer.Exit(1)
+
+
 @app.command("browser-server")
 def browser_server() -> None:
     """Run a persistent Camoufox browser server on a UNIX socket.

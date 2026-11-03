@@ -4,29 +4,23 @@
 
 **Status:** open, not fixed. Found 2026-11-02 at `c816c38` while comparing vasco with Claude Code's WebFetch. Causes aren't investigated unless stated.
 
-### Reddit titles come back translated
+### Stack Overflow is sometimes blocked and loses the question and scores
 
-`r/Python` post titles and bodies arrive in Portuguese, so an agent would quote text the original post doesn't contain. The cause is the `pt-BR` browser locale: the posts are marked `post-language="en"`, and `r/france` titles get translated the same way, while `r/brasil` stays in the original.
-
-There's no fix through the URL. `?tl=en` left `r/Python` in Portuguese and translated `r/brasil` into English. The `.json` listing answers 403. Post permalinks keep the original language in their slug, but only as a slug.
-
-**Decide:** the options are changing `browser.locale`, which could affect the pt-BR sites, or giving Reddit its own browser context with an English locale. A context only helps English posts, so translated posts in other languages would still need flagging, which `post-language` makes possible.
-
-### Stack Overflow is blocked and loses the question and scores
-
-A fresh fetch of `https://stackoverflow.com/questions/11227809` and of `https://stackoverflow.com/questions/231767` returned `blocked_cloudflare` at about 20:45 UTC on 2026-11-02, in the browser tier, though the first URL had fetched fine at 19:53 UTC. The cause of the change is unknown. When a fetch does get through, the Markdown starts at the answer, without the question body or the scores (`boilerplate_ratio` 0.94).
+The browser tier returned `blocked_cloudflare` for `https://stackoverflow.com/questions/11227809` and `https://stackoverflow.com/questions/231767` for a while on 2026-11-02, starting between 19:53 and 20:43 UTC, then the first URL fetched fine again later. The cause is unknown, so treat the block as intermittent. When a fetch does get through, the Markdown starts at the answer, without the question body or the scores (`boilerplate_ratio` 0.94).
 
 The keyless Stack Exchange API returned the title, score, answer count and question body for the first URL (`api.stackexchange.com/2.3/questions/<id>?site=stackoverflow&filter=withbody`). **Proposal:** an adapter like npm's. Its daily limit without a key and the answers endpoint are still untested, and other Stack Exchange sites could share it.
 
 ### Wikipedia drops the closing sections
 
-The Wikimedia route ends at "Languages influenced by Python", without the article's References, Further reading and External links. This may be deliberate, so decide before changing it.
+The Enterprise response stops at "Languages influenced by Python", so See also, Notes, References, Further reading and External links never reach vasco's renderer. It does carry a `references` field, which the adapter ignores.
+
+**Don't put it in `quality` by default.** MCP `fetch` returns the whole envelope, `quality` included, so every agent reading an article would receive it. For `Python_(programming_language)` the 206 raw entries come to about 54,800 tokens and a text-and-URL version to about 14,400, against 8,715 for the article. If agents start needing sources, add an opt-in `fetch` parameter. `metadata_view` already drops lists from `quality`, so triage stays small either way.
 
 ## Improve Reddit, Reuters and Associated Press
 
 **Status:** to do. Vasco fetches all three, but each misses what an agent would ask for. The ideas below are untested unless stated.
 
-- **Reddit:** `r/Python` extracts poorly (`trafilatura_confidence` 0.40, `boilerplate_ratio` 0.68), and listings have no structure. The rendered page has `shreddit-post` elements with title, score and language attributes, so an adapter can get structured posts. Fix the translation bug above with it.
+- **Reddit:** `r/Python` extracts poorly (`trafilatura_confidence` 0.40, `boilerplate_ratio` 0.68), and listings have no structure. The rendered page has `shreddit-post` elements with title, score and language attributes, so an adapter can get structured posts.
 - **Reuters:** `/technology/` returns story summaries, not headlines (`trafilatura_confidence` 0.45, `boilerplate_ratio` 0.76).
 - **Associated Press:** articles are fine, with 878 words and `trafilatura_confidence` 1.0 through the browser tier. Hub pages aren't: `/hub/technology` returned 157 words with `boilerplate_ratio` 0.98, and its raw HTML holds 95 article links that extraction drops. The home page returned 150 words.
 - **Shared approach:** Reuters and AP have the same news section page problem, so one approach may cover both. AP's `PagePromo-title` elements are a possible anchor there, but a generic one needs a design decision.

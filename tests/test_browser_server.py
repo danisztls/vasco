@@ -333,6 +333,51 @@ class _FakeBrowser:
         return self._page
 
 
+@pytest.mark.parametrize(
+    "url, mobile_ua, expected",
+    [
+        ("https://example.com", False, {}),
+        (
+            "https://www.reddit.com/r/Python/",
+            False,
+            {"Accept-Language": "en-US,en;q=0.9"},
+        ),
+        (
+            "https://old.reddit.com/r/Python/",
+            False,
+            {"Accept-Language": "en-US,en;q=0.9"},
+        ),
+        ("https://example.com", True, {"User-Agent": bs._MOBILE_USER_AGENT}),
+        (
+            "https://www.reddit.com/r/Python/",
+            True,
+            {
+                "User-Agent": bs._MOBILE_USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        ),
+    ],
+)
+def test_page_headers(url: str, mobile_ua: bool, expected: dict[str, str]) -> None:
+    assert bs._page_headers(url, mobile_ua=mobile_ua) == expected
+
+
+async def test_fetch_page_sets_the_reddit_language_header() -> None:
+    page = _FakePage()
+    sent: list[dict[str, str]] = []
+
+    async def record(headers: dict[str, str]) -> None:
+        sent.append(headers)
+
+    page.set_extra_http_headers = record  # type: ignore[attr-defined]
+    await bs.fetch_page(
+        _FakeBrowser(page),
+        "https://www.reddit.com/r/Python/",
+        deadline_monotonic=time.monotonic() + 5,
+    )
+    assert sent == [{"Accept-Language": "en-US,en;q=0.9"}]
+
+
 async def test_fetch_page_installs_route_and_blocks_third_party_tracker() -> None:
     page = _FakePage()
     html, status, _ = await bs.fetch_page(

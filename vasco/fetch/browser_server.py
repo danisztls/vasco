@@ -562,6 +562,24 @@ async def _maybe_recover_login_wall(
     return new_html, new_status, new_headers
 
 
+# Reddit machine-translates posts for a non-English browser, so an agent would
+# quote text the post doesn't contain. An English header stops that without
+# changing the browser's locale, which the pt-BR sites rely on. Original-language
+# posts stay as written: this doesn't translate other languages into English.
+_ACCEPT_LANGUAGE_BY_DOMAIN = {"reddit.com": "en-US,en;q=0.9"}
+
+
+def _page_headers(url: str, *, mobile_ua: bool = False) -> dict[str, str]:
+    """Extra request headers for one page."""
+    headers: dict[str, str] = {}
+    if mobile_ua:
+        headers["User-Agent"] = _MOBILE_USER_AGENT
+    language = _ACCEPT_LANGUAGE_BY_DOMAIN.get(registered_domain(url))
+    if language:
+        headers["Accept-Language"] = language
+    return headers
+
+
 async def fetch_page(
     browser_or_context: Any,
     url: str,
@@ -599,8 +617,11 @@ async def fetch_page(
         else:
             page = await browser_or_context.new_page()
             if mobile:
-                await page.set_extra_http_headers({"User-Agent": _MOBILE_USER_AGENT})
                 await page.set_viewport_size(_MOBILE_VIEWPORT)
+        # A new context already carries the mobile UA; a shared one needs the header.
+        headers = _page_headers(url, mobile_ua=mobile and is_persistent)
+        if headers:
+            await page.set_extra_http_headers(headers)
     try:
         if netblock or block_images:
             await _install_route(page, url, netblock, block_images)

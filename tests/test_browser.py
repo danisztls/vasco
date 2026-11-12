@@ -70,6 +70,25 @@ async def test_ensure_started_raises_when_no_server(
 
 
 @pytest.mark.asyncio
+async def test_ensure_started_reports_server_launch_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A server that is up but can't launch a browser surfaces its reason instead
+    of the misleading "not reachable"."""
+    sock = tmp_path / "browser.sock"
+    monkeypatch.setattr(browser_mod, "_socket_path", lambda: str(sock))
+    server = await _start_fake_server(
+        sock, lambda req: {"error": "Failed to launch\ncannot open display: :99"}
+    )
+    try:
+        with pytest.raises(BrowserServerUnavailable, match="failed to open a page"):
+            await BrowserPool()._ensure_started()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_fetch_proxies_to_server(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

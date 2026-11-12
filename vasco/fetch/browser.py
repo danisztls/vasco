@@ -86,12 +86,19 @@ class BrowserPool:
                     resp = await _send_request(
                         sock, {"url": "about:blank", "timeout": 5.0}
                     )
+                except Exception:
+                    pass
+                else:
                     if "error" not in resp:
                         self._remote = True
                         log.info("connected to browser server at %s", sock)
                         return
-                except Exception:
-                    pass
+                    # The server is up but can't drive a browser — say so, with
+                    # its reason, rather than claiming it isn't running.
+                    raise BrowserServerUnavailable(
+                        f"browser server at {sock} failed to open a page: "
+                        f"{str(resp['error']).splitlines()[0]}"
+                    )
             raise BrowserServerUnavailable(
                 f"browser server not reachable at {sock}; "
                 "start it with `vasco browser-server`"

@@ -233,6 +233,25 @@ async def test_close_timeout_force_kills_browser_tree(monkeypatch) -> None:
     assert sup._cm is None and sup._browser is None
 
 
+def test_force_kill_spares_managed_display(monkeypatch) -> None:
+    """The manual-solve Xvfb/x11vnc outlive every launch: a wedged-close kill of
+    the browser tree must not take them (and DISPLAY) down with it."""
+    import signal
+    import subprocess
+
+    xvfb = subprocess.Popen(["sleep", "30"])
+    browser = subprocess.Popen(["sleep", "30"])
+    monkeypatch.setattr(bs, "_PROTECTED_PIDS", {xvfb.pid})
+    try:
+        bs._kill_browser_processes()
+        assert browser.wait(timeout=5) == -signal.SIGKILL
+        assert xvfb.poll() is None
+    finally:
+        for proc in (xvfb, browser):
+            proc.kill()
+            proc.wait()
+
+
 async def test_is_wedged_probe_distinguishes_healthy_from_hung(monkeypatch) -> None:
     """The about:blank liveness probe: fast load → not wedged; a hung goto or no
     browser → wedged."""

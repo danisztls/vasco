@@ -845,6 +845,12 @@ def _force_x11_for_virtual_display() -> None:
 # message can name it without threading it through the whole fetch path.
 _VNC_PORT = 5900
 
+# PIDs of that managed display (Xvfb + x11vnc). They are children of this
+# process like the browser tree, but outlive every browser launch, so the
+# wedged-close force-kill must spare them: killing the Xvfb leaves DISPLAY
+# pointing at nothing and every later relaunch fails "cannot open display".
+_PROTECTED_PIDS: set[int] = set()
+
 
 def _pick_free_display(preferred: str) -> str:
     """Return a free X display string (e.g. ':99'), starting from `preferred`.
@@ -904,6 +910,7 @@ def _start_managed_display(
         )
     except Exception as exc:  # x11vnc missing / failed — keep the Xvfb anyway
         log.warning("x11vnc failed to start (%s); manual solve has no viewer", exc)
+    _PROTECTED_PIDS.update(p.pid for p in (xvfb, vnc) if p is not None)
     return display, xvfb, vnc
 
 
@@ -985,10 +992,11 @@ def _kill_browser_processes() -> None:
     """SIGKILL the browser subprocess tree when a graceful close hangs/errors.
 
     Best-effort and dependency-free (Linux ``/proc``, no psutil): walk ``/proc``
-    to find every descendant of this process and SIGKILL it. The browser server
-    is the only thing here that spawns subprocesses, so its descendants are
-    exactly the Playwright node driver + ``camoufox-bin`` + content-process tree.
-    All errors are swallowed — this is a last-resort reclaim after a wedged close.
+    to find every descendant of this process and SIGKILL it: the Playwright node
+    driver + ``camoufox-bin`` + content-process tree. The manual-solve display
+    (``_PROTECTED_PIDS``) is skipped along with its subtree, since it serves every
+    launch, not just the wedged one. All errors are swallowed — this is a
+    last-resort reclaim after a wedged close.
     """
     import signal
 
@@ -1015,7 +1023,7 @@ def _kill_browser_processes() -> None:
     seen: set[int] = set()
     while queue:
         pid = queue.pop()
-        if pid in seen or pid == self_pid:
+        if pid in seen or pid == self_pid or pid in _PROTECTED_PIDS:
             continue
         seen.add(pid)
         descendants.append(pid)
